@@ -1,3 +1,4 @@
+mod backend;
 mod parser;
 mod pretty;
 mod term;
@@ -7,12 +8,30 @@ use crate::parser::Parser;
 use crate::pretty::{Doc, Style};
 
 fn main() {
-    let file_name = "example.bt";
-    let mut file = File::open(file_name).unwrap_or_else(|_| {
+    let mut args = std::env::args();
+    let _exe = args.next();
+    let input = args.next().unwrap_or_else(|| {
+        Doc::start("error")
+            .style(Style::BoldRed)
+            .add(": No input file given")
+            .style(Style::Bold)
+            .emit();
+        std::process::exit(1)
+    });
+    let output = args.next().unwrap_or_else(|| {
+        Doc::start("error")
+            .style(Style::BoldRed)
+            .add(": No output file given")
+            .style(Style::Bold)
+            .emit();
+        std::process::exit(1)
+    });
+
+    let mut file = File::open(&input).unwrap_or_else(|_| {
         Doc::start("error")
             .style(Style::BoldRed)
             .add(": File not found: ")
-            .add(file_name)
+            .add(input)
             .style(Style::Bold)
             .emit();
         std::process::exit(1)
@@ -25,9 +44,15 @@ fn main() {
     let v = parser.top_level();
     match v {
         Ok(v) => {
-            for i in v {
-                println!("{}", i.pretty().ansi_string());
-            }
+            use std::io::Write;
+
+            let out_path: &std::path::Path = output.as_ref();
+            out_path
+                .parent()
+                .map(|p| std::fs::create_dir_all(p).unwrap());
+            let java = backend::codegen(&v, out_path.file_stem().unwrap().to_str().unwrap());
+            let mut out_file = File::create(out_path).unwrap();
+            write!(out_file, "{}", java).unwrap();
         }
         Err(x) => {
             // An extremely simple copy of Rust's error message design

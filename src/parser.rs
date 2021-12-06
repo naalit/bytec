@@ -308,10 +308,10 @@ impl<'a> Parser<'a> {
             .or_else(|| self.term().map(Statement::Term))
     }
 
-    pub fn top_level(&mut self) -> Result<Vec<Statement>, Error> {
+    pub fn top_level(&mut self) -> Result<Vec<Item>, Error> {
         let mut v = Vec::new();
         while self.peek().is_some() {
-            match self.stmt() {
+            match self.item() {
                 Some(x) => v.push(x),
                 None => {
                     if let Some(x) = self.next_err.take() {
