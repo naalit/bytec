@@ -1,6 +1,6 @@
-fn add(x: i32, y: i32): i32 = x + y;
+fn f(x: i32, y: i32): i32 = y;
 
-fn g(z: i32) {
-    println(add(z, 12));
-    println(add(z, 13))
+fn g(z: i32): i32 {
+    f(z, z);
+    f(z, z)
 }

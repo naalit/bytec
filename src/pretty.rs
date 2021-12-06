@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use pretty::RcDoc;
 use std::sync::Arc;
 use termcolor::*;
