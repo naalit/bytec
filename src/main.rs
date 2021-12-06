@@ -1,3 +1,6 @@
+mod pretty;
+use crate::pretty::Doc;
+
 // TODO interner
 // #[derive(Clone, PartialEq, Debug)]
 type Name = String;
@@ -148,6 +151,77 @@ enum Type {
     Unit,
 }
 
+// PRETTY-PRINTING
+
+impl Term {
+    fn pretty(&self) -> Doc {
+        match self {
+            Term::Var(x) => Doc::start(x),
+            Term::Call(f, a) => f
+                .pretty()
+                .add("(")
+                .chain(Doc::intersperse(
+                    a.iter().map(|x| x.pretty()),
+                    Doc::start(",").space(),
+                ))
+                .add(")"),
+            Term::BinOp(_, _, _) => todo!(),
+            Term::Block(v, x) => {
+                let mut d = Doc::start("{").line().chain(Doc::intersperse(
+                    v.iter().map(|x| x.pretty()),
+                    Doc::none().line(),
+                ));
+                if let Some(x) = x {
+                    d = d.line().chain(x.pretty());
+                }
+                d.indent().line().add("}")
+            }
+        }
+    }
+}
+impl Item {
+    fn pretty(&self) -> Doc {
+        match self {
+            Item::Fn(f) => Doc::keyword("fn")
+                .space()
+                .add(&*f.name)
+                .add("(")
+                .chain(Doc::intersperse(
+                    f.args
+                        .iter()
+                        .map(|(name, ty)| Doc::start(name).add(":").space().chain(ty.pretty())),
+                    Doc::start(","),
+                ))
+                .add(")")
+                .add(":")
+                .space()
+                .chain(f.ret_type.pretty())
+                .space()
+                .add("=")
+                .space()
+                .chain(f.body.pretty())
+                .add(";"),
+        }
+    }
+}
+impl Statement {
+    fn pretty(&self) -> Doc {
+        match self {
+            Statement::Item(i) => i.pretty(),
+            Statement::Term(x) => x.pretty().add(";"),
+        }
+    }
+}
+impl Type {
+    fn pretty(&self) -> Doc {
+        match self {
+            Type::I32 => Doc::keyword("i32"),
+            Type::I64 => Doc::keyword("i64"),
+            Type::Unit => Doc::start("()"),
+        }
+    }
+}
+
 // PARSER
 struct Parser<'a> {
     lexer: Lexer<'a>,
@@ -279,12 +353,10 @@ impl<'a> Parser<'a> {
                         }
                         (Statement::Term(x), Some(Tok::CloseBrace)) => {
                             self.next();
-                            if self.peek().as_deref() == Some(&Tok::CloseBrace) {
-                                return Some(Box::new(Spanned::new(
-                                    Term::Block(block, Some(x)),
-                                    Span(start, self.lexer.pos),
-                                )));
-                            }
+                            return Some(Box::new(Spanned::new(
+                                Term::Block(block, Some(x)),
+                                Span(start, self.lexer.pos),
+                            )));
                         }
                         _ => todo!("error"),
                     }
@@ -377,8 +449,20 @@ impl<'a> Parser<'a> {
 }
 
 fn main() {
-    let mut parser = Parser::new("f(x, y, { fn g(x: i32) = x; })");
-    println!("{:?}", parser.term());
-    println!("{:?}", parser.term());
+    let mut parser = Parser::new("f(x, y, { fn g(x: i32) = x; g(y) })");
+    println!(
+        "{}",
+        parser
+            .term()
+            .map(|x| x.pretty().ansi_string())
+            .unwrap_or("<None>".into())
+    );
+    println!(
+        "{}",
+        parser
+            .term()
+            .map(|x| x.pretty().ansi_string())
+            .unwrap_or("<None>".into())
+    );
     println!("{:?}", parser.next_err);
 }
