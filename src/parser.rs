@@ -76,7 +76,7 @@ impl<'a> Iterator for Lexer<'a> {
             }
             x if x.is_alphabetic() => Some(Ok(self.alpha())),
             x => Some(Err(Spanned::new(
-                format!("unrecognized token '{}'", x),
+                Doc::start("unrecognized token '").add(x).add("'"),
                 Span(self.pos, self.pos + 1),
             ))),
         }
@@ -88,6 +88,7 @@ pub struct Parser<'a> {
     lexer: Lexer<'a>,
     next: Option<Spanned<Tok<'a>>>,
     next_err: Option<Error>,
+    bindings: Bindings,
 }
 impl<'a> Parser<'a> {
     pub fn new(input: &'a str) -> Self {
@@ -95,6 +96,7 @@ impl<'a> Parser<'a> {
             lexer: Lexer { input, pos: 0 },
             next: None,
             next_err: None,
+            bindings: Default::default(),
         }
     }
 
@@ -130,21 +132,21 @@ impl<'a> Parser<'a> {
         next
     }
 
-    fn name(&mut self) -> Option<Spanned<Name>> {
+    fn name(&mut self) -> Option<Spanned<RawSym>> {
         match *self.peek()? {
             Tok::Name(x) => {
                 let t = self.next()?;
-                Some(Spanned::new(x.into(), t.span))
+                Some(Spanned::new(self.bindings.raw(x), t.span))
             }
             _ => None,
         }
     }
 
-    fn term(&mut self) -> Option<STerm> {
+    fn term(&mut self) -> Option<SPre> {
         match *self.peek()? {
             Tok::Name(_) => {
                 let name = self.name()?;
-                let var = Box::new(Spanned::new(Term::Var(name.inner), name.span));
+                let var = Box::new(Spanned::new(Pre::Var(name.inner), name.span));
                 match self.peek().as_deref() {
                     Some(Tok::OpenParen) => {
                         self.next();
@@ -165,7 +167,7 @@ impl<'a> Parser<'a> {
                                 inner: Tok::CloseParen,
                                 span,
                             }) => Some(Box::new(Spanned::new(
-                                Term::Call(var.clone(), args),
+                                Pre::Call(name, args),
                                 Span(var.span.0, span.1),
                             ))),
                             None => todo!("error: eof"),
@@ -183,39 +185,39 @@ impl<'a> Parser<'a> {
                 let mut block = Vec::new();
                 if self.peek().as_deref() == Some(&Tok::CloseBrace) {
                     return Some(Box::new(Spanned::new(
-                        Term::Block(Vec::new(), None),
+                        Pre::Block(Vec::new(), None),
                         Span(start, self.lexer.pos),
                     )));
                 }
                 loop {
                     let x = self.stmt()?;
                     match (x, self.peek().as_deref()) {
-                        (x @ Statement::Item(_), Some(Tok::CloseBrace)) => {
+                        (x @ PreStatement::Item(_), Some(Tok::CloseBrace)) => {
                             block.push(x);
                             self.next();
                             return Some(Box::new(Spanned::new(
-                                Term::Block(block, None),
+                                Pre::Block(block, None),
                                 Span(start, self.lexer.pos),
                             )));
                         }
-                        (x @ Statement::Item(_), _) => {
+                        (x @ PreStatement::Item(_), _) => {
                             block.push(x);
                         }
-                        (x @ Statement::Term(_), Some(Tok::Semicolon)) => {
+                        (x @ PreStatement::Term(_), Some(Tok::Semicolon)) => {
                             block.push(x);
                             self.next();
                             if self.peek().as_deref() == Some(&Tok::CloseBrace) {
                                 self.next();
                                 return Some(Box::new(Spanned::new(
-                                    Term::Block(block, None),
+                                    Pre::Block(block, None),
                                     Span(start, self.lexer.pos),
                                 )));
                             }
                         }
-                        (Statement::Term(x), Some(Tok::CloseBrace)) => {
+                        (PreStatement::Term(x), Some(Tok::CloseBrace)) => {
                             self.next();
                             return Some(Box::new(Spanned::new(
-                                Term::Block(block, Some(x)),
+                                Pre::Block(block, Some(x)),
                                 Span(start, self.lexer.pos),
                             )));
                         }
@@ -227,26 +229,26 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn ty(&mut self) -> Option<Type> {
+    fn ty(&mut self) -> Option<PreType> {
         match self.peek().as_deref()? {
             Tok::I32 => {
                 self.next();
-                Some(Type::I32)
+                Some(PreType::I32)
             }
             Tok::I64 => {
                 self.next();
-                Some(Type::I64)
+                Some(PreType::I64)
             }
             Tok::OpenParen => {
                 self.next();
                 assert_eq!(Some(&Tok::CloseParen), self.next().as_deref());
-                Some(Type::Unit)
+                Some(PreType::Unit)
             }
             _ => None,
         }
     }
 
-    fn item(&mut self) -> Option<Item> {
+    fn item(&mut self) -> Option<PreItem> {
         match *self.peek()? {
             Tok::Fn => {
                 // fn f(x: T, y: T): Z = x
@@ -276,7 +278,7 @@ impl<'a> Parser<'a> {
                     self.next();
                     self.ty()?
                 } else {
-                    Type::Unit
+                    PreType::Unit
                 };
 
                 let body = match self.peek().as_deref() {
@@ -291,24 +293,24 @@ impl<'a> Parser<'a> {
                     _ => todo!("error"),
                 };
 
-                Some(Item::Fn(Fn {
+                Some(PreItem::Fn(PreFn {
                     name,
-                    ret_type,
+                    ret_ty: ret_type,
                     args,
-                    body: body.inner,
+                    body,
                 }))
             }
             _ => None,
         }
     }
 
-    fn stmt(&mut self) -> Option<Statement> {
+    fn stmt(&mut self) -> Option<PreStatement> {
         self.item()
-            .map(Statement::Item)
-            .or_else(|| self.term().map(Statement::Term))
+            .map(PreStatement::Item)
+            .or_else(|| self.term().map(PreStatement::Term))
     }
 
-    pub fn top_level(&mut self) -> Result<Vec<Item>, Error> {
+    pub fn top_level(&mut self) -> Result<Vec<PreItem>, Error> {
         let mut v = Vec::new();
         while self.peek().is_some() {
             match self.item() {
@@ -318,7 +320,9 @@ impl<'a> Parser<'a> {
                         return Err(x);
                     } else {
                         return Err(Spanned::new(
-                            format!("Unexpected {:?}, expected statement", self.peek().unwrap()),
+                            Doc::start("Unexpected ")
+                                .debug(*self.peek().unwrap())
+                                .add(", expected statement"),
                             Span(self.lexer.pos, self.lexer.pos + 1),
                         ));
                     }
@@ -329,5 +333,9 @@ impl<'a> Parser<'a> {
             Some(x) => Err(x),
             None => Ok(v),
         }
+    }
+
+    pub fn finish(self) -> Bindings {
+        self.bindings
     }
 }

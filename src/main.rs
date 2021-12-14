@@ -1,4 +1,6 @@
 mod backend;
+mod binding;
+mod elaborate;
 mod parser;
 mod pretty;
 mod term;
@@ -41,16 +43,29 @@ fn main() {
     file.read_to_string(&mut buf).unwrap();
 
     let mut parser = Parser::new(&buf);
-    let v = parser.top_level();
+    let v = parser.top_level().and_then(|v| {
+        let mut bindings = parser.finish();
+        let v = crate::elaborate::elab_mod(&v, &mut bindings)?;
+        Ok((v, bindings))
+    });
     match v {
-        Ok(v) => {
+        Ok((v, bindings)) => {
             use std::io::Write;
 
             let out_path: &std::path::Path = output.as_ref();
             out_path
                 .parent()
                 .map(|p| std::fs::create_dir_all(p).unwrap());
-            let java = backend::codegen(&v, out_path.file_stem().unwrap().to_str().unwrap());
+
+            for i in &v {
+                i.pretty(&bindings).emit();
+            }
+
+            let java = crate::backend::codegen(
+                &v,
+                &bindings,
+                out_path.file_stem().unwrap().to_str().unwrap(),
+            );
             let mut out_file = File::create(out_path).unwrap();
             write!(out_file, "{}", java).unwrap();
         }
@@ -70,8 +85,8 @@ fn main() {
             }
             Doc::start("error")
                 .style(Style::BoldRed)
-                .add(": Syntax error: ")
-                .add(&*x)
+                .add(": ")
+                .chain(x.inner)
                 .style(Style::Bold)
                 .hardline()
                 .chain(

@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 pretty = { version = "*", features = ["termcolor"] }
 termcolor = "*"
+lazy_static = "*"

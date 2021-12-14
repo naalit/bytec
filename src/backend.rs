@@ -5,12 +5,12 @@ use crate::term::*;
 
 // Entry point
 
-pub fn codegen(code: &[Item], out_class: &str) -> String {
-    let mut cxt = Cxt::default();
+pub fn codegen(code: &[Item], bindings: &Bindings, out_class: &str) -> String {
+    let mut cxt = Cxt::new(bindings);
     // Declare items
     for i in code {
         let name = match i {
-            Item::Fn(f) => f.name.inner.clone(),
+            Item::Fn(f) => f.id,
         };
         let item = cxt.fresh_item();
         cxt.items.push((name, item));
@@ -19,7 +19,7 @@ pub fn codegen(code: &[Item], out_class: &str) -> String {
         i.lower(&mut cxt);
     }
 
-    let mut gen = Gen::default();
+    let mut gen = Gen::new(bindings);
     // Declare functions
     for f in &cxt.fns {
         gen.names.insert(f.item.0, f.name.clone());
@@ -51,7 +51,7 @@ enum JTerm {
 
 #[derive(Clone, Debug, PartialEq)]
 enum JStmt {
-    Let(Name, JTy, JVar, JTerm),
+    Let(RawSym, JTy, JVar, JTerm),
     Term(JTerm),
     Ret(JTerm),
 }
@@ -65,31 +65,47 @@ enum JTy {
 
 #[derive(Clone, Debug, PartialEq)]
 struct JFn {
-    name: Name,
+    name: RawSym,
     item: JItem,
     ret_ty: JTy,
-    args: Vec<(Name, JVar, JTy)>,
+    args: Vec<(RawSym, JVar, JTy)>,
     body: Vec<JStmt>,
 }
 
 // CODEGEN
 
-#[derive(Clone, Debug, Default)]
-struct Gen {
-    names: HashMap<u64, String>,
+#[derive(Clone, Debug)]
+struct Gen<'a> {
+    bindings: &'a Bindings,
+    names: HashMap<u64, RawSym>,
+}
+impl<'a> Gen<'a> {
+    fn new(bindings: &'a Bindings) -> Self {
+        Gen {
+            bindings,
+            names: HashMap::new(),
+        }
+    }
+
+    fn name_str(&self, v: JVar) -> &str {
+        self.bindings.resolve_raw(self.names[&v.0])
+    }
+    fn item_str(&self, v: JItem) -> &str {
+        self.bindings.resolve_raw(self.names[&v.0])
+    }
 }
 
 impl JTerm {
     fn gen(&self, cxt: &Gen) -> String {
         match self {
             JTerm::Var(v) => {
-                let mut s = cxt.names.get(&v.0).unwrap().clone();
+                let mut s = cxt.name_str(*v).to_string();
                 write!(s, "${}", v.0).unwrap();
                 s
             }
             JTerm::Call(f, a) => {
                 let mut buf = String::new();
-                buf.push_str(cxt.names.get(&f.0).unwrap());
+                buf.push_str(cxt.item_str(*f));
                 write!(buf, "${}", f.0).unwrap();
                 buf.push('(');
 
@@ -124,8 +140,14 @@ impl JStmt {
     fn gen(&self, cxt: &mut Gen) -> String {
         match self {
             JStmt::Let(n, t, v, x) => {
-                cxt.names.insert(v.0, n.clone());
-                format!("{} {}${} = {};", t.gen(cxt), n, v.0, x.gen(cxt))
+                cxt.names.insert(v.0, *n);
+                format!(
+                    "{} {}${} = {};",
+                    t.gen(cxt),
+                    cxt.bindings.resolve_raw(*n),
+                    v.0,
+                    x.gen(cxt)
+                )
             }
             JStmt::Term(x) => {
                 let mut s = x.gen(cxt);
@@ -152,7 +174,7 @@ impl JFn {
             buf,
             "public static {} {}${}(",
             self.ret_ty.gen(cxt),
-            self.name,
+            cxt.bindings.resolve_raw(self.name),
             self.item.0
         )
         .unwrap();
@@ -165,8 +187,15 @@ impl JFn {
                 buf.push_str(", ");
             }
             first = false;
-            write!(buf, "{} {}${}", t.gen(cxt), n, v.0).unwrap();
-            cxt.names.insert(v.0, n.clone());
+            write!(
+                buf,
+                "{} {}${}",
+                t.gen(cxt),
+                cxt.bindings.resolve_raw(*n),
+                v.0
+            )
+            .unwrap();
+            cxt.names.insert(v.0, *n);
         }
         buf.push_str(") {");
 
@@ -184,21 +213,34 @@ impl JFn {
 
 // LOWERING
 
-#[derive(Clone, Debug, Default)]
-struct Cxt {
+#[derive(Clone, Debug)]
+struct Cxt<'a> {
+    bindings: &'a Bindings,
     scopes: Vec<(usize, usize)>,
-    vars: Vec<(String, JVar)>,
-    items: Vec<(String, JItem)>,
+    vars: Vec<(Sym, JVar)>,
+    items: Vec<(FnId, JItem)>,
     block: Vec<JStmt>,
     fns: Vec<JFn>,
     next: u64,
 }
-impl Cxt {
-    fn var(&self, s: &str) -> Option<JVar> {
-        self.vars.iter().rfind(|(k, _v)| k == s).map(|(_k, v)| *v)
+impl<'a> Cxt<'a> {
+    fn new(bindings: &'a Bindings) -> Self {
+        Cxt {
+            bindings,
+            scopes: Vec::new(),
+            vars: Vec::new(),
+            items: Vec::new(),
+            block: Vec::new(),
+            fns: Vec::new(),
+            next: 0,
+        }
     }
-    fn item(&self, s: &str) -> Option<JItem> {
-        self.items.iter().rfind(|(k, _v)| k == s).map(|(_k, v)| *v)
+
+    fn var(&self, s: Sym) -> Option<JVar> {
+        self.vars.iter().rfind(|(k, _v)| *k == s).map(|(_k, v)| *v)
+    }
+    fn item(&self, s: FnId) -> Option<JItem> {
+        self.items.iter().rfind(|(k, _v)| *k == s).map(|(_k, v)| *v)
     }
 
     fn push(&mut self) {
@@ -221,35 +263,22 @@ impl Cxt {
 }
 
 impl Term {
-    fn lower_item(&self, cxt: &Cxt) -> Option<JItem> {
-        match self {
-            Term::Var(s) => cxt.item(s),
-            _ => None,
-        }
-    }
-
     fn lower(&self, cxt: &mut Cxt) -> JTerm {
         match self {
-            Term::Var(s) => JTerm::Var(
-                cxt.var(s)
-                    .unwrap_or_else(|| panic!("Variable not found: '{}'", s)),
+            Term::Var(s) => JTerm::Var(cxt.var(*s).unwrap()),
+            Term::Call(f, a) => JTerm::Call(
+                cxt.item(*f).unwrap(),
+                a.iter().map(|x| x.lower(cxt)).collect(),
             ),
-            Term::Call(f, a) => {
-                let item = f
-                    .lower_item(cxt)
-                    .unwrap_or_else(|| panic!("Not a function: '{}'", f.pretty().ansi_string()));
-                let args = a.iter().map(|x| x.lower(cxt)).collect();
-                JTerm::Call(item, args)
-            }
             Term::BinOp(op, a, b) => {
                 JTerm::BinOp(*op, Box::new(a.lower(cxt)), Box::new(b.lower(cxt)))
             }
-            Term::Block(v, x) => {
+            Term::Block(v, e) => {
                 cxt.push();
                 for i in v {
                     i.lower(cxt);
                 }
-                let r = x.as_ref().map(|x| x.lower(cxt)).unwrap_or(JTerm::None);
+                let r = e.as_ref().map(|x| x.lower(cxt)).unwrap_or(JTerm::None);
                 cxt.pop();
                 r
             }
@@ -259,7 +288,6 @@ impl Term {
 impl Statement {
     fn lower(&self, cxt: &mut Cxt) {
         match self {
-            Statement::Item(i) => i.lower(cxt),
             Statement::Term(x) => {
                 let term = x.lower(cxt);
                 cxt.block.push(JStmt::Term(term));
@@ -278,7 +306,7 @@ impl Item {
                 let mut args = Vec::new();
                 for (name, ty) in &f.args {
                     let var = cxt.fresh_var();
-                    args.push((name.clone(), var, ty.lower(cxt)));
+                    args.push((name.raw(), var, ty.lower(cxt)));
                     cxt.vars.push((name.clone(), var));
                 }
                 let ret = f.body.lower(cxt);
@@ -288,10 +316,10 @@ impl Item {
                 cxt.pop();
 
                 std::mem::swap(&mut block, &mut cxt.block);
-                let ret_ty = f.ret_type.lower(cxt);
-                let item = cxt.item(&f.name).unwrap();
+                let ret_ty = f.ret_ty.lower(cxt);
+                let item = cxt.item(f.id).unwrap();
                 cxt.fns.push(JFn {
-                    name: f.name.inner.clone(),
+                    name: cxt.bindings.fn_name(f.id),
                     item,
                     ret_ty,
                     args,
