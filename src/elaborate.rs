@@ -207,6 +207,18 @@ impl<'b> Cxt<'b> {
                 todo!("add to some top-level item list, elab it, and return None")
             }
             PreStatement::Term(t) => self.infer(t).map(|(x, _)| Some(Statement::Term(x))),
+            PreStatement::Let(n, t, x) => {
+                let (x, t) = match t {
+                    Some(t) => {
+                        let t = self.elab_type(t)?;
+                        let x = self.check(x, t.clone())?;
+                        (x, t)
+                    }
+                    None => self.infer(x)?,
+                };
+                let n = self.create(*n, t.clone());
+                Ok(Some(Statement::Let(n, t, Box::new(x))))
+            }
         }
     }
 

@@ -1,6 +1,6 @@
 fn f(x: i32, y: i32): i32 = y;
 
 fn g(z: i32): i32 {
-    f(z, z);
-    f(z, z)
+    let q = f(z, z);
+    f(q, q)
 }

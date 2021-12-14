@@ -12,6 +12,8 @@ enum Tok<'a> {
     I32,
     // i64
     I64,
+    // let
+    Let,
     // (
     OpenParen,
     // )
@@ -48,6 +50,7 @@ impl<'a> Lexer<'a> {
             "fn" => Tok::Fn,
             "i32" => Tok::I32,
             "i64" => Tok::I64,
+            "let" => Tok::Let,
             _ => Tok::Name(name),
         };
         Spanned::new(tok, Span(start, self.pos))
@@ -132,6 +135,14 @@ impl<'a> Parser<'a> {
         next
     }
 
+    fn err(&self, err: &(impl std::fmt::Display + ?Sized)) -> Error {
+        Spanned::new(Doc::start(err), self.span())
+    }
+
+    fn span(&self) -> Span {
+        Span(self.lexer.pos, self.lexer.pos + 1)
+    }
+
     fn name(&mut self) -> Option<Spanned<RawSym>> {
         match *self.peek()? {
             Tok::Name(x) => {
@@ -142,90 +153,90 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn term(&mut self) -> Option<SPre> {
-        match *self.peek()? {
-            Tok::Name(_) => {
-                let name = self.name()?;
+    fn term(&mut self) -> Result<Option<SPre>, Error> {
+        match self.peek().as_deref() {
+            None => return Ok(None),
+            Some(Tok::Name(_)) => {
+                let name = self.name().unwrap();
                 let var = Box::new(Spanned::new(Pre::Var(name.inner), name.span));
                 match self.peek().as_deref() {
                     Some(Tok::OpenParen) => {
                         self.next();
                         let mut args = Vec::new();
                         while self.peek().as_deref() != Some(&Tok::CloseParen) {
-                            let x = self.term()?;
+                            let x = self.term()?.ok_or(self.err("expected function argument"))?;
                             args.push(x);
                             match self.peek().as_deref() {
                                 Some(Tok::Comma) => {
                                     self.next();
                                 }
                                 Some(Tok::CloseParen) => (),
-                                _ => todo!("error"),
+                                _ => return Err(self.err("expected ',' or ')'")),
                             }
                         }
                         match self.next() {
                             Some(Spanned {
                                 inner: Tok::CloseParen,
                                 span,
-                            }) => Some(Box::new(Spanned::new(
+                            }) => Ok(Some(Box::new(Spanned::new(
                                 Pre::Call(name, args),
                                 Span(var.span.0, span.1),
-                            ))),
-                            None => todo!("error: eof"),
+                            )))),
+                            None => return Err(self.err("unclosed argument list, expected ')'")),
                             _ => unreachable!(),
                         }
                     }
-                    _ => Some(var),
+                    _ => Ok(Some(var)),
                 }
             }
-            Tok::OpenParen => todo!("binop probably"),
-            Tok::OpenBrace => {
+            Some(Tok::OpenParen) => todo!("binop probably"),
+            Some(Tok::OpenBrace) => {
                 // block
                 let start = self.lexer.pos;
                 self.next();
                 let mut block = Vec::new();
                 if self.peek().as_deref() == Some(&Tok::CloseBrace) {
-                    return Some(Box::new(Spanned::new(
+                    return Ok(Some(Box::new(Spanned::new(
                         Pre::Block(Vec::new(), None),
                         Span(start, self.lexer.pos),
-                    )));
+                    ))));
                 }
                 loop {
-                    let x = self.stmt()?;
+                    let x = self.stmt()?.ok_or(self.err("expected statement"))?;
                     match (x, self.peek().as_deref()) {
-                        (x @ PreStatement::Item(_), Some(Tok::CloseBrace)) => {
-                            block.push(x);
-                            self.next();
-                            return Some(Box::new(Spanned::new(
-                                Pre::Block(block, None),
-                                Span(start, self.lexer.pos),
-                            )));
-                        }
-                        (x @ PreStatement::Item(_), _) => {
-                            block.push(x);
-                        }
                         (x @ PreStatement::Term(_), Some(Tok::Semicolon)) => {
                             block.push(x);
                             self.next();
                             if self.peek().as_deref() == Some(&Tok::CloseBrace) {
                                 self.next();
-                                return Some(Box::new(Spanned::new(
+                                return Ok(Some(Box::new(Spanned::new(
                                     Pre::Block(block, None),
                                     Span(start, self.lexer.pos),
-                                )));
+                                ))));
                             }
                         }
                         (PreStatement::Term(x), Some(Tok::CloseBrace)) => {
                             self.next();
-                            return Some(Box::new(Spanned::new(
+                            return Ok(Some(Box::new(Spanned::new(
                                 Pre::Block(block, Some(x)),
                                 Span(start, self.lexer.pos),
-                            )));
+                            ))));
                         }
-                        _ => todo!("error"),
+                        (x, Some(Tok::CloseBrace)) => {
+                            block.push(x);
+                            self.next();
+                            return Ok(Some(Box::new(Spanned::new(
+                                Pre::Block(block, None),
+                                Span(start, self.lexer.pos),
+                            ))));
+                        }
+                        (x, _) => {
+                            block.push(x);
+                        }
                     }
                 }
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 
@@ -248,35 +259,35 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn item(&mut self) -> Option<PreItem> {
-        match *self.peek()? {
-            Tok::Fn => {
+    fn item(&mut self) -> Result<Option<PreItem>, Error> {
+        match self.peek().as_deref() {
+            None => Ok(None),
+            Some(Tok::Fn) => {
                 // fn f(x: T, y: T): Z = x
                 self.next();
-                let name = self.name()?;
+                let name = self.name().ok_or(self.err("expected function name"))?;
                 // TODO errors
                 assert_eq!(self.next().as_deref(), Some(&Tok::OpenParen));
                 let mut args = Vec::new();
                 while self.peek().as_deref() != Some(&Tok::CloseParen) {
-                    // TODO these shouldn't be ? because they should catch errors
-                    // if something has already captured input, it can't just return None
-                    // maybe somehow enforce that? change types?
-                    let n = self.name()?;
+                    let n = self
+                        .name()
+                        .ok_or(self.err("expected argument name or ')'"))?;
                     assert_eq!(self.next().as_deref(), Some(&Tok::Colon));
-                    let t = self.ty()?;
+                    let t = self.ty().ok_or(self.err("expected argument type"))?;
                     args.push((n.inner, t));
                     match self.peek().as_deref() {
                         Some(Tok::Comma) => {
                             self.next();
                         }
                         Some(Tok::CloseParen) => (),
-                        _ => todo!("error"),
+                        _ => return Err(self.err("expected ',' or ')'")),
                     }
                 }
                 assert_eq!(self.next().as_deref(), Some(&Tok::CloseParen));
                 let ret_type = if let Some(&Tok::Colon) = self.peek().as_deref() {
                     self.next();
-                    self.ty()?
+                    self.ty().ok_or(self.err("expected return type"))?
                 } else {
                     PreType::Unit
                 };
@@ -290,30 +301,55 @@ impl<'a> Parser<'a> {
                     }
                     // let term() consume the brace
                     Some(Tok::OpenBrace) => self.term()?,
-                    _ => todo!("error"),
-                };
+                    _ => return Err(self.err("expected '=' or '{' to start function body")),
+                }
+                .ok_or(self.err("expected function body"))?;
 
-                Some(PreItem::Fn(PreFn {
+                Ok(Some(PreItem::Fn(PreFn {
                     name,
                     ret_ty: ret_type,
                     args,
                     body,
-                }))
+                })))
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 
-    fn stmt(&mut self) -> Option<PreStatement> {
-        self.item()
-            .map(PreStatement::Item)
-            .or_else(|| self.term().map(PreStatement::Term))
+    fn stmt(&mut self) -> Result<Option<PreStatement>, Error> {
+        match self.peek().as_deref() {
+            Some(Tok::Fn) => Ok(self.item()?.map(PreStatement::Item)),
+            Some(Tok::Let) => {
+                self.next();
+
+                let name = *self.name().ok_or(self.err("expected name"))?;
+                let ty = if self.peek().as_deref() == Some(&Tok::Colon) {
+                    self.next();
+                    Some(self.ty().ok_or(self.err("expected type"))?)
+                } else {
+                    None
+                };
+
+                if self.next().as_deref() != Some(&Tok::Equals) {
+                    return Err(self.err("expected '='"));
+                }
+
+                let x = self.term()?.ok_or(self.err("expected expression"))?;
+
+                if self.next().as_deref() != Some(&Tok::Semicolon) {
+                    return Err(self.err("expected ';'"));
+                }
+
+                Ok(Some(PreStatement::Let(name, ty, x)))
+            }
+            _ => Ok(self.term()?.map(PreStatement::Term)),
+        }
     }
 
     pub fn top_level(&mut self) -> Result<Vec<PreItem>, Error> {
         let mut v = Vec::new();
         while self.peek().is_some() {
-            match self.item() {
+            match self.item()? {
                 Some(x) => v.push(x),
                 None => {
                     if let Some(x) = self.next_err.take() {

@@ -42,6 +42,7 @@ pub enum Term {
 }
 pub enum Statement {
     Term(Term),
+    Let(Sym, Type, Box<Term>),
 }
 
 pub enum Item {
@@ -93,6 +94,7 @@ pub enum PreItem {
 pub enum PreStatement {
     Item(PreItem),
     Term(SPre),
+    Let(RawSym, Option<PreType>, SPre),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -170,82 +172,12 @@ impl Statement {
     fn cloned_(&self, cln: &mut Cloner) -> Statement {
         match self {
             Statement::Term(t) => Statement::Term(t.cloned_(cln)),
+            Statement::Let(n, t, x) => Statement::Let(*n, t.clone(), Box::new(x.cloned_(cln))),
         }
     }
 }
 
 // Pretty-printing
-
-impl Pre {
-    pub fn pretty(&self, cxt: &Bindings) -> Doc {
-        match self {
-            Pre::Var(x) => Doc::start(cxt.resolve_raw(*x)),
-            Pre::Call(f, a) => Doc::start(cxt.resolve_raw(**f))
-                .add("(")
-                .chain(Doc::intersperse(
-                    a.iter().map(|x| x.pretty(cxt)),
-                    Doc::start(",").space(),
-                ))
-                .add(")"),
-            Pre::BinOp(_, _, _) => todo!(),
-            Pre::Block(v, x) => {
-                let mut d = Doc::start("{").line().chain(Doc::intersperse(
-                    v.iter().map(|x| x.pretty(cxt)),
-                    Doc::none().line(),
-                ));
-                if let Some(x) = x {
-                    d = d.line().chain(x.pretty(cxt));
-                }
-                d.indent().line().add("}")
-            }
-        }
-    }
-}
-impl PreItem {
-    pub fn pretty(&self, cxt: &Bindings) -> Doc {
-        match self {
-            PreItem::Fn(f) => Doc::keyword("fn")
-                .space()
-                .add(cxt.resolve_raw(*f.name))
-                .add("(")
-                .chain(Doc::intersperse(
-                    f.args.iter().map(|(name, ty)| {
-                        Doc::start(cxt.resolve_raw(*name))
-                            .add(":")
-                            .space()
-                            .chain(ty.pretty(cxt))
-                    }),
-                    Doc::start(",").space(),
-                ))
-                .add(")")
-                .add(":")
-                .space()
-                .chain(f.ret_ty.pretty(cxt))
-                .space()
-                .add("=")
-                .space()
-                .chain(f.body.pretty(cxt))
-                .add(";"),
-        }
-    }
-}
-impl PreStatement {
-    pub fn pretty(&self, cxt: &Bindings) -> Doc {
-        match self {
-            PreStatement::Item(i) => i.pretty(cxt),
-            PreStatement::Term(x) => x.pretty(cxt).add(";"),
-        }
-    }
-}
-impl PreType {
-    pub fn pretty(&self, cxt: &Bindings) -> Doc {
-        match self {
-            PreType::I32 => Doc::keyword("i32"),
-            PreType::I64 => Doc::keyword("i64"),
-            PreType::Unit => Doc::start("()"),
-        }
-    }
-}
 
 impl Term {
     pub fn pretty(&self, cxt: &Bindings) -> Doc {
@@ -304,6 +236,17 @@ impl Statement {
     pub fn pretty(&self, cxt: &Bindings) -> Doc {
         match self {
             Statement::Term(x) => x.pretty(cxt).add(";"),
+            Statement::Let(n, t, x) => Doc::keyword("let")
+                .space()
+                .add(cxt.resolve(*n))
+                .add(":")
+                .space()
+                .chain(t.pretty(cxt))
+                .space()
+                .add("=")
+                .space()
+                .chain(x.pretty(cxt))
+                .add(";"),
         }
     }
 }

@@ -292,6 +292,13 @@ impl Statement {
                 let term = x.lower(cxt);
                 cxt.block.push(JStmt::Term(term));
             }
+            Statement::Let(n, t, x) => {
+                let var = cxt.fresh_var();
+                cxt.vars.push((*n, var));
+                let t = t.lower(cxt);
+                let x = x.lower(cxt);
+                cxt.block.push(JStmt::Let(n.raw(), t, var, x));
+            }
         }
     }
 }

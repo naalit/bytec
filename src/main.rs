@@ -4,6 +4,7 @@ mod elaborate;
 mod parser;
 mod pretty;
 mod term;
+use std::path::{Path, PathBuf};
 use std::{fs::File, io::Read};
 
 use crate::parser::Parser;
@@ -33,7 +34,7 @@ fn main() {
         Doc::start("error")
             .style(Style::BoldRed)
             .add(": File not found: ")
-            .add(input)
+            .add(&input)
             .style(Style::Bold)
             .emit();
         std::process::exit(1)
@@ -92,6 +93,14 @@ fn main() {
                 .chain(
                     Doc::start("    --> ")
                         .style(Style::Special)
+                        .add(
+                            AsRef::<Path>::as_ref(&input)
+                                .file_name()
+                                .unwrap()
+                                .to_str()
+                                .unwrap(),
+                        )
+                        .chain(Doc::start(":"))
                         .add(line)
                         .chain(Doc::start(":"))
                         .add(col),
