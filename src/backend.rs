@@ -41,9 +41,16 @@ struct JVar(u64);
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct JItem(u64);
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum JLit {
+    Int(i32),
+    Long(i64),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum JTerm {
     Var(JVar),
+    Lit(JLit),
     Call(JItem, Vec<JTerm>),
     BinOp(BinOp, Box<JTerm>, Box<JTerm>),
     None,
@@ -103,6 +110,10 @@ impl JTerm {
                 write!(s, "${}", v.0).unwrap();
                 s
             }
+            JTerm::Lit(l) => match l {
+                JLit::Int(i) => i.to_string(),
+                JLit::Long(i) => format!("{}L", i),
+            },
             JTerm::Call(f, a) => {
                 let mut buf = String::new();
                 buf.push_str(cxt.item_str(*f));
@@ -263,6 +274,13 @@ impl Term {
     fn lower(&self, cxt: &mut Cxt) -> JTerm {
         match self {
             Term::Var(s) => JTerm::Var(cxt.var(*s).unwrap()),
+            Term::Lit(l, t) => match l {
+                Literal::Int(i) => match t {
+                    Type::I32 => JTerm::Lit(JLit::Int(*i as i32)),
+                    Type::I64 => JTerm::Lit(JLit::Long(*i)),
+                    _ => unreachable!(),
+                },
+            },
             Term::Call(f, a) => JTerm::Call(
                 cxt.item(*f).unwrap(),
                 a.iter().map(|x| x.lower(cxt)).collect(),

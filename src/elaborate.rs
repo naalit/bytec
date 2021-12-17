@@ -228,6 +228,14 @@ impl<'b> Cxt<'b> {
                 .var(*raw)
                 .map(|(s, t)| (Term::Var(s), t.clone()))
                 .ok_or(TypeError::NotFound(pre.span, *raw)),
+            Pre::Lit(l, t) => match t {
+                Some(t) => {
+                    let t = self.elab_type(t)?;
+                    Ok((Term::Lit(*l, t.clone()), t))
+                }
+                // Default to i32
+                None => Ok((Term::Lit(*l, Type::I32), Type::I32)),
+            },
             Pre::Call(f, a) => {
                 let (fid, FnType(atys, rty)) =
                     self.fun(**f).ok_or(TypeError::NotFound(f.span, **f))?;
@@ -278,6 +286,7 @@ impl<'b> Cxt<'b> {
                 let b = self.check(b, ty)?;
                 Ok(Term::BinOp(*op, Box::new(a), Box::new(b)))
             }
+            (Pre::Lit(l, None), Type::I32 | Type::I64) => Ok(Term::Lit(*l, ty)),
             _ => {
                 let (term, ity) = self.infer(pre)?;
                 if ty == ity {

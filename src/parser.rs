@@ -1,4 +1,5 @@
 use crate::term::*;
+use std::str::FromStr;
 
 // LEXER
 // This is basically Rust syntax
@@ -6,6 +7,11 @@ use crate::term::*;
 enum Tok<'a> {
     // x
     Name(&'a str),
+    // 3
+    LitI(i64),
+    // 3.5
+    LitF(f64),
+
     // fn
     Fn,
     // i32
@@ -46,13 +52,22 @@ struct Lexer<'a> {
     pos: usize,
 }
 impl<'a> Lexer<'a> {
-    fn char(&self) -> Option<char> {
+    fn peek(&self) -> Option<char> {
         self.input.as_bytes().get(self.pos).copied().map(char::from)
+    }
+    fn nextc(&mut self) -> Option<char> {
+        let c = self.peek()?;
+        self.pos += 1;
+        Some(c)
+    }
+
+    fn is_ident_char(c: char) -> bool {
+        c.is_alphanumeric() || c == '_'
     }
 
     fn alpha(&mut self) -> Spanned<Tok<'a>> {
         let start = self.pos;
-        while self.char().map_or(false, char::is_alphanumeric) {
+        while self.peek().map_or(false, Lexer::is_ident_char) {
             self.pos += 1;
         }
         let name = &self.input[start..self.pos];
@@ -70,11 +85,71 @@ impl<'a> Lexer<'a> {
         self.pos += 1;
         Some(Ok(Spanned::new(tok, Span(self.pos - 1, self.pos))))
     }
+
+    fn lex_number(&mut self) -> Result<Spanned<Tok<'a>>, Error> {
+        let start = self.pos;
+        let mut buf = String::new();
+        let neg = self.peek() == Some('-');
+        if neg {
+            buf.push(self.nextc().unwrap());
+        }
+        let mut base = 10;
+        if self.peek() == Some('0') {
+            buf.push(self.nextc().unwrap());
+            match self.peek() {
+                Some('x') => {
+                    self.nextc();
+                    base = 16;
+                }
+                Some('b') => {
+                    self.nextc();
+                    base = 2;
+                }
+                _ => (),
+            }
+        }
+        let mut float = false;
+        while let Some(next) = self.peek() {
+            if next.is_digit(base) {
+                buf.push(next);
+                self.nextc();
+            } else if next == '_' {
+                self.nextc();
+            } else if next.is_alphanumeric() {
+                return Err(Spanned::new(
+                    Doc::start("Invalid digit for int literal: '")
+                        .add(next)
+                        .add("'"),
+                    Span(self.pos, self.pos + 1),
+                ));
+            } else if next == '.' {
+                float = true;
+                buf.push(next);
+                self.nextc();
+            } else {
+                break;
+            }
+        }
+        Ok(Spanned::new(
+            if float {
+                Tok::LitF(
+                    f64::from_str(&buf)
+                        .map_err(|e| Spanned::new(Doc::start(e), Span(start, self.pos)))?,
+                )
+            } else {
+                Tok::LitI(
+                    i64::from_str_radix(&buf, base)
+                        .map_err(|e| Spanned::new(Doc::start(e), Span(start, self.pos)))?,
+                )
+            },
+            Span(start, self.pos),
+        ))
+    }
 }
 impl<'a> Iterator for Lexer<'a> {
     type Item = Result<Spanned<Tok<'a>>, Error>;
     fn next(&mut self) -> Option<Self::Item> {
-        match self.char()? {
+        match self.peek()? {
             '+' => self.single(Tok::Add),
             '-' => self.single(Tok::Sub),
             '*' => self.single(Tok::Mul),
@@ -93,7 +168,9 @@ impl<'a> Iterator for Lexer<'a> {
                 self.pos += 1;
                 self.next()
             }
-            x if x.is_alphabetic() => Some(Ok(self.alpha())),
+            x if x.is_alphabetic() || x == '_' => Some(Ok(self.alpha())),
+            x if x.is_ascii_digit() => Some(self.lex_number()),
+
             x => Some(Err(Spanned::new(
                 Doc::start("unrecognized token '").add(x).add("'"),
                 Span(self.pos, self.pos + 1),
@@ -130,7 +207,6 @@ impl<'a> Parser<'a> {
                     match x {
                         Ok(x) => {
                             self.next = Some(x);
-                            // eprintln!("Lexing {:?}", x);
                             Some(x)
                         }
                         Err(e) => {
@@ -156,7 +232,7 @@ impl<'a> Parser<'a> {
     }
 
     fn span(&self) -> Span {
-        Span(self.lexer.pos, self.lexer.pos + 1)
+        Span(self.lexer.pos - 1, self.lexer.pos)
     }
 
     fn expect(&mut self, tok: Tok, msg: &str) -> Result<(), Error> {
@@ -226,6 +302,13 @@ impl<'a> Parser<'a> {
     fn atom(&mut self) -> Result<Option<SPre>, Error> {
         match self.peek().as_deref() {
             None => return Ok(None),
+            Some(Tok::LitI(i)) => {
+                self.next();
+                Ok(Some(Box::new(Spanned::new(
+                    Pre::Lit(Literal::Int(*i), None),
+                    self.span(),
+                ))))
+            }
             Some(Tok::Name(_)) => {
                 let name = self.name().unwrap();
                 let var = Box::new(Spanned::new(Pre::Var(name.inner), name.span));

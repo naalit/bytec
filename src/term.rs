@@ -34,10 +34,17 @@ pub enum BinOp {
     Div,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum Literal {
+    /// Java doesn't have unsigned integers, which makes int literals convenient
+    Int(i64),
+}
+
 // Syntax
 
 pub enum Term {
     Var(Sym),
+    Lit(Literal, Type),
     Call(FnId, Vec<Term>),
     BinOp(BinOp, Box<Term>, Box<Term>),
     Block(Vec<Statement>, Option<Box<Term>>),
@@ -71,6 +78,8 @@ pub type SPre = Box<Spanned<Pre>>;
 pub enum Pre {
     // a
     Var(RawSym),
+    // 2
+    Lit(Literal, Option<PreType>),
     // f(a, b, c)
     Call(Spanned<RawSym>, Vec<SPre>),
     // a + b
@@ -161,6 +170,7 @@ impl Term {
     fn cloned_(&self, cln: &mut Cloner) -> Term {
         match self {
             Term::Var(s) => Term::Var(cln.get(*s)),
+            Term::Lit(l, t) => Term::Lit(*l, t.clone()),
             Term::Call(f, a) => Term::Call(*f, a.iter().map(|x| x.cloned_(cln)).collect()),
             Term::BinOp(_, _, _) => todo!(),
             Term::Block(v, e) => {
@@ -195,6 +205,13 @@ impl Term {
     pub fn pretty(&self, cxt: &Bindings) -> Doc {
         match self {
             Term::Var(x) => Doc::start(cxt.resolve(*x)),
+            Term::Lit(l, t) => match l {
+                Literal::Int(i) => Doc::start(i).add(match t {
+                    Type::I32 => "i32",
+                    Type::I64 => "i64",
+                    _ => unreachable!(),
+                }),
+            },
             Term::Call(f, a) => Doc::start(cxt.resolve_raw(cxt.fn_name(*f)))
                 .add("(")
                 .chain(Doc::intersperse(

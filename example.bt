@@ -4,3 +4,5 @@ fn triple(x: i32): i32 {
     let y = add(x, x);
     add(x, y)
 }
+
+fn triple_2(x: i64): i64 = x * 3;
