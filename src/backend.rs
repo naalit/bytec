@@ -125,10 +125,7 @@ impl JTerm {
             JTerm::BinOp(op, a, b) => {
                 let mut buf = String::new();
                 write!(buf, "({}) ", a.gen(cxt)).unwrap();
-                match op {
-                    BinOp::Plus => buf.push('+'),
-                    BinOp::Minus => buf.push('-'),
-                }
+                buf.push(op.char());
                 write!(buf, " ({})", b.gen(cxt)).unwrap();
                 buf
             }

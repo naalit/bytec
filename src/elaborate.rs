@@ -241,7 +241,11 @@ impl<'b> Cxt<'b> {
                 }
                 Ok((Term::Call(fid, a2), rty))
             }
-            Pre::BinOp(_, _, _) => todo!(),
+            Pre::BinOp(op, a, b) => {
+                let (a, t) = self.infer(a)?;
+                let b = self.check(b, t.clone())?;
+                Ok((Term::BinOp(*op, Box::new(a), Box::new(b)), t))
+            }
             Pre::Block(v, e) => {
                 self.push();
 
@@ -269,6 +273,11 @@ impl<'b> Cxt<'b> {
 
     fn check(&mut self, pre: &SPre, ty: Type) -> Result<Term, TypeError> {
         match (&***pre, &ty) {
+            (Pre::BinOp(op, a, b), _) => {
+                let a = self.check(a, ty.clone())?;
+                let b = self.check(b, ty)?;
+                Ok(Term::BinOp(*op, Box::new(a), Box::new(b)))
+            }
             _ => {
                 let (term, ity) = self.infer(pre)?;
                 if ty == ity {

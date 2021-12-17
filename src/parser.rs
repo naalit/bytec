@@ -14,6 +14,16 @@ enum Tok<'a> {
     I64,
     // let
     Let,
+
+    // +
+    Add,
+    // -
+    Sub,
+    // *
+    Mul,
+    // /
+    Div,
+
     // (
     OpenParen,
     // )
@@ -65,6 +75,11 @@ impl<'a> Iterator for Lexer<'a> {
     type Item = Result<Spanned<Tok<'a>>, Error>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.char()? {
+            '+' => self.single(Tok::Add),
+            '-' => self.single(Tok::Sub),
+            '*' => self.single(Tok::Mul),
+            '/' => self.single(Tok::Div),
+
             '(' => self.single(Tok::OpenParen),
             ')' => self.single(Tok::CloseParen),
             '{' => self.single(Tok::OpenBrace),
@@ -73,6 +88,7 @@ impl<'a> Iterator for Lexer<'a> {
             ';' => self.single(Tok::Semicolon),
             '=' => self.single(Tok::Equals),
             ',' => self.single(Tok::Comma),
+
             x if x.is_whitespace() => {
                 self.pos += 1;
                 self.next()
@@ -143,6 +159,14 @@ impl<'a> Parser<'a> {
         Span(self.lexer.pos, self.lexer.pos + 1)
     }
 
+    fn expect(&mut self, tok: Tok, msg: &str) -> Result<(), Error> {
+        if self.next().as_deref() == Some(&tok) {
+            Ok(())
+        } else {
+            Err(self.err(&format!("expected {}", msg)))
+        }
+    }
+
     fn name(&mut self) -> Option<Spanned<RawSym>> {
         match *self.peek()? {
             Tok::Name(x) => {
@@ -154,6 +178,52 @@ impl<'a> Parser<'a> {
     }
 
     fn term(&mut self) -> Result<Option<SPre>, Error> {
+        let mut t = match self.factor()? {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        loop {
+            let op = match self.peek().as_deref() {
+                Some(Tok::Add) => BinOp::Add,
+                Some(Tok::Sub) => BinOp::Sub,
+                _ => break,
+            };
+
+            self.next();
+
+            let rhs = self.factor()?.ok_or(self.err("expected expression"))?;
+            let span = Span(t.span.0, rhs.span.1);
+            t = Box::new(Spanned::new(Pre::BinOp(op, t, rhs), span));
+        }
+
+        Ok(Some(t))
+    }
+
+    fn factor(&mut self) -> Result<Option<SPre>, Error> {
+        let mut t = match self.atom()? {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        loop {
+            let op = match self.peek().as_deref() {
+                Some(Tok::Mul) => BinOp::Mul,
+                Some(Tok::Div) => BinOp::Div,
+                _ => break,
+            };
+
+            self.next();
+
+            let rhs = self.atom()?.ok_or(self.err("expected expression"))?;
+            let span = Span(t.span.0, rhs.span.1);
+            t = Box::new(Spanned::new(Pre::BinOp(op, t, rhs), span));
+        }
+
+        Ok(Some(t))
+    }
+
+    fn atom(&mut self) -> Result<Option<SPre>, Error> {
         match self.peek().as_deref() {
             None => return Ok(None),
             Some(Tok::Name(_)) => {
@@ -189,7 +259,12 @@ impl<'a> Parser<'a> {
                     _ => Ok(Some(var)),
                 }
             }
-            Some(Tok::OpenParen) => todo!("binop probably"),
+            Some(Tok::OpenParen) => {
+                self.next();
+                let t = self.term()?;
+                self.expect(Tok::CloseParen, "closing ')'")?;
+                Ok(t)
+            }
             Some(Tok::OpenBrace) => {
                 // block
                 let start = self.lexer.pos;
@@ -240,22 +315,22 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn ty(&mut self) -> Option<PreType> {
-        match self.peek().as_deref()? {
-            Tok::I32 => {
+    fn ty(&mut self) -> Result<Option<PreType>, Error> {
+        match self.peek().as_deref() {
+            Some(Tok::I32) => {
                 self.next();
-                Some(PreType::I32)
+                Ok(Some(PreType::I32))
             }
-            Tok::I64 => {
+            Some(Tok::I64) => {
                 self.next();
-                Some(PreType::I64)
+                Ok(Some(PreType::I64))
             }
-            Tok::OpenParen => {
+            Some(Tok::OpenParen) => {
                 self.next();
-                assert_eq!(Some(&Tok::CloseParen), self.next().as_deref());
-                Some(PreType::Unit)
+                self.expect(Tok::CloseParen, "closing ')'")?;
+                Ok(Some(PreType::Unit))
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 
@@ -266,15 +341,15 @@ impl<'a> Parser<'a> {
                 // fn f(x: T, y: T): Z = x
                 self.next();
                 let name = self.name().ok_or(self.err("expected function name"))?;
-                // TODO errors
-                assert_eq!(self.next().as_deref(), Some(&Tok::OpenParen));
+                self.expect(Tok::OpenParen, "'('")?;
                 let mut args = Vec::new();
                 while self.peek().as_deref() != Some(&Tok::CloseParen) {
                     let n = self
                         .name()
                         .ok_or(self.err("expected argument name or ')'"))?;
-                    assert_eq!(self.next().as_deref(), Some(&Tok::Colon));
-                    let t = self.ty().ok_or(self.err("expected argument type"))?;
+                    self.expect(Tok::Colon, "':'")?;
+
+                    let t = self.ty()?.ok_or(self.err("expected argument type"))?;
                     args.push((n.inner, t));
                     match self.peek().as_deref() {
                         Some(Tok::Comma) => {
@@ -284,10 +359,10 @@ impl<'a> Parser<'a> {
                         _ => return Err(self.err("expected ',' or ')'")),
                     }
                 }
-                assert_eq!(self.next().as_deref(), Some(&Tok::CloseParen));
+                self.expect(Tok::CloseParen, "closing ')'")?;
                 let ret_type = if let Some(&Tok::Colon) = self.peek().as_deref() {
                     self.next();
-                    self.ty().ok_or(self.err("expected return type"))?
+                    self.ty()?.ok_or(self.err("expected return type"))?
                 } else {
                     PreType::Unit
                 };
@@ -296,7 +371,7 @@ impl<'a> Parser<'a> {
                     Some(Tok::Equals) => {
                         self.next();
                         let t = self.term()?;
-                        assert_eq!(self.next().as_deref(), Some(&Tok::Semicolon));
+                        self.expect(Tok::Semicolon, "';' to end function body")?;
                         t
                     }
                     // let term() consume the brace
@@ -325,7 +400,7 @@ impl<'a> Parser<'a> {
                 let name = *self.name().ok_or(self.err("expected name"))?;
                 let ty = if self.peek().as_deref() == Some(&Tok::Colon) {
                     self.next();
-                    Some(self.ty().ok_or(self.err("expected type"))?)
+                    Some(self.ty()?.ok_or(self.err("expected type"))?)
                 } else {
                     None
                 };

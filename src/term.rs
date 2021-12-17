@@ -28,8 +28,10 @@ pub type Error = Spanned<Doc>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum BinOp {
-    Plus,
-    Minus,
+    Add,
+    Sub,
+    Mul,
+    Div,
 }
 
 // Syntax
@@ -179,6 +181,16 @@ impl Statement {
 
 // Pretty-printing
 
+impl BinOp {
+    pub fn char(&self) -> char {
+        match self {
+            BinOp::Add => '+',
+            BinOp::Sub => '-',
+            BinOp::Mul => '*',
+            BinOp::Div => '/',
+        }
+    }
+}
 impl Term {
     pub fn pretty(&self, cxt: &Bindings) -> Doc {
         match self {
@@ -190,7 +202,12 @@ impl Term {
                     Doc::start(",").space(),
                 ))
                 .add(")"),
-            Term::BinOp(_, _, _) => todo!(),
+            Term::BinOp(op, a, b) => a
+                .pretty(cxt)
+                .space()
+                .add(op.char())
+                .space()
+                .chain(b.pretty(cxt)),
             Term::Block(v, x) => {
                 let mut d = Doc::start("{").line().chain(Doc::intersperse(
                     v.iter().map(|x| x.pretty(cxt)),
