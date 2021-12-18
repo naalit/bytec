@@ -128,9 +128,9 @@ impl TypeError {
             ),
             TypeError::Unify(span, ity, ety) => Spanned::new(
                 Doc::start("Type mismatch: expected ").chain(
-                    ity.pretty(bindings)
+                    ety.pretty(bindings)
                         .add(" but found ")
-                        .chain(ety.pretty(bindings)),
+                        .chain(ity.pretty(bindings)),
                 ),
                 span,
             ),
@@ -151,6 +151,7 @@ impl<'b> Cxt<'b> {
         match ty {
             PreType::I32 => Ok(Type::I32),
             PreType::I64 => Ok(Type::I64),
+            PreType::Str => Ok(Type::Str),
             PreType::Unit => Ok(Type::Unit),
         }
     }
@@ -228,13 +229,16 @@ impl<'b> Cxt<'b> {
                 .var(*raw)
                 .map(|(s, t)| (Term::Var(s), t.clone()))
                 .ok_or(TypeError::NotFound(pre.span, *raw)),
-            Pre::Lit(l, t) => match t {
-                Some(t) => {
-                    let t = self.elab_type(t)?;
-                    Ok((Term::Lit(*l, t.clone()), t))
-                }
-                // Default to i32
-                None => Ok((Term::Lit(*l, Type::I32), Type::I32)),
+            Pre::Lit(l, t) => match l {
+                Literal::Int(_) => match t {
+                    Some(t) => {
+                        let t = self.elab_type(t)?;
+                        Ok((Term::Lit(*l, t.clone()), t))
+                    }
+                    // Default to i32
+                    None => Ok((Term::Lit(*l, Type::I32), Type::I32)),
+                },
+                Literal::Str(_) => Ok((Term::Lit(*l, Type::Str), Type::Str)),
             },
             Pre::Call(f, a) => {
                 let (fid, FnType(atys, rty)) =

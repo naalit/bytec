@@ -38,6 +38,7 @@ pub enum BinOp {
 pub enum Literal {
     /// Java doesn't have unsigned integers, which makes int literals convenient
     Int(i64),
+    Str(RawSym),
 }
 
 // Syntax
@@ -68,6 +69,7 @@ pub struct Fn {
 pub enum Type {
     I32,
     I64,
+    Str,
     Unit,
 }
 
@@ -112,6 +114,7 @@ pub enum PreStatement {
 pub enum PreType {
     I32,
     I64,
+    Str,
     Unit,
 }
 
@@ -211,6 +214,7 @@ impl Term {
                     Type::I64 => "i64",
                     _ => unreachable!(),
                 }),
+                Literal::Str(s) => Doc::start('"').add(cxt.resolve_raw(*s)).add('"'),
             },
             Term::Call(f, a) => Doc::start(cxt.resolve_raw(cxt.fn_name(*f)))
                 .add("(")
@@ -289,6 +293,7 @@ impl Type {
         match self {
             Type::I32 => Doc::keyword("i32"),
             Type::I64 => Doc::keyword("i64"),
+            Type::Str => Doc::keyword("str"),
             Type::Unit => Doc::start("()"),
         }
     }

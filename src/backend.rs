@@ -45,6 +45,7 @@ struct JItem(u64);
 enum JLit {
     Int(i32),
     Long(i64),
+    Str(RawSym),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -67,6 +68,7 @@ enum JStmt {
 enum JTy {
     I32,
     I64,
+    String,
     Void,
 }
 
@@ -113,6 +115,7 @@ impl JTerm {
             JTerm::Lit(l) => match l {
                 JLit::Int(i) => i.to_string(),
                 JLit::Long(i) => format!("{}L", i),
+                JLit::Str(s) => format!("\"{}\"", cxt.bindings.resolve_raw(*s)),
             },
             JTerm::Call(f, a) => {
                 let mut buf = String::new();
@@ -171,6 +174,7 @@ impl JTy {
         match self {
             JTy::I32 => "int".into(),
             JTy::I64 => "long".into(),
+            JTy::String => "String".into(),
             JTy::Void => "void".into(),
         }
     }
@@ -280,6 +284,7 @@ impl Term {
                     Type::I64 => JTerm::Lit(JLit::Long(*i)),
                     _ => unreachable!(),
                 },
+                Literal::Str(s) => JTerm::Lit(JLit::Str(*s)),
             },
             Term::Call(f, a) => JTerm::Call(
                 cxt.item(*f).unwrap(),
@@ -356,6 +361,7 @@ impl Type {
         match self {
             Type::I32 => JTy::I32,
             Type::I64 => JTy::I64,
+            Type::Str => JTy::String,
             Type::Unit => JTy::Void,
         }
     }

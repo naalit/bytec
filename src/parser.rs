@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 // LEXER
 // This is basically Rust syntax
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Tok<'a> {
     // x
     Name(&'a str),
@@ -11,6 +11,7 @@ enum Tok<'a> {
     LitI(i64),
     // 3.5
     LitF(f64),
+    LitS(String),
 
     // fn
     Fn,
@@ -18,6 +19,8 @@ enum Tok<'a> {
     I32,
     // i64
     I64,
+    // str
+    Str,
     // let
     Let,
 
@@ -75,6 +78,7 @@ impl<'a> Lexer<'a> {
             "fn" => Tok::Fn,
             "i32" => Tok::I32,
             "i64" => Tok::I64,
+            "str" => Tok::Str,
             "let" => Tok::Let,
             _ => Tok::Name(name),
         };
@@ -164,6 +168,52 @@ impl<'a> Iterator for Lexer<'a> {
             '=' => self.single(Tok::Equals),
             ',' => self.single(Tok::Comma),
 
+            '"' => {
+                let start = self.pos;
+                self.nextc();
+                let mut buf = String::new();
+                loop {
+                    match self.nextc() {
+                        Some('"') => {
+                            break Some(Ok(Spanned::new(Tok::LitS(buf), Span(start, self.pos))))
+                        }
+                        Some('\\') => {
+                            // Escape
+                            match self.nextc() {
+                                Some('\\') => {
+                                    buf.push('\\');
+                                }
+                                Some('n') => {
+                                    buf.push('\n');
+                                }
+                                Some('t') => {
+                                    buf.push('\t');
+                                }
+                                Some(c) => {
+                                    break Some(Err(Spanned::new(
+                                        Doc::start(format!("Invalid escape '\\{}'", c)),
+                                        Span(self.pos - 2, self.pos),
+                                    )))
+                                }
+                                None => {
+                                    break Some(Err(Spanned::new(
+                                        Doc::start("expected closing '\"'"),
+                                        Span(start, self.pos),
+                                    )))
+                                }
+                            }
+                        }
+                        Some(c) => buf.push(c),
+                        None => {
+                            break Some(Err(Spanned::new(
+                                Doc::start("expected closing '\"'"),
+                                Span(start, self.pos),
+                            )))
+                        }
+                    }
+                }
+            }
+
             x if x.is_whitespace() => {
                 self.pos += 1;
                 self.next()
@@ -197,8 +247,8 @@ impl<'a> Parser<'a> {
     }
 
     fn peek(&mut self) -> Option<Spanned<Tok<'a>>> {
-        match self.next {
-            Some(x) => Some(x),
+        match &self.next {
+            Some(x) => Some(x.clone()),
             None => {
                 if self.next_err.is_some() {
                     return None;
@@ -206,7 +256,7 @@ impl<'a> Parser<'a> {
                 if let Some(x) = self.lexer.next() {
                     match x {
                         Ok(x) => {
-                            self.next = Some(x);
+                            self.next = Some(x.clone());
                             Some(x)
                         }
                         Err(e) => {
@@ -309,6 +359,13 @@ impl<'a> Parser<'a> {
                     self.span(),
                 ))))
             }
+            Some(Tok::LitS(s)) => {
+                let q = self.next().unwrap();
+                Ok(Some(Box::new(Spanned::new(
+                    Pre::Lit(Literal::Str(self.bindings.raw(s)), None),
+                    q.span,
+                ))))
+            }
             Some(Tok::Name(_)) => {
                 let name = self.name().unwrap();
                 let var = Box::new(Spanned::new(Pre::Var(name.inner), name.span));
@@ -407,6 +464,10 @@ impl<'a> Parser<'a> {
             Some(Tok::I64) => {
                 self.next();
                 Ok(Some(PreType::I64))
+            }
+            Some(Tok::Str) => {
+                self.next();
+                Ok(Some(PreType::Str))
             }
             Some(Tok::OpenParen) => {
                 self.next();
@@ -515,7 +576,7 @@ impl<'a> Parser<'a> {
                     } else {
                         return Err(Spanned::new(
                             Doc::start("Unexpected ")
-                                .debug(*self.peek().unwrap())
+                                .debug(self.peek().unwrap().inner)
                                 .add(", expected statement"),
                             Span(self.lexer.pos, self.lexer.pos + 1),
                         ));
