@@ -23,6 +23,8 @@ enum Tok<'a> {
     Str,
     // let
     Let,
+    // extern
+    Extern,
 
     // +
     Add,
@@ -80,6 +82,7 @@ impl<'a> Lexer<'a> {
             "i64" => Tok::I64,
             "str" => Tok::Str,
             "let" => Tok::Let,
+            "extern" => Tok::Extern,
             _ => Tok::Name(name),
         };
         Spanned::new(tok, Span(start, self.pos))
@@ -481,9 +484,16 @@ impl<'a> Parser<'a> {
     fn item(&mut self) -> Result<Option<PreItem>, Error> {
         match self.peek().as_deref() {
             None => Ok(None),
-            Some(Tok::Fn) => {
+            Some(Tok::Extern | Tok::Fn) => {
                 // fn f(x: T, y: T): Z = x
-                self.next();
+                let ext = match &*self.next().unwrap() {
+                    Tok::Fn => false,
+                    Tok::Extern => {
+                        self.expect(Tok::Fn, "'fn'")?;
+                        true
+                    }
+                    _ => unreachable!(),
+                };
                 let name = self.name().ok_or(self.err("expected function name"))?;
                 self.expect(Tok::OpenParen, "'('")?;
                 let mut args = Vec::new();
@@ -511,25 +521,41 @@ impl<'a> Parser<'a> {
                     PreType::Unit
                 };
 
-                let body = match self.peek().as_deref() {
-                    Some(Tok::Equals) => {
-                        self.next();
-                        let t = self.term()?;
-                        self.expect(Tok::Semicolon, "';' to end function body")?;
-                        t
-                    }
-                    // let term() consume the brace
-                    Some(Tok::OpenBrace) => self.term()?,
-                    _ => return Err(self.err("expected '=' or '{' to start function body")),
-                }
-                .ok_or(self.err("expected function body"))?;
+                if ext {
+                    self.expect(Tok::Equals, "'='")?;
+                    let mapping = match self.next().as_deref() {
+                        Some(Tok::LitS(m)) => self.bindings.raw(m),
+                        _ => return Err(self.err("expected Java function name as string literal")),
+                    };
+                    self.expect(Tok::Semicolon, "';'")?;
 
-                Ok(Some(PreItem::Fn(PreFn {
-                    name,
-                    ret_ty: ret_type,
-                    args,
-                    body,
-                })))
+                    Ok(Some(PreItem::ExternFn(PreEFn {
+                        name,
+                        ret_ty: ret_type,
+                        args,
+                        mapping,
+                    })))
+                } else {
+                    let body = match self.peek().as_deref() {
+                        Some(Tok::Equals) => {
+                            self.next();
+                            let t = self.term()?;
+                            self.expect(Tok::Semicolon, "';' to end function body")?;
+                            t
+                        }
+                        // let term() consume the brace
+                        Some(Tok::OpenBrace) => self.term()?,
+                        _ => return Err(self.err("expected '=' or '{' to start function body")),
+                    }
+                    .ok_or(self.err("expected function body"))?;
+
+                    Ok(Some(PreItem::Fn(PreFn {
+                        name,
+                        ret_ty: ret_type,
+                        args,
+                        body,
+                    })))
+                }
             }
             _ => Ok(None),
         }

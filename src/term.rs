@@ -57,12 +57,19 @@ pub enum Statement {
 
 pub enum Item {
     Fn(Fn),
+    ExternFn(ExternFn),
 }
 pub struct Fn {
     pub id: FnId,
     pub ret_ty: Type,
     pub args: Vec<(Sym, Type)>,
     pub body: Term,
+}
+pub struct ExternFn {
+    pub id: FnId,
+    pub ret_ty: Type,
+    pub args: Vec<(Sym, Type)>,
+    pub mapping: RawSym,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -97,10 +104,18 @@ pub struct PreFn {
     pub args: Vec<(RawSym, PreType)>,
     pub body: SPre,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreEFn {
+    pub name: Spanned<RawSym>,
+    pub ret_ty: PreType,
+    pub args: Vec<(RawSym, PreType)>,
+    pub mapping: RawSym,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreItem {
     Fn(PreFn),
+    ExternFn(PreEFn),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -266,6 +281,32 @@ impl Item {
                 .add("=")
                 .space()
                 .chain(f.body.pretty(cxt))
+                .add(";"),
+            Item::ExternFn(f) => Doc::keyword("extern")
+                .space()
+                .chain(Doc::keyword("fn"))
+                .space()
+                .add(cxt.resolve_raw(cxt.fn_name(f.id)))
+                .add("(")
+                .chain(Doc::intersperse(
+                    f.args.iter().map(|(name, ty)| {
+                        Doc::start(cxt.resolve(*name))
+                            .add(":")
+                            .space()
+                            .chain(ty.pretty(cxt))
+                    }),
+                    Doc::start(",").space(),
+                ))
+                .add(")")
+                .add(":")
+                .space()
+                .chain(f.ret_ty.pretty(cxt))
+                .space()
+                .add("=")
+                .space()
+                .add('"')
+                .add(cxt.resolve_raw(f.mapping))
+                .add('"')
                 .add(";"),
         }
     }

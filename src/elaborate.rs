@@ -168,6 +168,16 @@ impl<'b> Cxt<'b> {
                 self.create_fn(*f.name, FnType(args, rty));
                 Ok(())
             }
+            PreItem::ExternFn(f) => {
+                let mut args = Vec::new();
+                for (_s, t) in &f.args {
+                    let t = self.elab_type(t)?;
+                    args.push(t);
+                }
+                let rty = self.elab_type(&f.ret_ty)?;
+                self.create_fn(*f.name, FnType(args, rty));
+                Ok(())
+            }
         }
     }
 
@@ -197,6 +207,32 @@ impl<'b> Cxt<'b> {
                     ret_ty: rty,
                     args: args2,
                     body,
+                }))
+            }
+            PreItem::ExternFn(f) => {
+                let PreEFn {
+                    name,
+                    ret_ty: _,
+                    args,
+                    mapping,
+                } = f;
+                let (fid, fty) = self.fun(**name).unwrap();
+                let FnType(atys, rty) = fty.clone();
+
+                self.push();
+                let mut args2 = Vec::new();
+                for ((a, _), t) in args.iter().zip(atys) {
+                    let a = self.create(*a, t.clone());
+                    args2.push((a, t));
+                }
+                // let body = self.check(body, rty.clone())?;
+                self.pop();
+
+                Ok(Item::ExternFn(ExternFn {
+                    id: fid,
+                    ret_ty: rty,
+                    args: args2,
+                    mapping: *mapping,
                 }))
             }
         }

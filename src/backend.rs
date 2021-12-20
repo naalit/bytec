@@ -8,12 +8,17 @@ use crate::term::*;
 pub fn codegen(code: &[Item], bindings: &Bindings, out_class: &str) -> String {
     let mut cxt = Cxt::new(bindings);
     // Declare items
+    let mut mappings = Vec::new();
     for i in code {
-        let name = match i {
-            Item::Fn(f) => f.id,
+        let (name, m) = match i {
+            Item::Fn(f) => (f.id, None),
+            Item::ExternFn(f) => (f.id, Some(f.mapping)),
         };
         let item = cxt.fresh_item();
         cxt.items.push((name, item));
+        if let Some(m) = m {
+            mappings.push((item, m));
+        }
     }
     for i in code {
         i.lower(&mut cxt);
@@ -22,7 +27,10 @@ pub fn codegen(code: &[Item], bindings: &Bindings, out_class: &str) -> String {
     let mut gen = Gen::new(bindings);
     // Declare functions
     for f in &cxt.fns {
-        gen.names.insert(f.item.0, f.name.clone());
+        gen.names.insert(f.item.0, (f.name.clone(), true));
+    }
+    for (i, m) in mappings {
+        gen.names.insert(i.0, (m, false));
     }
     // Generate functions
     let mut s = format!("public class {} {{\n\n", out_class);
@@ -86,7 +94,8 @@ struct JFn {
 #[derive(Clone, Debug)]
 struct Gen<'a> {
     bindings: &'a Bindings,
-    names: HashMap<u64, RawSym>,
+    /// The bool is whether to mangle names for deduplication
+    names: HashMap<u64, (RawSym, bool)>,
 }
 impl<'a> Gen<'a> {
     fn new(bindings: &'a Bindings) -> Self {
@@ -96,22 +105,30 @@ impl<'a> Gen<'a> {
         }
     }
 
-    fn name_str(&self, v: JVar) -> &str {
-        self.bindings.resolve_raw(self.names[&v.0])
+    fn name_str(&self, v: JVar) -> String {
+        let (i, b) = self.names[&v.0];
+        let s = self.bindings.resolve_raw(i);
+        if b {
+            format!("{}${}", s, v.0)
+        } else {
+            s.to_string()
+        }
     }
-    fn item_str(&self, v: JItem) -> &str {
-        self.bindings.resolve_raw(self.names[&v.0])
+    fn item_str(&self, v: JItem) -> String {
+        let (i, b) = self.names[&v.0];
+        let s = self.bindings.resolve_raw(i);
+        if b {
+            format!("{}${}", s, v.0)
+        } else {
+            s.to_string()
+        }
     }
 }
 
 impl JTerm {
     fn gen(&self, cxt: &Gen) -> String {
         match self {
-            JTerm::Var(v) => {
-                let mut s = cxt.name_str(*v).to_string();
-                write!(s, "${}", v.0).unwrap();
-                s
-            }
+            JTerm::Var(v) => cxt.name_str(*v),
             JTerm::Lit(l) => match l {
                 JLit::Int(i) => i.to_string(),
                 JLit::Long(i) => format!("{}L", i),
@@ -119,8 +136,7 @@ impl JTerm {
             },
             JTerm::Call(f, a) => {
                 let mut buf = String::new();
-                buf.push_str(cxt.item_str(*f));
-                write!(buf, "${}", f.0).unwrap();
+                buf.push_str(&cxt.item_str(*f));
                 buf.push('(');
 
                 let mut first = true;
@@ -151,7 +167,7 @@ impl JStmt {
     fn gen(&self, cxt: &mut Gen) -> String {
         match self {
             JStmt::Let(n, t, v, x) => {
-                cxt.names.insert(v.0, *n);
+                cxt.names.insert(v.0, (*n, true));
                 format!(
                     "{} {}${} = {};",
                     t.gen(cxt),
@@ -207,7 +223,7 @@ impl JFn {
                 v.0
             )
             .unwrap();
-            cxt.names.insert(v.0, *n);
+            cxt.names.insert(v.0, (*n, true));
         }
         buf.push_str(") {");
 
@@ -337,8 +353,11 @@ impl Item {
                     cxt.vars.push((name.clone(), var));
                 }
                 let ret = f.body.lower(cxt);
-                if !matches!(ret, JTerm::None) {
-                    cxt.block.push(JStmt::Ret(ret));
+                match (ret, &f.ret_ty) {
+                    (JTerm::None, _) => (),
+                    // Java doesn't like using 'return' with void functions
+                    (ret, Type::Unit) => cxt.block.push(JStmt::Term(ret)),
+                    (ret, _) => cxt.block.push(JStmt::Ret(ret)),
                 }
                 cxt.pop();
 
@@ -353,6 +372,7 @@ impl Item {
                     body: block,
                 });
             }
+            Item::ExternFn(_) => (),
         }
     }
 }
