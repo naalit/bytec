@@ -9,10 +9,15 @@ pub fn codegen(code: &[Item], bindings: &Bindings, out_class: &str) -> String {
     let mut cxt = Cxt::new(bindings);
     // Declare items
     let mut mappings = Vec::new();
+    let mut java = Vec::new();
     for i in code {
         let (name, m) = match i {
             Item::Fn(f) => (f.id, None),
             Item::ExternFn(f) => (f.id, Some(f.mapping)),
+            Item::InlineJava(s) => {
+                java.push(*s);
+                continue;
+            }
         };
         let item = cxt.fresh_item();
         cxt.items.push((name, item));
@@ -27,13 +32,19 @@ pub fn codegen(code: &[Item], bindings: &Bindings, out_class: &str) -> String {
     let mut gen = Gen::new(bindings);
     // Declare functions
     for f in &cxt.fns {
-        gen.names.insert(f.item.0, (f.name.clone(), true));
+        gen.names.insert(f.item.0, (f.name.clone(), !f.public));
     }
     for (i, m) in mappings {
         gen.names.insert(i.0, (m, false));
     }
     // Generate functions
-    let mut s = format!("public class {} {{\n\n", out_class);
+    let mut s = String::new();
+    // Add module-level inline Java at the top
+    for i in java {
+        s.push_str(bindings.resolve_raw(i));
+        s.push('\n');
+    }
+    write!(s, "\npublic class {} {{\n\n", out_class).unwrap();
     for f in cxt.fns {
         s.push_str(&f.gen(&mut gen));
     }
@@ -87,6 +98,7 @@ struct JFn {
     ret_ty: JTy,
     args: Vec<(RawSym, JVar, JTy)>,
     body: Vec<JStmt>,
+    public: bool,
 }
 
 // CODEGEN
@@ -198,15 +210,25 @@ impl JTy {
 impl JFn {
     fn gen(&self, cxt: &mut Gen) -> String {
         let mut buf = String::new();
-        write!(
-            buf,
-            "public static {} {}${}(",
-            self.ret_ty.gen(cxt),
-            cxt.bindings.resolve_raw(self.name),
-            self.item.0
-        )
-        .unwrap();
-
+        // Public = accessible by Java = no mangling
+        if self.public {
+            write!(
+                buf,
+                "public static {} {}(",
+                self.ret_ty.gen(cxt),
+                cxt.bindings.resolve_raw(self.name),
+            )
+            .unwrap();
+        } else {
+            write!(
+                buf,
+                "public static {} {}${}(",
+                self.ret_ty.gen(cxt),
+                cxt.bindings.resolve_raw(self.name),
+                self.item.0
+            )
+            .unwrap();
+        }
         let names = cxt.names.clone();
 
         let mut first = true;
@@ -341,6 +363,8 @@ impl Statement {
 impl Item {
     fn lower(&self, cxt: &mut Cxt) {
         match self {
+            // Module-level inline java is handled by codegen()
+            Item::InlineJava(_) => (),
             Item::Fn(f) => {
                 let mut block = Vec::new();
                 std::mem::swap(&mut block, &mut cxt.block);
@@ -370,6 +394,7 @@ impl Item {
                     ret_ty,
                     args,
                     body: block,
+                    public: f.public,
                 });
             }
             Item::ExternFn(_) => (),

@@ -25,6 +25,8 @@ enum Tok<'a> {
     Let,
     // extern
     Extern,
+    // pub
+    Pub,
 
     // +
     Add,
@@ -83,6 +85,7 @@ impl<'a> Lexer<'a> {
             "str" => Tok::Str,
             "let" => Tok::Let,
             "extern" => Tok::Extern,
+            "pub" => Tok::Pub,
             _ => Tok::Name(name),
         };
         Spanned::new(tok, Span(start, self.pos))
@@ -484,14 +487,22 @@ impl<'a> Parser<'a> {
     fn item(&mut self) -> Result<Option<PreItem>, Error> {
         match self.peek().as_deref() {
             None => Ok(None),
-            Some(Tok::Extern | Tok::Fn) => {
+            Some(Tok::Extern | Tok::Fn | Tok::Pub) => {
                 // fn f(x: T, y: T): Z = x
-                let ext = match &*self.next().unwrap() {
-                    Tok::Fn => false,
-                    Tok::Extern => {
+                let (public, ext) = match &*self.next().unwrap() {
+                    Tok::Fn => (false, false),
+                    Tok::Pub => {
                         self.expect(Tok::Fn, "'fn'")?;
-                        true
+                        (true, false)
                     }
+                    Tok::Extern => match self.next().as_deref() {
+                        Some(Tok::Fn) => (false, true),
+                        Some(Tok::LitS(s)) => {
+                            self.expect(Tok::Semicolon, "';'")?;
+                            return Ok(Some(PreItem::InlineJava(self.bindings.raw(s))));
+                        }
+                        _ => return Err(self.err("expected 'fn' or inline Java string")),
+                    },
                     _ => unreachable!(),
                 };
                 let name = self.name().ok_or(self.err("expected function name"))?;
@@ -554,6 +565,7 @@ impl<'a> Parser<'a> {
                         ret_ty: ret_type,
                         args,
                         body,
+                        public,
                     })))
                 }
             }

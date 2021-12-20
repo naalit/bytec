@@ -158,6 +158,7 @@ impl<'b> Cxt<'b> {
 
     fn declare_item(&mut self, item: &PreItem) -> Result<(), TypeError> {
         match item {
+            PreItem::InlineJava(_) => Ok(()),
             PreItem::Fn(f) => {
                 let mut args = Vec::new();
                 for (_s, t) in &f.args {
@@ -183,12 +184,14 @@ impl<'b> Cxt<'b> {
 
     fn check_item(&mut self, item: &PreItem) -> Result<Item, TypeError> {
         match item {
+            PreItem::InlineJava(s) => Ok(Item::InlineJava(*s)),
             PreItem::Fn(f) => {
                 let PreFn {
                     name,
                     ret_ty: _,
                     args,
                     body,
+                    public,
                 } = f;
                 let (fid, fty) = self.fun(**name).unwrap();
                 let FnType(atys, rty) = fty.clone();
@@ -206,6 +209,7 @@ impl<'b> Cxt<'b> {
                     id: fid,
                     ret_ty: rty,
                     args: args2,
+                    public: *public,
                     body,
                 }))
             }

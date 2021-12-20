@@ -1,3 +1,5 @@
+extern "package bytecoder;";
+
 extern fn println(s: str) = "System.out.println";
 
 fn add(x: i32, y: i32): i32 = x + y;
@@ -11,4 +13,4 @@ fn triple_2(x: i64): i64 = x * 3;
 
 fn id(x: str): str = "twelve";
 
-fn main() = println(id("thirteen"));
+pub fn main() = println(id("thirteen"));

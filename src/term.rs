@@ -58,9 +58,11 @@ pub enum Statement {
 pub enum Item {
     Fn(Fn),
     ExternFn(ExternFn),
+    InlineJava(RawSym),
 }
 pub struct Fn {
     pub id: FnId,
+    pub public: bool,
     pub ret_ty: Type,
     pub args: Vec<(Sym, Type)>,
     pub body: Term,
@@ -100,6 +102,7 @@ pub enum Pre {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreFn {
     pub name: Spanned<RawSym>,
+    pub public: bool,
     pub ret_ty: PreType,
     pub args: Vec<(RawSym, PreType)>,
     pub body: SPre,
@@ -116,6 +119,7 @@ pub struct PreEFn {
 pub enum PreItem {
     Fn(PreFn),
     ExternFn(PreEFn),
+    InlineJava(RawSym),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -306,6 +310,12 @@ impl Item {
                 .space()
                 .add('"')
                 .add(cxt.resolve_raw(f.mapping))
+                .add('"')
+                .add(";"),
+            Item::InlineJava(s) => Doc::keyword("extern")
+                .space()
+                .add('"')
+                .add(cxt.resolve_raw(*s))
                 .add('"')
                 .add(";"),
         }
