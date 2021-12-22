@@ -73,9 +73,9 @@ enum JLit {
 
 #[derive(Clone, Debug, PartialEq)]
 enum JTerm {
-    Var(JVar),
+    Var(JVar, JTy),
     Lit(JLit),
-    Call(JItem, Vec<JTerm>),
+    Call(JItem, Vec<JTerm>, JTy),
     BinOp(BinOp, Box<JTerm>, Box<JTerm>),
     None,
 }
@@ -96,6 +96,17 @@ enum JTy {
     Bool,
     String,
     Void,
+}
+impl JTy {
+    fn primitive(&self) -> bool {
+        match self {
+            JTy::I32 => true,
+            JTy::I64 => true,
+            JTy::Bool => true,
+            JTy::Void => true,
+            JTy::String => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -161,13 +172,13 @@ impl<'a> Gen<'a> {
 impl JTerm {
     fn gen(&self, cxt: &Gen) -> String {
         match self {
-            JTerm::Var(v) => cxt.name_str(*v),
+            JTerm::Var(v, _) => cxt.name_str(*v),
             JTerm::Lit(l) => match l {
                 JLit::Int(i) => i.to_string(),
                 JLit::Long(i) => format!("{}L", i),
                 JLit::Str(s) => format!("\"{}\"", cxt.bindings.resolve_raw(*s)),
             },
-            JTerm::Call(f, a) => {
+            JTerm::Call(f, a, _) => {
                 let mut buf = String::new();
                 buf.push_str(&cxt.item_str(*f));
                 buf.push('(');
@@ -183,6 +194,14 @@ impl JTerm {
                 }
                 buf.push(')');
 
+                buf
+            }
+            JTerm::BinOp(op @ (BinOp::Eq | BinOp::Neq), a, b) if !a.ty().primitive() => {
+                let mut buf = String::new();
+                if *op == BinOp::Neq {
+                    buf.push('!');
+                }
+                write!(buf, "({}).equals({})", a.gen(cxt), b.gen(cxt)).unwrap();
                 buf
             }
             JTerm::BinOp(op, a, b) => {
@@ -398,18 +417,18 @@ impl<'a> Cxt<'a> {
 }
 
 impl JTerm {
-    fn ty(&self, cxt: &Cxt) -> JTy {
+    fn ty(&self) -> JTy {
         match self {
-            JTerm::Var(a) => cxt.tys.get(a).unwrap().clone(),
+            JTerm::Var(_, t) => t.clone(),
             JTerm::Lit(l) => match l {
                 JLit::Int(_) => JTy::I32,
                 JLit::Long(_) => JTy::I64,
                 JLit::Str(_) => JTy::String,
             },
-            JTerm::Call(f, _) => cxt.item_ret_tys.get(f).unwrap().clone(),
+            JTerm::Call(_, _, t) => t.clone(),
             JTerm::BinOp(op, a, _) => match op.ty() {
                 BinOpType::Comp => JTy::Bool,
-                BinOpType::Arith => a.ty(cxt),
+                BinOpType::Arith => a.ty(),
                 BinOpType::Logic => JTy::Bool,
             },
             JTerm::None => JTy::Void,
@@ -420,7 +439,10 @@ impl JTerm {
 impl Term {
     fn lower(&self, cxt: &mut Cxt) -> JTerm {
         match self {
-            Term::Var(s) => JTerm::Var(cxt.var(*s).unwrap()),
+            Term::Var(s) => {
+                let var = cxt.var(*s).unwrap();
+                JTerm::Var(var, cxt.tys.get(&var).unwrap().clone())
+            }
             Term::Lit(l, t) => match l {
                 Literal::Int(i) => match t {
                     Type::I32 => JTerm::Lit(JLit::Int(*i as i32)),
@@ -429,10 +451,14 @@ impl Term {
                 },
                 Literal::Str(s) => JTerm::Lit(JLit::Str(*s)),
             },
-            Term::Call(f, a) => JTerm::Call(
-                cxt.item(*f).unwrap(),
-                a.iter().map(|x| x.lower(cxt)).collect(),
-            ),
+            Term::Call(f, a) => {
+                let item = cxt.item(*f).unwrap();
+                JTerm::Call(
+                    item,
+                    a.iter().map(|x| x.lower(cxt)).collect(),
+                    cxt.item_ret_tys.get(&item).unwrap().clone(),
+                )
+            }
             Term::BinOp(op, a, b) => {
                 JTerm::BinOp(*op, Box::new(a.lower(cxt)), Box::new(b.lower(cxt)))
             }
@@ -450,7 +476,7 @@ impl Term {
 
                 cxt.push_block();
                 let a = a.lower(cxt);
-                let ty = a.ty(cxt);
+                let ty = a.ty();
                 // It's important that we don't try to make a void variable, Java doesn't like that
                 let do_var = ty != JTy::Void;
 
@@ -474,12 +500,12 @@ impl Term {
                 };
 
                 if do_var {
-                    cxt.block.push(JStmt::Let(raw, ty, var, None));
+                    cxt.block.push(JStmt::Let(raw, ty.clone(), var, None));
                 }
                 cxt.block.push(JStmt::If(cond, a, b));
 
                 if do_var {
-                    JTerm::Var(var)
+                    JTerm::Var(var, ty)
                 } else {
                     JTerm::None
                 }
@@ -518,7 +544,9 @@ impl Item {
                 let mut args = Vec::new();
                 for (name, ty) in &f.args {
                     let var = cxt.fresh_var();
-                    args.push((name.raw(), var, ty.lower(cxt)));
+                    let ty = ty.lower(cxt);
+                    args.push((name.raw(), var, ty.clone()));
+                    cxt.tys.insert(var, ty);
                     cxt.vars.push((name.clone(), var));
                 }
                 let ret = f.body.lower(cxt);

@@ -19,6 +19,8 @@ fn fib(i: i32): i32 = if i <= 1 {
     fib(i-1) + fib(i-2)
 };
 
+fn compare_strings(a: str, b: str): bool = a == b;
+
 fn is_five(i: i32): bool {
     if i == 12 {
         println("it's not five, it's twelve!");
