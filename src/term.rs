@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 pub use crate::binding::*;
 pub use crate::pretty::Doc;
+use crate::pretty::Prec;
 
 // Common types
 
@@ -32,6 +33,28 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    Gt,
+    Lt,
+    Eq,
+    Neq,
+    Geq,
+    Leq,
+}
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BinOpType {
+    Comp,
+    Arith,
+    Logic,
+}
+impl BinOp {
+    pub fn ty(self) -> BinOpType {
+        match self {
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => BinOpType::Arith,
+            BinOp::Gt | BinOp::Lt | BinOp::Eq | BinOp::Neq | BinOp::Geq | BinOp::Leq => {
+                BinOpType::Comp
+            }
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -49,6 +72,7 @@ pub enum Term {
     Call(FnId, Vec<Term>),
     BinOp(BinOp, Box<Term>, Box<Term>),
     Block(Vec<Statement>, Option<Box<Term>>),
+    If(Box<Term>, Box<Term>, Option<Box<Term>>),
 }
 pub enum Statement {
     Term(Term),
@@ -78,6 +102,7 @@ pub struct ExternFn {
 pub enum Type {
     I32,
     I64,
+    Bool,
     Str,
     Unit,
 }
@@ -97,6 +122,8 @@ pub enum Pre {
     BinOp(BinOp, SPre, SPre),
     // { a; b; c }
     Block(Vec<PreStatement>, Option<SPre>),
+    // if a { b } else { c }
+    If(SPre, SPre, Option<SPre>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -133,6 +160,7 @@ pub enum PreStatement {
 pub enum PreType {
     I32,
     I64,
+    Bool,
     Str,
     Unit,
 }
@@ -199,6 +227,11 @@ impl Term {
                 let v = v.iter().map(|x| x.cloned_(cln)).collect();
                 Term::Block(v, e.as_ref().map(|x| Box::new(x.cloned_(cln))))
             }
+            Term::If(a, b, c) => Term::If(
+                Box::new(a.cloned_(cln)),
+                Box::new(b.cloned_(cln)),
+                c.as_ref().map(|x| Box::new(x.cloned_(cln))),
+            ),
         }
     }
 }
@@ -214,12 +247,19 @@ impl Statement {
 // Pretty-printing
 
 impl BinOp {
-    pub fn char(&self) -> char {
+    pub fn repr(&self) -> &'static str {
         match self {
-            BinOp::Add => '+',
-            BinOp::Sub => '-',
-            BinOp::Mul => '*',
-            BinOp::Div => '/',
+            BinOp::Add => "+",
+            BinOp::Sub => "-",
+            BinOp::Mul => "*",
+            BinOp::Div => "/",
+
+            BinOp::Gt => ">",
+            BinOp::Lt => "<",
+            BinOp::Eq => "==",
+            BinOp::Neq => "!=",
+            BinOp::Geq => ">=",
+            BinOp::Leq => "<=",
         }
     }
 }
@@ -244,10 +284,12 @@ impl Term {
                 .add(")"),
             Term::BinOp(op, a, b) => a
                 .pretty(cxt)
+                .nest(Prec::Atom)
                 .space()
-                .add(op.char())
+                .add(op.repr())
                 .space()
-                .chain(b.pretty(cxt)),
+                .chain(b.pretty(cxt).nest(Prec::Atom))
+                .prec(Prec::Term),
             Term::Block(v, x) => {
                 let mut d = Doc::start("{").line().chain(Doc::intersperse(
                     v.iter().map(|x| x.pretty(cxt)),
@@ -258,6 +300,17 @@ impl Term {
                 }
                 d.indent().line().add("}")
             }
+            Term::If(cond, yes, no) => Doc::keyword("if")
+                .space()
+                .chain(cond.pretty(cxt))
+                .space()
+                // a and b should be blocks already
+                .chain(yes.pretty(cxt))
+                .chain(
+                    no.as_ref()
+                        .map(|no| Doc::keyword(" else").space().chain(no.pretty(cxt)))
+                        .unwrap_or(Doc::none()),
+                ),
         }
     }
 }
@@ -344,6 +397,7 @@ impl Type {
         match self {
             Type::I32 => Doc::keyword("i32"),
             Type::I64 => Doc::keyword("i64"),
+            Type::Bool => Doc::keyword("bool"),
             Type::Str => Doc::keyword("str"),
             Type::Unit => Doc::start("()"),
         }

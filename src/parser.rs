@@ -27,6 +27,12 @@ enum Tok<'a> {
     Extern,
     // pub
     Pub,
+    // if
+    If,
+    // else
+    Else,
+    // bool
+    Bool,
 
     // +
     Add,
@@ -36,6 +42,18 @@ enum Tok<'a> {
     Mul,
     // /
     Div,
+    // >
+    Gt,
+    // <
+    Lt,
+    // ==
+    Eq,
+    // !=
+    Neq,
+    // >=
+    Geq,
+    // <=
+    Leq,
 
     // (
     OpenParen,
@@ -62,6 +80,13 @@ impl<'a> Lexer<'a> {
     fn peek(&self) -> Option<char> {
         self.input.as_bytes().get(self.pos).copied().map(char::from)
     }
+    fn peekn(&self, n: usize) -> Option<char> {
+        self.input
+            .as_bytes()
+            .get(self.pos + n)
+            .copied()
+            .map(char::from)
+    }
     fn nextc(&mut self) -> Option<char> {
         let c = self.peek()?;
         self.pos += 1;
@@ -86,6 +111,9 @@ impl<'a> Lexer<'a> {
             "let" => Tok::Let,
             "extern" => Tok::Extern,
             "pub" => Tok::Pub,
+            "if" => Tok::If,
+            "else" => Tok::Else,
+            "bool" => Tok::Bool,
             _ => Tok::Name(name),
         };
         Spanned::new(tok, Span(start, self.pos))
@@ -94,6 +122,10 @@ impl<'a> Lexer<'a> {
     fn single<T>(&mut self, tok: Tok<'a>) -> Option<Result<Spanned<Tok<'a>>, T>> {
         self.pos += 1;
         Some(Ok(Spanned::new(tok, Span(self.pos - 1, self.pos))))
+    }
+    fn single_n<T>(&mut self, tok: Tok<'a>, n: usize) -> Option<Result<Spanned<Tok<'a>>, T>> {
+        self.pos += n;
+        Some(Ok(Spanned::new(tok, Span(self.pos - n, self.pos))))
     }
 
     fn lex_number(&mut self) -> Result<Spanned<Tok<'a>>, Error> {
@@ -164,6 +196,13 @@ impl<'a> Iterator for Lexer<'a> {
             '-' => self.single(Tok::Sub),
             '*' => self.single(Tok::Mul),
             '/' => self.single(Tok::Div),
+
+            '=' if self.peekn(1) == Some('=') => self.single_n(Tok::Eq, 2),
+            '!' if self.peekn(1) == Some('=') => self.single_n(Tok::Neq, 2),
+            '>' if self.peekn(1) == Some('=') => self.single_n(Tok::Geq, 2),
+            '<' if self.peekn(1) == Some('=') => self.single_n(Tok::Leq, 2),
+            '>' => self.single(Tok::Gt),
+            '<' => self.single(Tok::Lt),
 
             '(' => self.single(Tok::OpenParen),
             ')' => self.single(Tok::CloseParen),
@@ -310,6 +349,30 @@ impl<'a> Parser<'a> {
     }
 
     fn term(&mut self) -> Result<Option<SPre>, Error> {
+        let t = match self.arith()? {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        let op = match self.peek().as_deref() {
+            Some(Tok::Gt) => BinOp::Gt,
+            Some(Tok::Lt) => BinOp::Lt,
+            Some(Tok::Eq) => BinOp::Eq,
+            Some(Tok::Neq) => BinOp::Neq,
+            Some(Tok::Geq) => BinOp::Geq,
+            Some(Tok::Leq) => BinOp::Leq,
+            _ => return Ok(Some(t)),
+        };
+
+        self.next();
+
+        let rhs = self.arith()?.ok_or(self.err("expected expression"))?;
+        let span = Span(t.span.0, rhs.span.1);
+
+        Ok(Some(Box::new(Spanned::new(Pre::BinOp(op, t, rhs), span))))
+    }
+
+    fn arith(&mut self) -> Result<Option<SPre>, Error> {
         let mut t = match self.factor()? {
             Some(t) => t,
             None => return Ok(None),
@@ -372,6 +435,34 @@ impl<'a> Parser<'a> {
                     q.span,
                 ))))
             }
+            Some(Tok::If) => {
+                let start = self.lexer.pos;
+                self.next();
+                let cond = self.term()?.ok_or(self.err("expected if condition"))?;
+
+                // Make sure there's a block next, but don't consume the {
+                // term() will do that itself
+                if self.peek().as_deref() != Some(&Tok::OpenBrace) {
+                    return Err(self.err("expected '{' after if condition"));
+                }
+                let a = self.term()?.unwrap();
+
+                let b = if self.peek().as_deref() == Some(&Tok::Else) {
+                    self.next();
+                    if self.peek().as_deref() != Some(&Tok::OpenBrace) {
+                        return Err(self.err("expected '{' after 'else'"));
+                    }
+                    Some(self.term()?.unwrap())
+                } else {
+                    None
+                };
+
+                Ok(Some(Box::new(Spanned::new(
+                    Pre::If(cond, a, b),
+                    Span(start, self.lexer.pos),
+                ))))
+            }
+            // variable or function call
             Some(Tok::Name(_)) => {
                 let name = self.name().unwrap();
                 let var = Box::new(Spanned::new(Pre::Var(name.inner), name.span));
@@ -470,6 +561,10 @@ impl<'a> Parser<'a> {
             Some(Tok::I64) => {
                 self.next();
                 Ok(Some(PreType::I64))
+            }
+            Some(Tok::Bool) => {
+                self.next();
+                Ok(Some(PreType::Bool))
             }
             Some(Tok::Str) => {
                 self.next();

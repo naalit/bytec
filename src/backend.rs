@@ -5,15 +5,15 @@ use crate::term::*;
 
 // Entry point
 
-pub fn codegen(code: &[Item], bindings: &Bindings, out_class: &str) -> String {
+pub fn codegen(code: &[Item], bindings: &mut Bindings, out_class: &str) -> String {
     let mut cxt = Cxt::new(bindings);
     // Declare items
     let mut mappings = Vec::new();
     let mut java = Vec::new();
     for i in code {
-        let (name, m) = match i {
-            Item::Fn(f) => (f.id, None),
-            Item::ExternFn(f) => (f.id, Some(f.mapping)),
+        let (name, ret, m) = match i {
+            Item::Fn(f) => (f.id, &f.ret_ty, None),
+            Item::ExternFn(f) => (f.id, &f.ret_ty, Some(f.mapping)),
             Item::InlineJava(s) => {
                 java.push(*s);
                 continue;
@@ -21,6 +21,9 @@ pub fn codegen(code: &[Item], bindings: &Bindings, out_class: &str) -> String {
         };
         let item = cxt.fresh_item();
         cxt.items.push((name, item));
+
+        let ret = ret.lower(&cxt);
+        cxt.item_ret_tys.insert(item, ret);
         if let Some(m) = m {
             mappings.push((item, m));
         }
@@ -29,9 +32,10 @@ pub fn codegen(code: &[Item], bindings: &Bindings, out_class: &str) -> String {
         i.lower(&mut cxt);
     }
 
+    let fns = cxt.fns;
     let mut gen = Gen::new(bindings);
     // Declare functions
-    for f in &cxt.fns {
+    for f in &fns {
         gen.names.insert(f.item.0, (f.name.clone(), !f.public));
     }
     for (i, m) in mappings {
@@ -45,7 +49,7 @@ pub fn codegen(code: &[Item], bindings: &Bindings, out_class: &str) -> String {
         s.push('\n');
     }
     write!(s, "\npublic class {} {{\n\n", out_class).unwrap();
-    for f in cxt.fns {
+    for f in fns {
         s.push_str(&f.gen(&mut gen));
     }
     s.push_str("\n}");
@@ -55,9 +59,9 @@ pub fn codegen(code: &[Item], bindings: &Bindings, out_class: &str) -> String {
 
 // Java AST
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 struct JVar(u64);
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 struct JItem(u64);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -78,8 +82,10 @@ enum JTerm {
 
 #[derive(Clone, Debug, PartialEq)]
 enum JStmt {
-    Let(RawSym, JTy, JVar, JTerm),
+    Let(RawSym, JTy, JVar, Option<JTerm>),
+    Set(JVar, JTerm),
     Term(JTerm),
+    If(JTerm, Vec<JStmt>, Vec<JStmt>),
     Ret(JTerm),
 }
 
@@ -87,6 +93,7 @@ enum JStmt {
 enum JTy {
     I32,
     I64,
+    Bool,
     String,
     Void,
 }
@@ -108,13 +115,27 @@ struct Gen<'a> {
     bindings: &'a Bindings,
     /// The bool is whether to mangle names for deduplication
     names: HashMap<u64, (RawSym, bool)>,
+    indent: usize,
 }
 impl<'a> Gen<'a> {
     fn new(bindings: &'a Bindings) -> Self {
         Gen {
             bindings,
             names: HashMap::new(),
+            indent: 0,
         }
+    }
+
+    fn push(&mut self) {
+        self.indent += 1;
+    }
+    fn pop(&mut self) {
+        self.indent -= 1;
+    }
+    fn indent(&self) -> &'static str {
+        // More than five indentation levels will make it harder to read rather than easier
+        let s = "\t\t\t\t\t";
+        &s[0..self.indent.min(s.len())]
     }
 
     fn name_str(&self, v: JVar) -> String {
@@ -167,7 +188,7 @@ impl JTerm {
             JTerm::BinOp(op, a, b) => {
                 let mut buf = String::new();
                 write!(buf, "({}) ", a.gen(cxt)).unwrap();
-                buf.push(op.char());
+                buf.push_str(op.repr());
                 write!(buf, " ({})", b.gen(cxt)).unwrap();
                 buf
             }
@@ -178,7 +199,11 @@ impl JTerm {
 impl JStmt {
     fn gen(&self, cxt: &mut Gen) -> String {
         match self {
-            JStmt::Let(n, t, v, x) => {
+            JStmt::Let(n, t, v, None) => {
+                cxt.names.insert(v.0, (*n, true));
+                format!("{} {}${};", t.gen(cxt), cxt.bindings.resolve_raw(*n), v.0)
+            }
+            JStmt::Let(n, t, v, Some(x)) => {
                 cxt.names.insert(v.0, (*n, true));
                 format!(
                     "{} {}${} = {};",
@@ -188,12 +213,48 @@ impl JStmt {
                     x.gen(cxt)
                 )
             }
+            JStmt::Set(v, x) => {
+                format!("{} = {};", cxt.name_str(*v), x.gen(cxt))
+            }
+            JStmt::Term(JTerm::None) => "".to_string(),
             JStmt::Term(x) => {
                 let mut s = x.gen(cxt);
                 s.push(';');
                 s
             }
             JStmt::Ret(x) => format!("return {};", x.gen(cxt)),
+            JStmt::If(cond, a, b) => {
+                let mut s = format!("if ({}) {{", cond.gen(cxt));
+                cxt.push();
+                for i in a {
+                    s.push('\n');
+                    s.push_str(cxt.indent());
+                    s.push_str(&i.gen(cxt));
+                }
+                cxt.pop();
+
+                s.push('\n');
+                s.push_str(cxt.indent());
+                s.push('}');
+
+                if !b.is_empty() {
+                    cxt.push();
+
+                    s.push_str(" else {");
+                    for i in b {
+                        s.push('\n');
+                        s.push_str(cxt.indent());
+                        s.push_str(&i.gen(cxt));
+                    }
+                    cxt.pop();
+
+                    s.push('\n');
+                    s.push_str(cxt.indent());
+                    s.push('}');
+                }
+
+                s
+            }
         }
     }
 }
@@ -202,6 +263,7 @@ impl JTy {
         match self {
             JTy::I32 => "int".into(),
             JTy::I64 => "long".into(),
+            JTy::Bool => "boolean".into(),
             JTy::String => "String".into(),
             JTy::Void => "void".into(),
         }
@@ -249,38 +311,51 @@ impl JFn {
         }
         buf.push_str(") {");
 
+        cxt.push();
+
         for i in &self.body {
-            buf.push_str("\n\t");
+            buf.push('\n');
+            buf.push_str(cxt.indent());
             buf.push_str(&i.gen(cxt));
         }
 
         cxt.names = names;
+        cxt.pop();
 
-        buf.push_str("\n}\n");
+        buf.push('\n');
+        buf.push_str(cxt.indent());
+        buf.push_str("}\n");
+        buf.push_str(cxt.indent());
         buf
     }
 }
 
 // LOWERING
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Cxt<'a> {
-    bindings: &'a Bindings,
+    bindings: &'a mut Bindings,
     scopes: Vec<(usize, usize)>,
     vars: Vec<(Sym, JVar)>,
+    tys: HashMap<JVar, JTy>,
     items: Vec<(FnId, JItem)>,
+    item_ret_tys: HashMap<JItem, JTy>,
     block: Vec<JStmt>,
+    blocks: Vec<usize>,
     fns: Vec<JFn>,
     next: u64,
 }
 impl<'a> Cxt<'a> {
-    fn new(bindings: &'a Bindings) -> Self {
+    fn new(bindings: &'a mut Bindings) -> Self {
         Cxt {
             bindings,
             scopes: Vec::new(),
             vars: Vec::new(),
+            tys: HashMap::new(),
             items: Vec::new(),
+            item_ret_tys: HashMap::new(),
             block: Vec::new(),
+            blocks: Vec::new(),
             fns: Vec::new(),
             next: 0,
         }
@@ -291,6 +366,16 @@ impl<'a> Cxt<'a> {
     }
     fn item(&self, s: FnId) -> Option<JItem> {
         self.items.iter().rfind(|(k, _v)| *k == s).map(|(_k, v)| *v)
+    }
+
+    /// Implies push()
+    fn push_block(&mut self) {
+        self.push();
+        self.blocks.push(self.block.len());
+    }
+    fn pop_block(&mut self) -> Vec<JStmt> {
+        self.pop();
+        self.block.split_off(self.blocks.pop().unwrap())
     }
 
     fn push(&mut self) {
@@ -309,6 +394,26 @@ impl<'a> Cxt<'a> {
     fn fresh_item(&mut self) -> JItem {
         self.next += 1;
         JItem(self.next)
+    }
+}
+
+impl JTerm {
+    fn ty(&self, cxt: &Cxt) -> JTy {
+        match self {
+            JTerm::Var(a) => cxt.tys.get(a).unwrap().clone(),
+            JTerm::Lit(l) => match l {
+                JLit::Int(_) => JTy::I32,
+                JLit::Long(_) => JTy::I64,
+                JLit::Str(_) => JTy::String,
+            },
+            JTerm::Call(f, _) => cxt.item_ret_tys.get(f).unwrap().clone(),
+            JTerm::BinOp(op, a, _) => match op.ty() {
+                BinOpType::Comp => JTy::Bool,
+                BinOpType::Arith => a.ty(cxt),
+                BinOpType::Logic => JTy::Bool,
+            },
+            JTerm::None => JTy::Void,
+        }
     }
 }
 
@@ -340,6 +445,45 @@ impl Term {
                 cxt.pop();
                 r
             }
+            Term::If(cond, a, b) => {
+                let cond = cond.lower(cxt);
+
+                cxt.push_block();
+                let a = a.lower(cxt);
+                let ty = a.ty(cxt);
+                // It's important that we don't try to make a void variable, Java doesn't like that
+                let do_var = ty != JTy::Void;
+
+                let var = cxt.fresh_var();
+                let raw = cxt.bindings.raw("_then");
+                if do_var {
+                    cxt.tys.insert(var, ty.clone());
+                    cxt.block.push(JStmt::Set(var, a));
+                }
+                let a = cxt.pop_block();
+
+                let b = if let Some(b) = b {
+                    cxt.push_block();
+                    let b = b.lower(cxt);
+                    if do_var {
+                        cxt.block.push(JStmt::Set(var, b));
+                    }
+                    cxt.pop_block()
+                } else {
+                    Vec::new()
+                };
+
+                if do_var {
+                    cxt.block.push(JStmt::Let(raw, ty, var, None));
+                }
+                cxt.block.push(JStmt::If(cond, a, b));
+
+                if do_var {
+                    JTerm::Var(var)
+                } else {
+                    JTerm::None
+                }
+            }
         }
     }
 }
@@ -355,7 +499,8 @@ impl Statement {
                 cxt.vars.push((*n, var));
                 let t = t.lower(cxt);
                 let x = x.lower(cxt);
-                cxt.block.push(JStmt::Let(n.raw(), t, var, x));
+                cxt.tys.insert(var, t.clone());
+                cxt.block.push(JStmt::Let(n.raw(), t, var, Some(x)));
             }
         }
     }
@@ -406,6 +551,7 @@ impl Type {
         match self {
             Type::I32 => JTy::I32,
             Type::I64 => JTy::I64,
+            Type::Bool => JTy::Bool,
             Type::Str => JTy::String,
             Type::Unit => JTy::Void,
         }

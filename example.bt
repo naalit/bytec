@@ -13,4 +13,17 @@ fn triple_2(x: i64): i64 = x * 3;
 
 fn id(x: str): str = "twelve";
 
+fn fib(i: i32): i32 = if i <= 1 {
+    1
+} else {
+    fib(i-1) + fib(i-2)
+};
+
+fn is_five(i: i32): bool {
+    if i == 12 {
+        println("it's not five, it's twelve!");
+    }
+    i == 5
+}
+
 pub fn main() = println(id("thirteen"));

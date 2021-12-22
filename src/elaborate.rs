@@ -151,6 +151,7 @@ impl<'b> Cxt<'b> {
         match ty {
             PreType::I32 => Ok(Type::I32),
             PreType::I64 => Ok(Type::I64),
+            PreType::Bool => Ok(Type::Bool),
             PreType::Str => Ok(Type::Str),
             PreType::Unit => Ok(Type::Unit),
         }
@@ -294,9 +295,19 @@ impl<'b> Cxt<'b> {
                 Ok((Term::Call(fid, a2), rty))
             }
             Pre::BinOp(op, a, b) => {
-                let (a, t) = self.infer(a)?;
-                let b = self.check(b, t.clone())?;
-                Ok((Term::BinOp(*op, Box::new(a), Box::new(b)), t))
+                let (a, bt, rt) = match op.ty() {
+                    BinOpType::Comp => {
+                        let (a, t) = self.infer(a)?;
+                        (a, t, Type::Bool)
+                    }
+                    BinOpType::Arith => {
+                        let (a, t) = self.infer(a)?;
+                        (a, t.clone(), t)
+                    }
+                    BinOpType::Logic => (self.check(a, Type::Bool)?, Type::Bool, Type::Bool),
+                };
+                let b = self.check(b, bt)?;
+                Ok((Term::BinOp(*op, Box::new(a), Box::new(b)), rt))
             }
             Pre::Block(v, e) => {
                 self.push();
@@ -320,12 +331,23 @@ impl<'b> Cxt<'b> {
                     }
                 }
             }
+            Pre::If(cond, yes, no) => {
+                let cond = self.check(cond, Type::Bool)?;
+                let (yes, ty) = self.infer(yes)?;
+                let no = no
+                    .as_ref()
+                    .map(|no| self.check(no, ty.clone()))
+                    .transpose()?
+                    .map(Box::new);
+
+                Ok((Term::If(Box::new(cond), Box::new(yes), no), ty))
+            }
         }
     }
 
     fn check(&mut self, pre: &SPre, ty: Type) -> Result<Term, TypeError> {
         match (&***pre, &ty) {
-            (Pre::BinOp(op, a, b), _) => {
+            (Pre::BinOp(op, a, b), _) if op.ty() == BinOpType::Arith => {
                 let a = self.check(a, ty.clone())?;
                 let b = self.check(b, ty)?;
                 Ok(Term::BinOp(*op, Box::new(a), Box::new(b)))

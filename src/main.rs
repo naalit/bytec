@@ -50,7 +50,7 @@ fn main() {
         Ok((v, bindings))
     });
     match v {
-        Ok((v, bindings)) => {
+        Ok((v, mut bindings)) => {
             use std::io::Write;
 
             let out_path: &std::path::Path = output.as_ref();
@@ -64,7 +64,7 @@ fn main() {
 
             let java = crate::backend::codegen(
                 &v,
-                &bindings,
+                &mut bindings,
                 out_path.file_stem().unwrap().to_str().unwrap(),
             );
             let mut out_file = File::create(out_path).unwrap();
