@@ -87,6 +87,7 @@ enum JStmt {
     Term(JTerm),
     If(JTerm, Vec<JStmt>, Vec<JStmt>),
     Ret(JTerm),
+    InlineJava(RawSym),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -274,6 +275,7 @@ impl JStmt {
 
                 s
             }
+            JStmt::InlineJava(s) => cxt.bindings.resolve_raw(*s).to_string(),
         }
     }
 }
@@ -527,6 +529,9 @@ impl Statement {
                 let x = x.lower(cxt);
                 cxt.tys.insert(var, t.clone());
                 cxt.block.push(JStmt::Let(n.raw(), t, var, Some(x)));
+            }
+            Statement::InlineJava(s) => {
+                cxt.block.push(JStmt::InlineJava(*s));
             }
         }
     }

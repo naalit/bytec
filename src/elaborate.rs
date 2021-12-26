@@ -22,6 +22,8 @@ pub fn elab_mod(m: &[PreItem], bindings: &mut Bindings) -> Result<Vec<Item>, Err
         }
     }
 
+    v.append(&mut cxt.extra_items);
+
     Ok(v)
 }
 
@@ -71,6 +73,7 @@ struct Cxt<'b> {
     vars: Env<Sym, Type>,
     fns: Env<FnId, FnType>,
     bindings: &'b mut Bindings,
+    extra_items: Vec<Item>,
 }
 impl<'b> Cxt<'b> {
     fn new(bindings: &'b mut Bindings) -> Self {
@@ -78,6 +81,7 @@ impl<'b> Cxt<'b> {
             vars: Env::new(),
             fns: Env::new(),
             bindings,
+            extra_items: Vec::new(),
         }
     }
 
@@ -245,9 +249,13 @@ impl<'b> Cxt<'b> {
 
     fn check_stmt(&mut self, stmt: &PreStatement) -> Result<Option<Statement>, TypeError> {
         match stmt {
-            PreStatement::Item(_) => {
-                todo!("add to some top-level item list, elab it, and return None")
+            PreStatement::Item(item @ (PreItem::Fn(_) | PreItem::ExternFn(_))) => {
+                self.declare_item(item)?;
+                let item = self.check_item(item)?;
+                self.extra_items.push(item);
+                Ok(None)
             }
+            PreStatement::Item(PreItem::InlineJava(s)) => Ok(Some(Statement::InlineJava(*s))),
             PreStatement::Term(t) => self.infer(t).map(|(x, _)| Some(Statement::Term(x))),
             PreStatement::Let(n, t, x) => {
                 let (x, t) = match t {

@@ -11,7 +11,10 @@ enum Tok<'a> {
     LitI(i64),
     // 3.5
     LitF(f64),
+    // "Hello world!\n"
     LitS(String),
+    // extern { ... }
+    ExternBlock(&'a str),
 
     // fn
     Fn,
@@ -97,7 +100,7 @@ impl<'a> Lexer<'a> {
         c.is_alphanumeric() || c == '_'
     }
 
-    fn alpha(&mut self) -> Spanned<Tok<'a>> {
+    fn alpha(&mut self) -> Result<Spanned<Tok<'a>>, Error> {
         let start = self.pos;
         while self.peek().map_or(false, Lexer::is_ident_char) {
             self.pos += 1;
@@ -116,7 +119,48 @@ impl<'a> Lexer<'a> {
             "bool" => Tok::Bool,
             _ => Tok::Name(name),
         };
-        Spanned::new(tok, Span(start, self.pos))
+
+        // Handle extern blocks: `extern { ...java code... }`
+        if tok == Tok::Extern {
+            let end_extern = self.pos;
+            while self.peek().map_or(false, char::is_whitespace) {
+                self.nextc();
+            }
+            if self.peek() == Some('{') {
+                self.nextc();
+                let start_java = self.pos;
+                let mut nbrackets = 1;
+                loop {
+                    match self.nextc() {
+                        // Allow nested {}
+                        Some('{') => nbrackets += 1,
+                        Some('}') => {
+                            nbrackets -= 1;
+                            if nbrackets == 0 {
+                                let java = &self.input[start_java..self.pos - 1];
+                                return Ok(Spanned::new(
+                                    Tok::ExternBlock(java),
+                                    Span(start, self.pos),
+                                ));
+                            }
+                        }
+
+                        // Any character but } will just be in the Java code
+                        Some(_) => (),
+                        None => {
+                            return Err(Spanned::new(
+                                Doc::start("expected '}'"),
+                                Span(self.pos - 1, self.pos),
+                            ))
+                        }
+                    }
+                }
+            } else {
+                return Ok(Spanned::new(tok, Span(start, end_extern)));
+            }
+        }
+
+        Ok(Spanned::new(tok, Span(start, self.pos)))
     }
 
     fn single<T>(&mut self, tok: Tok<'a>) -> Option<Result<Spanned<Tok<'a>>, T>> {
@@ -263,7 +307,7 @@ impl<'a> Iterator for Lexer<'a> {
                 self.pos += 1;
                 self.next()
             }
-            x if x.is_alphabetic() || x == '_' => Some(Ok(self.alpha())),
+            x if x.is_alphabetic() || x == '_' => Some(self.alpha()),
             x if x.is_ascii_digit() => Some(self.lex_number()),
 
             x => Some(Err(Spanned::new(
@@ -582,6 +626,10 @@ impl<'a> Parser<'a> {
     fn item(&mut self) -> Result<Option<PreItem>, Error> {
         match self.peek().as_deref() {
             None => Ok(None),
+            Some(Tok::ExternBlock(s)) => {
+                self.next();
+                Ok(Some(PreItem::InlineJava(self.bindings.raw(*s))))
+            }
             Some(Tok::Extern | Tok::Fn | Tok::Pub) => {
                 // fn f(x: T, y: T): Z = x
                 let (public, ext) = match &*self.next().unwrap() {
@@ -670,7 +718,9 @@ impl<'a> Parser<'a> {
 
     fn stmt(&mut self) -> Result<Option<PreStatement>, Error> {
         match self.peek().as_deref() {
-            Some(Tok::Fn) => Ok(self.item()?.map(PreStatement::Item)),
+            Some(Tok::Fn | Tok::Extern | Tok::Pub | Tok::ExternBlock(_)) => {
+                Ok(self.item()?.map(PreStatement::Item))
+            }
             Some(Tok::Let) => {
                 self.next();
 

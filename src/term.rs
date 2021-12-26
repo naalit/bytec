@@ -77,6 +77,7 @@ pub enum Term {
 pub enum Statement {
     Term(Term),
     Let(Sym, Type, Box<Term>),
+    InlineJava(RawSym),
 }
 
 pub enum Item {
@@ -240,6 +241,7 @@ impl Statement {
         match self {
             Statement::Term(t) => Statement::Term(t.cloned_(cln)),
             Statement::Let(n, t, x) => Statement::Let(*n, t.clone(), Box::new(x.cloned_(cln))),
+            Statement::InlineJava(s) => Self::InlineJava(*s),
         }
     }
 }
@@ -291,9 +293,9 @@ impl Term {
                 .chain(b.pretty(cxt).nest(Prec::Atom))
                 .prec(Prec::Term),
             Term::Block(v, x) => {
-                let mut d = Doc::start("{").line().chain(Doc::intersperse(
-                    v.iter().map(|x| x.pretty(cxt)),
-                    Doc::none().line(),
+                let mut d = Doc::start("{").chain(Doc::intersperse(
+                    v.iter().map(|x| Doc::none().line().chain(x.pretty(cxt))),
+                    Doc::none(),
                 ));
                 if let Some(x) = x {
                     d = d.line().chain(x.pretty(cxt));
@@ -389,6 +391,11 @@ impl Statement {
                 .space()
                 .chain(x.pretty(cxt))
                 .add(";"),
+            Statement::InlineJava(s) => Doc::keyword("extern")
+                .space()
+                .add('{')
+                .add(cxt.resolve_raw(*s))
+                .add('}'),
         }
     }
 }
