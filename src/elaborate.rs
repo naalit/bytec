@@ -104,8 +104,8 @@ impl<'b> Cxt<'b> {
     }
 
     /// Creates a new binding with a name
-    fn create(&mut self, k: RawSym, ty: Type) -> Sym {
-        let s = self.bindings.create(k);
+    fn create(&mut self, k: RawSym, ty: Type, public: bool) -> Sym {
+        let s = self.bindings.create(k, public);
         self.vars.add(k, s, ty);
         s
     }
@@ -166,7 +166,7 @@ impl<'b> Cxt<'b> {
             PreItem::InlineJava(_) => Ok(()),
             PreItem::Fn(f) => {
                 let mut args = Vec::new();
-                for (_s, t) in &f.args {
+                for (_s, t, _) in &f.args {
                     let t = self.elab_type(t)?;
                     args.push(t);
                 }
@@ -176,7 +176,7 @@ impl<'b> Cxt<'b> {
             }
             PreItem::ExternFn(f) => {
                 let mut args = Vec::new();
-                for (_s, t) in &f.args {
+                for (_s, t, _) in &f.args {
                     let t = self.elab_type(t)?;
                     args.push(t);
                 }
@@ -203,8 +203,8 @@ impl<'b> Cxt<'b> {
 
                 self.push();
                 let mut args2 = Vec::new();
-                for ((a, _), t) in args.iter().zip(atys) {
-                    let a = self.create(*a, t.clone());
+                for ((a, _, public), t) in args.iter().zip(atys) {
+                    let a = self.create(*a, t.clone(), *public);
                     args2.push((a, t));
                 }
                 let body = self.check(body, rty.clone())?;
@@ -230,8 +230,8 @@ impl<'b> Cxt<'b> {
 
                 self.push();
                 let mut args2 = Vec::new();
-                for ((a, _), t) in args.iter().zip(atys) {
-                    let a = self.create(*a, t.clone());
+                for ((a, _, public), t) in args.iter().zip(atys) {
+                    let a = self.create(*a, t.clone(), *public);
                     args2.push((a, t));
                 }
                 // let body = self.check(body, rty.clone())?;
@@ -257,16 +257,21 @@ impl<'b> Cxt<'b> {
             }
             PreStatement::Item(PreItem::InlineJava(s)) => Ok(Some(Statement::InlineJava(*s))),
             PreStatement::Term(t) => self.infer(t).map(|(x, _)| Some(Statement::Term(x))),
-            PreStatement::Let(n, t, x) => {
-                let (x, t) = match t {
+            PreStatement::Let {
+                name,
+                ty,
+                value,
+                public,
+            } => {
+                let (x, t) = match ty {
                     Some(t) => {
                         let t = self.elab_type(t)?;
-                        let x = self.check(x, t.clone())?;
+                        let x = self.check(value, t.clone())?;
                         (x, t)
                     }
-                    None => self.infer(x)?,
+                    None => self.infer(value)?,
                 };
-                let n = self.create(*n, t.clone());
+                let n = self.create(*name, t.clone(), *public);
                 Ok(Some(Statement::Let(n, t, Box::new(x))))
             }
         }

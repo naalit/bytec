@@ -6,13 +6,16 @@ extern {
 
 extern fn println(s: str) = "out.println";
 
-fn add(x: i32, y: i32): i32 = x + y;
+fn triple(pub x: i32): i32 {
+    fn add(x: i32, y: i32): i32 = x + y;
 
-fn triple(x: i32): i32 {
-    let y = add(x, x);
+    let pub y = add(x, x);
+
     extern {
-        out.println("tripling");
+        out.print("x: " + x);
+        out.println(", y: " + y);
     }
+
     add(x, y)
 }
 
@@ -35,4 +38,4 @@ fn is_five(i: i32): bool {
     i == 5
 }
 
-pub fn main() = println(id("thirteen"));
+fn pub main() = println(id("thirteen"));

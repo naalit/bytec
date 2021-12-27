@@ -1,4 +1,7 @@
-use std::{collections::HashMap, num::NonZeroU32};
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZeroU32,
+};
 
 /// Represents an interned string directly
 ///
@@ -73,6 +76,7 @@ pub struct Bindings {
     strings: HashMap<String, RawSym>,
     string_pool: Vec<String>,
     nums: HashMap<RawSym, u32>,
+    pubs: HashSet<Sym>,
     types: Vec<RawSym>,
     fns: Vec<RawSym>,
 }
@@ -125,14 +129,26 @@ impl Bindings {
     pub fn fresh(&mut self, s: Sym) -> Sym {
         let u = self.nums.entry(s.raw()).or_insert(0);
         *u += 1;
-        s.with_num(*u - 1)
+        let s2 = s.with_num(*u - 1);
+        if self.public(s) {
+            self.pubs.insert(s2);
+        }
+        s2
+    }
+
+    pub fn public(&self, s: Sym) -> bool {
+        self.pubs.contains(&s)
     }
 
     /// Create a new symbol. It's guaranteed to be unique to all other symbols created with create()
-    pub fn create(&mut self, raw: RawSym) -> Sym {
+    pub fn create(&mut self, raw: RawSym, public: bool) -> Sym {
         let u = self.nums.entry(raw).or_insert(0);
         *u += 1;
-        Sym::from_parts(raw, *u - 1)
+        let s = Sym::from_parts(raw, *u - 1);
+        if public {
+            self.pubs.insert(s);
+        }
+        s
     }
 
     /// This doesn't return an Option, because only the Bindings can create symbols, and it adds them to `self.bindings`

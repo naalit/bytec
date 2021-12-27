@@ -132,14 +132,14 @@ pub struct PreFn {
     pub name: Spanned<RawSym>,
     pub public: bool,
     pub ret_ty: PreType,
-    pub args: Vec<(RawSym, PreType)>,
+    pub args: Vec<(RawSym, PreType, bool)>,
     pub body: SPre,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreEFn {
     pub name: Spanned<RawSym>,
     pub ret_ty: PreType,
-    pub args: Vec<(RawSym, PreType)>,
+    pub args: Vec<(RawSym, PreType, bool)>,
     pub mapping: RawSym,
 }
 
@@ -154,7 +154,12 @@ pub enum PreItem {
 pub enum PreStatement {
     Item(PreItem),
     Term(SPre),
-    Let(RawSym, Option<PreType>, SPre),
+    Let {
+        name: RawSym,
+        ty: Option<PreType>,
+        value: SPre,
+        public: bool,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

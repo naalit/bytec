@@ -60,7 +60,8 @@ pub fn codegen(code: &[Item], bindings: &mut Bindings, out_class: &str) -> Strin
 // Java AST
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-struct JVar(u64);
+/// bool: whether it's public, so mangling should be skipped
+struct JVar(u64, bool);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 struct JItem(u64);
 
@@ -220,18 +221,12 @@ impl JStmt {
     fn gen(&self, cxt: &mut Gen) -> String {
         match self {
             JStmt::Let(n, t, v, None) => {
-                cxt.names.insert(v.0, (*n, true));
-                format!("{} {}${};", t.gen(cxt), cxt.bindings.resolve_raw(*n), v.0)
+                cxt.names.insert(v.0, (*n, !v.1));
+                format!("{} {};", t.gen(cxt), cxt.name_str(*v))
             }
             JStmt::Let(n, t, v, Some(x)) => {
-                cxt.names.insert(v.0, (*n, true));
-                format!(
-                    "{} {}${} = {};",
-                    t.gen(cxt),
-                    cxt.bindings.resolve_raw(*n),
-                    v.0,
-                    x.gen(cxt)
-                )
+                cxt.names.insert(v.0, (*n, !v.1));
+                format!("{} {} = {};", t.gen(cxt), cxt.name_str(*v), x.gen(cxt))
             }
             JStmt::Set(v, x) => {
                 format!("{} = {};", cxt.name_str(*v), x.gen(cxt))
@@ -293,25 +288,13 @@ impl JTy {
 impl JFn {
     fn gen(&self, cxt: &mut Gen) -> String {
         let mut buf = String::new();
-        // Public = accessible by Java = no mangling
-        if self.public {
-            write!(
-                buf,
-                "public static {} {}(",
-                self.ret_ty.gen(cxt),
-                cxt.bindings.resolve_raw(self.name),
-            )
-            .unwrap();
-        } else {
-            write!(
-                buf,
-                "public static {} {}${}(",
-                self.ret_ty.gen(cxt),
-                cxt.bindings.resolve_raw(self.name),
-                self.item.0
-            )
-            .unwrap();
-        }
+        write!(
+            buf,
+            "public static {} {}(",
+            self.ret_ty.gen(cxt),
+            cxt.item_str(self.item)
+        )
+        .unwrap();
         let names = cxt.names.clone();
 
         let mut first = true;
@@ -320,15 +303,8 @@ impl JFn {
                 buf.push_str(", ");
             }
             first = false;
-            write!(
-                buf,
-                "{} {}${}",
-                t.gen(cxt),
-                cxt.bindings.resolve_raw(*n),
-                v.0
-            )
-            .unwrap();
-            cxt.names.insert(v.0, (*n, true));
+            cxt.names.insert(v.0, (*n, !v.1));
+            write!(buf, "{} {}", t.gen(cxt), cxt.name_str(*v),).unwrap();
         }
         buf.push_str(") {");
 
@@ -408,9 +384,9 @@ impl<'a> Cxt<'a> {
         self.items.truncate(i);
     }
 
-    fn fresh_var(&mut self) -> JVar {
+    fn fresh_var(&mut self, public: bool) -> JVar {
         self.next += 1;
-        JVar(self.next)
+        JVar(self.next, public)
     }
     fn fresh_item(&mut self) -> JItem {
         self.next += 1;
@@ -482,7 +458,7 @@ impl Term {
                 // It's important that we don't try to make a void variable, Java doesn't like that
                 let do_var = ty != JTy::Void;
 
-                let var = cxt.fresh_var();
+                let var = cxt.fresh_var(false);
                 let raw = cxt.bindings.raw("_then");
                 if do_var {
                     cxt.tys.insert(var, ty.clone());
@@ -523,7 +499,7 @@ impl Statement {
                 cxt.block.push(JStmt::Term(term));
             }
             Statement::Let(n, t, x) => {
-                let var = cxt.fresh_var();
+                let var = cxt.fresh_var(cxt.bindings.public(*n));
                 cxt.vars.push((*n, var));
                 let t = t.lower(cxt);
                 let x = x.lower(cxt);
@@ -548,7 +524,7 @@ impl Item {
                 cxt.push();
                 let mut args = Vec::new();
                 for (name, ty) in &f.args {
-                    let var = cxt.fresh_var();
+                    let var = cxt.fresh_var(cxt.bindings.public(*name));
                     let ty = ty.lower(cxt);
                     args.push((name.raw(), var, ty.clone()));
                     cxt.tys.insert(var, ty);

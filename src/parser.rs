@@ -630,14 +630,16 @@ impl<'a> Parser<'a> {
                 self.next();
                 Ok(Some(PreItem::InlineJava(self.bindings.raw(*s))))
             }
-            Some(Tok::Extern | Tok::Fn | Tok::Pub) => {
+            Some(Tok::Extern | Tok::Fn) => {
                 // fn f(x: T, y: T): Z = x
                 let (public, ext) = match &*self.next().unwrap() {
-                    Tok::Fn => (false, false),
-                    Tok::Pub => {
-                        self.expect(Tok::Fn, "'fn'")?;
-                        (true, false)
-                    }
+                    Tok::Fn => match self.peek().as_deref() {
+                        Some(Tok::Pub) => {
+                            self.next();
+                            (true, false)
+                        }
+                        _ => (false, false),
+                    },
                     Tok::Extern => match self.next().as_deref() {
                         Some(Tok::Fn) => (false, true),
                         Some(Tok::LitS(s)) => {
@@ -652,13 +654,20 @@ impl<'a> Parser<'a> {
                 self.expect(Tok::OpenParen, "'('")?;
                 let mut args = Vec::new();
                 while self.peek().as_deref() != Some(&Tok::CloseParen) {
+                    let public = if self.peek().as_deref() == Some(&Tok::Pub) {
+                        self.next();
+                        true
+                    } else {
+                        false
+                    };
+
                     let n = self
                         .name()
                         .ok_or(self.err("expected argument name or ')'"))?;
                     self.expect(Tok::Colon, "':'")?;
 
                     let t = self.ty()?.ok_or(self.err("expected argument type"))?;
-                    args.push((n.inner, t));
+                    args.push((n.inner, t, public));
                     match self.peek().as_deref() {
                         Some(Tok::Comma) => {
                             self.next();
@@ -718,11 +727,18 @@ impl<'a> Parser<'a> {
 
     fn stmt(&mut self) -> Result<Option<PreStatement>, Error> {
         match self.peek().as_deref() {
-            Some(Tok::Fn | Tok::Extern | Tok::Pub | Tok::ExternBlock(_)) => {
+            Some(Tok::Fn | Tok::Extern | Tok::ExternBlock(_)) => {
                 Ok(self.item()?.map(PreStatement::Item))
             }
             Some(Tok::Let) => {
                 self.next();
+
+                let public = if self.peek().as_deref() == Some(&Tok::Pub) {
+                    self.next();
+                    true
+                } else {
+                    false
+                };
 
                 let name = *self.name().ok_or(self.err("expected name"))?;
                 let ty = if self.peek().as_deref() == Some(&Tok::Colon) {
@@ -736,13 +752,18 @@ impl<'a> Parser<'a> {
                     return Err(self.err("expected '='"));
                 }
 
-                let x = self.term()?.ok_or(self.err("expected expression"))?;
+                let value = self.term()?.ok_or(self.err("expected expression"))?;
 
                 if self.next().as_deref() != Some(&Tok::Semicolon) {
                     return Err(self.err("expected ';'"));
                 }
 
-                Ok(Some(PreStatement::Let(name, ty, x)))
+                Ok(Some(PreStatement::Let {
+                    name,
+                    ty,
+                    value,
+                    public,
+                }))
             }
             _ => Ok(self.term()?.map(PreStatement::Term)),
         }
