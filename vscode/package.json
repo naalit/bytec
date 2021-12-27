@@ -1,0 +1,29 @@
+{
+    "name": "bytec-basic",
+    "displayName": "bytec-basic",
+    "description": "Syntax highlighting support for the bytec compiler's language",
+    "version": "0.0.1",
+    "engines": {
+        "vscode": "^1.53.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [{
+            "id": "bytec",
+            "aliases": ["bytec"],
+            "extensions": [".bt"],
+            "configuration": "./language-configuration.json"
+        }],
+        "grammars": [{
+            "language": "bytec",
+            "scopeName": "source.bytec",
+            "path": "./syntaxes/bytec.tmLanguage.json"
+        }],
+        "snippets": [{
+            "language": "bytec",
+            "path": "./snippets.json"
+        }]
+    }
+}

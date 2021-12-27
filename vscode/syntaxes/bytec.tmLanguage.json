@@ -1,0 +1,91 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "bytec",
+	"patterns": [
+		{ "include": "#extern" },
+		{ "include": "#keywords" },
+		{ "include": "#symbols" },
+		{ "include": "#types" },
+		{ "include": "#vars" },
+		{ "include": "#literals" },
+		{ "include": "#comments" },
+		{ "include": "#strings" }
+	],
+	"repository": {
+		"vars": {
+			"match": "\\b[a-z_][a-zA-Z_0-9]*\\b",
+			"name": "variable.other.bytec"
+		},
+		"literals": {
+			"match": "\\d+(\\.\\d+)?",
+			"name": "constant.numeric.bytec"
+		},
+		"comments": {
+			"match": "//.*$",
+			"name": "comment.line.double-slash.bytec"
+		},
+        "types": {
+            "match": "\\b([A-Z][A-Za-z_0-9]*|usize|u\\d+|i\\d+)",
+            "name": "entity.name.class.bytec"
+        },
+		"keywords": {
+			"patterns": [{
+				"name": "keyword.control.bytec",
+				"match": "\\b(fn|pub|let|extern|if|while|for|loop|try|catch|i32|i64|str|bool)\\b"
+			}]
+		},
+		"symbols": {
+			"patterns": [
+			{
+				"match": "\\+\\+|\\+|-|\\*\\*|\\*|/|\\^\\^|&",
+				"name": "keyword.operator.arithmetic.bytec"
+			},
+			{
+				"match": ">=|<=|>|<|==|!=",
+				"name": "keyword.operator.comparison.bytec"
+			},
+			{
+				"match": "\\b(&&|\\|\\|)\\b",
+				"name": "keyword.control.logic.bytec"
+			},
+			{
+				"match": "=",
+				"name": "keyword.operator.definition.bytec"
+			},
+			{
+				"match": ":",
+				"name": "keyword.operator.type.bytec"
+			}]
+		},
+		"strings": {
+			"name": "string.quoted.double.bytec",
+			"begin": "\"",
+			"end": "\"",
+			"patterns": [
+				{
+					"name": "constant.character.escape.bytec",
+					"match": "\\\\."
+				}
+			]
+		},
+		"extern": {
+			"name": "please.dont.highlight.bytec",
+			"begin": "extern {",
+			"end": "}",
+			"captures": {
+				"0": { "name": "keyword.control.bytec" }
+			},
+			"patterns": [
+				{
+					"name": "keyword.control.java",
+					"match": "\\b(public|static|if|while|for|loop|try|catch|int|long|boolean|byte|char|do|void|import|package|class|interface|extends|implements)\\b"
+				},
+				{ "include": "#vars" },
+				{ "include": "#types" },
+				{ "include": "#symbols" },
+				{ "include": "#strings" }
+			]
+		}
+	},
+	"scopeName": "source.bytec"
+}
