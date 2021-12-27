@@ -6,12 +6,21 @@
 		{ "include": "#keywords" },
 		{ "include": "#symbols" },
 		{ "include": "#types" },
+		{ "include": "#fns" },
 		{ "include": "#vars" },
 		{ "include": "#literals" },
 		{ "include": "#comments" },
 		{ "include": "#strings" }
 	],
 	"repository": {
+		"fns": {
+			"match": "(\\b[a-z_][a-zA-Z_0-9]*)\\(",
+			"captures": {
+				"1": {
+					"name": "entity.name.function.bytec"
+				}
+			}
+		},
 		"vars": {
 			"match": "\\b[a-z_][a-zA-Z_0-9]*\\b",
 			"name": "variable.other.bytec"
@@ -31,7 +40,11 @@
 		"keywords": {
 			"patterns": [{
 				"name": "keyword.control.bytec",
-				"match": "\\b(fn|pub|let|extern|if|while|for|loop|try|catch|i32|i64|str|bool)\\b"
+				"match": "\\b(if|else|while|for|loop|try|catch)\\b"
+			},
+			{
+				"name": "keyword.other.bytec",
+				"match": "\\b(fn|pub|let|extern|i32|i64|str|bool)\\b"
 			}]
 		},
 		"symbols": {
@@ -69,16 +82,19 @@
 			]
 		},
 		"extern": {
-			"name": "please.dont.highlight.bytec",
-			"begin": "extern {",
+			"begin": "(extern) {",
 			"end": "}",
 			"captures": {
-				"0": { "name": "keyword.control.bytec" }
+				"1": { "name": "keyword.other.bytec" }
 			},
 			"patterns": [
 				{
 					"name": "keyword.control.java",
-					"match": "\\b(public|static|if|while|for|loop|try|catch|int|long|boolean|byte|char|do|void|import|package|class|interface|extends|implements)\\b"
+					"match": "\\b(if|else|while|for|loop|try|catch|do|return)\\b"
+				},
+				{
+					"name": "keyword.other.java",
+					"match": "\\b(public|static|int|long|boolean|byte|char|void|import|package|class|interface|extends|implements)\\b"
 				},
 				{ "include": "#vars" },
 				{ "include": "#types" },
