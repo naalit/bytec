@@ -14,18 +14,25 @@ pub fn codegen(code: &[Item], bindings: &mut Bindings, out_class: &str) -> Strin
         let (name, ret, m) = match i {
             Item::Fn(f) => (f.id, &f.ret_ty, None),
             Item::ExternFn(f) => (f.id, &f.ret_ty, Some(f.mapping)),
+            Item::ExternClass(c) => {
+                let class = cxt.fresh_class();
+                cxt.types.push((*c, class));
+                mappings.push((class.0, cxt.bindings.type_name(*c)));
+
+                continue;
+            }
             Item::InlineJava(s) => {
                 java.push(*s);
                 continue;
             }
         };
-        let item = cxt.fresh_item();
-        cxt.items.push((name, item));
+        let item = cxt.fresh_fn();
+        cxt.fn_ids.push((name, item));
 
         let ret = ret.lower(&cxt);
-        cxt.item_ret_tys.insert(item, ret);
+        cxt.fn_ret_tys.insert(item, ret);
         if let Some(m) = m {
-            mappings.push((item, m));
+            mappings.push((item.0, m));
         }
     }
     for i in code {
@@ -39,7 +46,7 @@ pub fn codegen(code: &[Item], bindings: &mut Bindings, out_class: &str) -> Strin
         gen.names.insert(f.item.0, (f.name.clone(), !f.public));
     }
     for (i, m) in mappings {
-        gen.names.insert(i.0, (m, false));
+        gen.names.insert(i, (m, false));
     }
     // Generate functions
     let mut s = String::new();
@@ -63,7 +70,9 @@ pub fn codegen(code: &[Item], bindings: &mut Bindings, out_class: &str) -> Strin
 /// bool: whether it's public, so mangling should be skipped
 struct JVar(u64, bool);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-struct JItem(u64);
+struct JFnId(u64);
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+struct JClass(u64);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum JLit {
@@ -76,7 +85,7 @@ enum JLit {
 enum JTerm {
     Var(JVar, JTy),
     Lit(JLit),
-    Call(JItem, Vec<JTerm>, JTy),
+    Call(JFnId, Vec<JTerm>, JTy),
     BinOp(BinOp, Box<JTerm>, Box<JTerm>),
     None,
 }
@@ -98,6 +107,7 @@ enum JTy {
     Bool,
     String,
     Void,
+    Class(JClass),
 }
 impl JTy {
     fn primitive(&self) -> bool {
@@ -107,6 +117,7 @@ impl JTy {
             JTy::Bool => true,
             JTy::Void => true,
             JTy::String => false,
+            JTy::Class(_) => false,
         }
     }
 }
@@ -114,7 +125,7 @@ impl JTy {
 #[derive(Clone, Debug, PartialEq)]
 struct JFn {
     name: RawSym,
-    item: JItem,
+    item: JFnId,
     ret_ty: JTy,
     args: Vec<(RawSym, JVar, JTy)>,
     body: Vec<JStmt>,
@@ -160,7 +171,7 @@ impl<'a> Gen<'a> {
             s.to_string()
         }
     }
-    fn item_str(&self, v: JItem) -> String {
+    fn item_str(&self, v: JFnId) -> String {
         let (i, b) = self.names[&v.0];
         let s = self.bindings.resolve_raw(i);
         if b {
@@ -275,13 +286,15 @@ impl JStmt {
     }
 }
 impl JTy {
-    fn gen(&self, _cxt: &Gen) -> String {
+    fn gen(&self, cxt: &Gen) -> String {
         match self {
             JTy::I32 => "int".into(),
             JTy::I64 => "long".into(),
             JTy::Bool => "boolean".into(),
             JTy::String => "String".into(),
             JTy::Void => "void".into(),
+            // Classes are all external, so are never mangled
+            JTy::Class(c) => cxt.bindings.resolve_raw(cxt.names[&c.0].0).into(),
         }
     }
 }
@@ -332,11 +345,12 @@ impl JFn {
 #[derive(Debug)]
 struct Cxt<'a> {
     bindings: &'a mut Bindings,
-    scopes: Vec<(usize, usize)>,
+    scopes: Vec<(usize, usize, usize)>,
     vars: Vec<(Sym, JVar)>,
     tys: HashMap<JVar, JTy>,
-    items: Vec<(FnId, JItem)>,
-    item_ret_tys: HashMap<JItem, JTy>,
+    fn_ids: Vec<(FnId, JFnId)>,
+    fn_ret_tys: HashMap<JFnId, JTy>,
+    types: Vec<(TypeId, JClass)>,
     block: Vec<JStmt>,
     blocks: Vec<usize>,
     fns: Vec<JFn>,
@@ -349,8 +363,9 @@ impl<'a> Cxt<'a> {
             scopes: Vec::new(),
             vars: Vec::new(),
             tys: HashMap::new(),
-            items: Vec::new(),
-            item_ret_tys: HashMap::new(),
+            fn_ids: Vec::new(),
+            fn_ret_tys: HashMap::new(),
+            types: Vec::new(),
             block: Vec::new(),
             blocks: Vec::new(),
             fns: Vec::new(),
@@ -361,8 +376,14 @@ impl<'a> Cxt<'a> {
     fn var(&self, s: Sym) -> Option<JVar> {
         self.vars.iter().rfind(|(k, _v)| *k == s).map(|(_k, v)| *v)
     }
-    fn item(&self, s: FnId) -> Option<JItem> {
-        self.items.iter().rfind(|(k, _v)| *k == s).map(|(_k, v)| *v)
+    fn fun(&self, s: FnId) -> Option<JFnId> {
+        self.fn_ids
+            .iter()
+            .rfind(|(k, _v)| *k == s)
+            .map(|(_k, v)| *v)
+    }
+    fn class(&self, s: TypeId) -> Option<JClass> {
+        self.types.iter().rfind(|(k, _v)| *k == s).map(|(_k, v)| *v)
     }
 
     /// Implies push()
@@ -376,21 +397,27 @@ impl<'a> Cxt<'a> {
     }
 
     fn push(&mut self) {
-        self.scopes.push((self.vars.len(), self.items.len()));
+        self.scopes
+            .push((self.vars.len(), self.fn_ids.len(), self.types.len()));
     }
     fn pop(&mut self) {
-        let (v, i) = self.scopes.pop().unwrap();
+        let (v, i, t) = self.scopes.pop().unwrap();
         self.vars.truncate(v);
-        self.items.truncate(i);
+        self.fn_ids.truncate(i);
+        self.types.truncate(t);
     }
 
     fn fresh_var(&mut self, public: bool) -> JVar {
         self.next += 1;
         JVar(self.next, public)
     }
-    fn fresh_item(&mut self) -> JItem {
+    fn fresh_fn(&mut self) -> JFnId {
         self.next += 1;
-        JItem(self.next)
+        JFnId(self.next)
+    }
+    fn fresh_class(&mut self) -> JClass {
+        self.next += 1;
+        JClass(self.next)
     }
 }
 
@@ -430,11 +457,11 @@ impl Term {
                 Literal::Str(s) => JTerm::Lit(JLit::Str(*s)),
             },
             Term::Call(f, a) => {
-                let item = cxt.item(*f).unwrap();
+                let item = cxt.fun(*f).unwrap();
                 JTerm::Call(
                     item,
                     a.iter().map(|x| x.lower(cxt)).collect(),
-                    cxt.item_ret_tys.get(&item).unwrap().clone(),
+                    cxt.fn_ret_tys.get(&item).unwrap().clone(),
                 )
             }
             Term::BinOp(op, a, b) => {
@@ -541,7 +568,7 @@ impl Item {
 
                 std::mem::swap(&mut block, &mut cxt.block);
                 let ret_ty = f.ret_ty.lower(cxt);
-                let item = cxt.item(f.id).unwrap();
+                let item = cxt.fun(f.id).unwrap();
                 cxt.fns.push(JFn {
                     name: cxt.bindings.fn_name(f.id),
                     item,
@@ -552,17 +579,19 @@ impl Item {
                 });
             }
             Item::ExternFn(_) => (),
+            Item::ExternClass(_) => (),
         }
     }
 }
 impl Type {
-    fn lower(&self, _cxt: &Cxt) -> JTy {
+    fn lower(&self, cxt: &Cxt) -> JTy {
         match self {
             Type::I32 => JTy::I32,
             Type::I64 => JTy::I64,
             Type::Bool => JTy::Bool,
             Type::Str => JTy::String,
             Type::Unit => JTy::Void,
+            Type::Class(c) => JTy::Class(cxt.class(*c).unwrap()),
         }
     }
 }

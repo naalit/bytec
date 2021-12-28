@@ -4,12 +4,12 @@
 	"patterns": [
 		{ "include": "#extern" },
 		{ "include": "#keywords" },
+		{ "include": "#comments" },
 		{ "include": "#symbols" },
 		{ "include": "#types" },
 		{ "include": "#fns" },
 		{ "include": "#vars" },
 		{ "include": "#literals" },
-		{ "include": "#comments" },
 		{ "include": "#strings" }
 	],
 	"repository": {
@@ -44,7 +44,7 @@
 			},
 			{
 				"name": "keyword.other.bytec",
-				"match": "\\b(fn|pub|let|extern|i32|i64|str|bool)\\b"
+				"match": "\\b(fn|pub|let|extern|class|i32|i64|str|bool)\\b"
 			}]
 		},
 		"symbols": {
@@ -81,6 +81,29 @@
 				}
 			]
 		},
+		"java": {
+			"patterns": [
+				{
+					"begin": "{",
+					"end": "}",
+					"patterns": [{ "include": "#java" }]
+				},
+				{
+					"name": "keyword.control.java",
+					"match": "\\b(if|else|while|for|try|catch|do|return)\\b"
+				},
+				{
+					"name": "keyword.other.java",
+					"match": "\\b(public|private|protected|static|int|long|boolean|byte|char|void|float|double|import|package|class|enum|interface|extends|implements|throws)\\b"
+				},
+				{ "include": "#fns" },
+				{ "include": "#vars" },
+				{ "include": "#types" },
+				{ "include": "#comments" },
+				{ "include": "#symbols" },
+				{ "include": "#strings" }
+			]
+		},
 		"extern": {
 			"begin": "(extern) {",
 			"end": "}",
@@ -88,18 +111,7 @@
 				"1": { "name": "keyword.other.bytec" }
 			},
 			"patterns": [
-				{
-					"name": "keyword.control.java",
-					"match": "\\b(if|else|while|for|loop|try|catch|do|return)\\b"
-				},
-				{
-					"name": "keyword.other.java",
-					"match": "\\b(public|static|int|long|boolean|byte|char|void|import|package|class|interface|extends|implements)\\b"
-				},
-				{ "include": "#vars" },
-				{ "include": "#types" },
-				{ "include": "#symbols" },
-				{ "include": "#strings" }
+				{ "include": "#java" }
 			]
 		}
 	},

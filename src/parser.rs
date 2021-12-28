@@ -36,6 +36,8 @@ enum Tok<'a> {
     Else,
     // bool
     Bool,
+    // class
+    Class,
 
     // +
     Add,
@@ -117,6 +119,7 @@ impl<'a> Lexer<'a> {
             "if" => Tok::If,
             "else" => Tok::Else,
             "bool" => Tok::Bool,
+            "class" => Tok::Class,
             _ => Tok::Name(name),
         };
 
@@ -236,6 +239,12 @@ impl<'a> Iterator for Lexer<'a> {
     type Item = Result<Spanned<Tok<'a>>, Error>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.peek()? {
+            '/' if self.peekn(1) == Some('/') => {
+                self.pos += 2;
+                while self.nextc().map_or(false, |x| x != '\n') {}
+                self.next()
+            }
+
             '+' => self.single(Tok::Add),
             '-' => self.single(Tok::Sub),
             '*' => self.single(Tok::Mul),
@@ -619,6 +628,14 @@ impl<'a> Parser<'a> {
                 self.expect(Tok::CloseParen, "closing ')'")?;
                 Ok(Some(PreType::Unit))
             }
+            Some(Tok::Name(n)) => {
+                let span = self.span();
+                self.next();
+                Ok(Some(PreType::Class(Spanned::new(
+                    self.bindings.raw(*n),
+                    span,
+                ))))
+            }
             _ => Ok(None),
         }
     }
@@ -629,6 +646,13 @@ impl<'a> Parser<'a> {
             Some(Tok::ExternBlock(s)) => {
                 self.next();
                 Ok(Some(PreItem::InlineJava(self.bindings.raw(*s))))
+            }
+            Some(Tok::Class) => {
+                // `class` always means an external class, because you can't define them in bytec (for now)
+                self.next();
+                let name = self.name().ok_or(self.err("expected class name"))?;
+                self.expect(Tok::Semicolon, "expected ';'")?;
+                Ok(Some(PreItem::ExternClass(*name)))
             }
             Some(Tok::Extern | Tok::Fn) => {
                 // fn f(x: T, y: T): Z = x

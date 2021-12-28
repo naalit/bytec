@@ -99,8 +99,7 @@ impl Bindings {
         self.types[(t.0.get() - 1) as usize]
     }
 
-    pub fn add_type<'a>(&mut self, name: &str) -> TypeId {
-        let raw = self.raw(name);
+    pub fn add_type<'a>(&mut self, raw: RawSym) -> TypeId {
         self.types.push(raw);
         TypeId(NonZeroU32::new(self.types.len() as u32).unwrap())
     }

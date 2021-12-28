@@ -72,6 +72,7 @@ impl<S: Copy, T> Env<S, T> {
 struct Cxt<'b> {
     vars: Env<Sym, Type>,
     fns: Env<FnId, FnType>,
+    classes: Env<TypeId, ()>,
     bindings: &'b mut Bindings,
     extra_items: Vec<Item>,
 }
@@ -80,6 +81,7 @@ impl<'b> Cxt<'b> {
         Cxt {
             vars: Env::new(),
             fns: Env::new(),
+            classes: Env::new(),
             bindings,
             extra_items: Vec::new(),
         }
@@ -90,6 +92,9 @@ impl<'b> Cxt<'b> {
     }
     fn fun(&self, s: RawSym) -> Option<(FnId, &FnType)> {
         self.fns.get(s)
+    }
+    fn class(&self, s: RawSym) -> Option<TypeId> {
+        self.classes.get(s).map(|(x, _)| x)
     }
 
     /// Start a new scope
@@ -113,6 +118,12 @@ impl<'b> Cxt<'b> {
     fn create_fn(&mut self, k: RawSym, ty: FnType) -> FnId {
         let s = self.bindings.add_fn(k);
         self.fns.add(k, s, ty);
+        s
+    }
+
+    fn create_class(&mut self, k: RawSym) -> TypeId {
+        let s = self.bindings.add_type(k);
+        self.classes.add(k, s, ());
         s
     }
 }
@@ -158,6 +169,10 @@ impl<'b> Cxt<'b> {
             PreType::Bool => Ok(Type::Bool),
             PreType::Str => Ok(Type::Str),
             PreType::Unit => Ok(Type::Unit),
+            PreType::Class(name) => self
+                .class(**name)
+                .map(Type::Class)
+                .ok_or(TypeError::NotFound(name.span, **name)),
         }
     }
 
@@ -182,6 +197,10 @@ impl<'b> Cxt<'b> {
                 }
                 let rty = self.elab_type(&f.ret_ty)?;
                 self.create_fn(*f.name, FnType(args, rty));
+                Ok(())
+            }
+            PreItem::ExternClass(name) => {
+                self.create_class(*name);
                 Ok(())
             }
         }
@@ -244,12 +263,15 @@ impl<'b> Cxt<'b> {
                     mapping: *mapping,
                 }))
             }
+            PreItem::ExternClass(s) => Ok(Item::ExternClass(self.class(*s).unwrap())),
         }
     }
 
     fn check_stmt(&mut self, stmt: &PreStatement) -> Result<Option<Statement>, TypeError> {
         match stmt {
-            PreStatement::Item(item @ (PreItem::Fn(_) | PreItem::ExternFn(_))) => {
+            PreStatement::Item(
+                item @ (PreItem::Fn(_) | PreItem::ExternFn(_) | PreItem::ExternClass(_)),
+            ) => {
                 self.declare_item(item)?;
                 let item = self.check_item(item)?;
                 self.extra_items.push(item);

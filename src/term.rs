@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 pub use crate::binding::*;
 pub use crate::pretty::Doc;
-use crate::pretty::Prec;
+use crate::pretty::{Prec, Style};
 
 // Common types
 
@@ -83,6 +83,7 @@ pub enum Statement {
 pub enum Item {
     Fn(Fn),
     ExternFn(ExternFn),
+    ExternClass(TypeId),
     InlineJava(RawSym),
 }
 pub struct Fn {
@@ -106,6 +107,7 @@ pub enum Type {
     Bool,
     Str,
     Unit,
+    Class(TypeId),
 }
 
 // Presyntax
@@ -148,6 +150,7 @@ pub enum PreItem {
     Fn(PreFn),
     ExternFn(PreEFn),
     InlineJava(RawSym),
+    ExternClass(RawSym),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -162,13 +165,14 @@ pub enum PreStatement {
     },
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PreType {
     I32,
     I64,
     Bool,
     Str,
     Unit,
+    Class(Spanned<RawSym>),
 }
 
 // Cloning logic
@@ -275,11 +279,13 @@ impl Term {
         match self {
             Term::Var(x) => Doc::start(cxt.resolve(*x)),
             Term::Lit(l, t) => match l {
-                Literal::Int(i) => Doc::start(i).add(match t {
-                    Type::I32 => "i32",
-                    Type::I64 => "i64",
-                    _ => unreachable!(),
-                }),
+                Literal::Int(i) => Doc::start(i)
+                    .add(match t {
+                        Type::I32 => "i32",
+                        Type::I64 => "i64",
+                        _ => unreachable!(),
+                    })
+                    .style(Style::Literal),
                 Literal::Str(s) => Doc::start('"').add(cxt.resolve_raw(*s)).add('"'),
             },
             Term::Call(f, a) => Doc::start(cxt.resolve_raw(cxt.fn_name(*f)))
@@ -372,6 +378,7 @@ impl Item {
                 .add(cxt.resolve_raw(f.mapping))
                 .add('"')
                 .add(";"),
+            Item::ExternClass(c) => Doc::start(cxt.resolve_raw(cxt.type_name(*c))),
             Item::InlineJava(s) => Doc::keyword("extern")
                 .space()
                 .add('"')
@@ -412,6 +419,7 @@ impl Type {
             Type::Bool => Doc::keyword("bool"),
             Type::Str => Doc::keyword("str"),
             Type::Unit => Doc::start("()"),
+            Type::Class(c) => Doc::start(cxt.resolve_raw(cxt.type_name(*c))),
         }
     }
 }
