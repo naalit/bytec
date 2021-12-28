@@ -4,7 +4,7 @@ mod elaborate;
 mod parser;
 mod pretty;
 mod term;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::{fs::File, io::Read};
 
 use crate::parser::Parser;
@@ -59,7 +59,7 @@ fn main() {
                 .map(|p| std::fs::create_dir_all(p).unwrap());
 
             for i in &v {
-                i.pretty(&bindings).emit();
+                i.pretty(&bindings).line().emit();
             }
 
             let java = crate::backend::codegen(

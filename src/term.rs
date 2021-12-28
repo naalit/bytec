@@ -70,6 +70,7 @@ pub enum Term {
     Var(Sym),
     Lit(Literal, Type),
     Call(FnId, Vec<Term>),
+    Method(Box<Term>, FnId, Vec<Term>),
     BinOp(BinOp, Box<Term>, Box<Term>),
     Block(Vec<Statement>, Option<Box<Term>>),
     If(Box<Term>, Box<Term>, Option<Box<Term>>),
@@ -121,6 +122,8 @@ pub enum Pre {
     Lit(Literal, Option<PreType>),
     // f(a, b, c)
     Call(Spanned<RawSym>, Vec<SPre>),
+    // o.f(a, b, c)
+    Method(SPre, Spanned<RawSym>, Vec<SPre>),
     // a + b
     BinOp(BinOp, SPre, SPre),
     // { a; b; c }
@@ -150,7 +153,7 @@ pub enum PreItem {
     Fn(PreFn),
     ExternFn(PreEFn),
     InlineJava(RawSym),
-    ExternClass(RawSym),
+    ExternClass(RawSym, Vec<PreEFn>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -232,6 +235,11 @@ impl Term {
             Term::Var(s) => Term::Var(cln.get(*s)),
             Term::Lit(l, t) => Term::Lit(*l, t.clone()),
             Term::Call(f, a) => Term::Call(*f, a.iter().map(|x| x.cloned_(cln)).collect()),
+            Term::Method(o, f, a) => Term::Method(
+                Box::new(o.cloned_(cln)),
+                *f,
+                a.iter().map(|x| x.cloned_(cln)).collect(),
+            ),
             Term::BinOp(_, _, _) => todo!(),
             Term::Block(v, e) => {
                 let v = v.iter().map(|x| x.cloned_(cln)).collect();
@@ -279,16 +287,25 @@ impl Term {
         match self {
             Term::Var(x) => Doc::start(cxt.resolve(*x)),
             Term::Lit(l, t) => match l {
-                Literal::Int(i) => Doc::start(i)
-                    .add(match t {
-                        Type::I32 => "i32",
-                        Type::I64 => "i64",
-                        _ => unreachable!(),
-                    })
-                    .style(Style::Literal),
+                Literal::Int(i) => Doc::start(i).add(match t {
+                    Type::I32 => "i32",
+                    Type::I64 => "i64",
+                    _ => unreachable!(),
+                }),
                 Literal::Str(s) => Doc::start('"').add(cxt.resolve_raw(*s)).add('"'),
-            },
+            }
+            .style(Style::Literal),
             Term::Call(f, a) => Doc::start(cxt.resolve_raw(cxt.fn_name(*f)))
+                .add("(")
+                .chain(Doc::intersperse(
+                    a.iter().map(|x| x.pretty(cxt)),
+                    Doc::start(",").space(),
+                ))
+                .add(")"),
+            Term::Method(o, f, a) => o
+                .pretty(cxt)
+                .add('.')
+                .add(cxt.resolve_raw(cxt.fn_name(*f)))
                 .add("(")
                 .chain(Doc::intersperse(
                     a.iter().map(|x| x.pretty(cxt)),
@@ -374,9 +391,12 @@ impl Item {
                 .space()
                 .add("=")
                 .space()
-                .add('"')
-                .add(cxt.resolve_raw(f.mapping))
-                .add('"')
+                .chain(
+                    Doc::start('"')
+                        .add(cxt.resolve_raw(f.mapping))
+                        .add('"')
+                        .style(Style::Literal),
+                )
                 .add(";"),
             Item::ExternClass(c) => Doc::start(cxt.resolve_raw(cxt.type_name(*c))),
             Item::InlineJava(s) => Doc::keyword("extern")

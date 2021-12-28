@@ -69,10 +69,14 @@ impl<S: Copy, T> Env<S, T> {
     }
 }
 
+struct ClassInfo {
+    methods: Vec<(RawSym, FnId, FnType)>,
+}
+
 struct Cxt<'b> {
     vars: Env<Sym, Type>,
     fns: Env<FnId, FnType>,
-    classes: Env<TypeId, ()>,
+    classes: Env<TypeId, ClassInfo>,
     bindings: &'b mut Bindings,
     extra_items: Vec<Item>,
 }
@@ -95,6 +99,15 @@ impl<'b> Cxt<'b> {
     }
     fn class(&self, s: RawSym) -> Option<TypeId> {
         self.classes.get(s).map(|(x, _)| x)
+    }
+    fn class_info(&self, class: TypeId) -> &ClassInfo {
+        &self
+            .classes
+            .symbols
+            .iter()
+            .find(|(_, x, _)| *x == class)
+            .unwrap()
+            .2
     }
 
     /// Start a new scope
@@ -121,9 +134,9 @@ impl<'b> Cxt<'b> {
         s
     }
 
-    fn create_class(&mut self, k: RawSym) -> TypeId {
+    fn create_class(&mut self, k: RawSym, info: ClassInfo) -> TypeId {
         let s = self.bindings.add_type(k);
-        self.classes.add(k, s, ());
+        self.classes.add(k, s, info);
         s
     }
 }
@@ -133,6 +146,7 @@ enum TypeError {
     /// Unify(span, found, expected)
     Unify(Span, Type, Type),
     WrongArity(Span, usize, usize),
+    NoMethods(Span, Type),
 }
 impl TypeError {
     fn to_error(self, bindings: &Bindings) -> Error {
@@ -155,6 +169,12 @@ impl TypeError {
                     .add(" but found ")
                     .add(ia)
                     .add(if ia == 1 { " argument" } else { " arguments" }),
+                span,
+            ),
+            TypeError::NoMethods(span, ty) => Spanned::new(
+                Doc::start("Value of type ")
+                    .chain(ty.pretty(bindings))
+                    .add(" doesn't have methods"),
                 span,
             ),
         }
@@ -199,8 +219,34 @@ impl<'b> Cxt<'b> {
                 self.create_fn(*f.name, FnType(args, rty));
                 Ok(())
             }
-            PreItem::ExternClass(name) => {
-                self.create_class(*name);
+            PreItem::ExternClass(name, methods) => {
+                let methods = methods
+                    .iter()
+                    .map(|f| {
+                        let mut args = Vec::new();
+                        let mut args2 = Vec::new();
+                        for (s, t, _) in &f.args {
+                            let t = self.elab_type(t)?;
+                            args.push(t.clone());
+                            args2.push((self.bindings.create(*s, true), t));
+                        }
+                        let rty = self.elab_type(&f.ret_ty)?;
+                        let ty = FnType(args, rty.clone());
+                        let id = self.bindings.add_fn(*f.name);
+                        // Make sure the mapping gets through to the backend.
+                        // This technically has the wrong type since it doesn't include the object,
+                        // but it doesn't matter because the function is only accessible as a method.
+                        self.extra_items.push(Item::ExternFn(ExternFn {
+                            id,
+                            ret_ty: rty,
+                            args: args2,
+                            mapping: f.mapping,
+                        }));
+
+                        Ok((*f.name, id, ty))
+                    })
+                    .collect::<Result<_, _>>()?;
+                self.create_class(*name, ClassInfo { methods });
                 Ok(())
             }
         }
@@ -263,14 +309,14 @@ impl<'b> Cxt<'b> {
                     mapping: *mapping,
                 }))
             }
-            PreItem::ExternClass(s) => Ok(Item::ExternClass(self.class(*s).unwrap())),
+            PreItem::ExternClass(s, _) => Ok(Item::ExternClass(self.class(*s).unwrap())),
         }
     }
 
     fn check_stmt(&mut self, stmt: &PreStatement) -> Result<Option<Statement>, TypeError> {
         match stmt {
             PreStatement::Item(
-                item @ (PreItem::Fn(_) | PreItem::ExternFn(_) | PreItem::ExternClass(_)),
+                item @ (PreItem::Fn(_) | PreItem::ExternFn(_) | PreItem::ExternClass(_, _)),
             ) => {
                 self.declare_item(item)?;
                 let item = self.check_item(item)?;
@@ -328,6 +374,28 @@ impl<'b> Cxt<'b> {
                     a2.push(self.check(a, t)?);
                 }
                 Ok((Term::Call(fid, a2), rty))
+            }
+            Pre::Method(o_, f, a) => {
+                let (o, t) = self.infer(o_)?;
+                let methods = match t {
+                    Type::Class(c) => &self.class_info(c).methods,
+                    t => return Err(TypeError::NoMethods(o_.span, t)),
+                };
+                let (_, fid, FnType(atys, rty)) = methods
+                    .iter()
+                    .find(|(s, _, _)| *s == **f)
+                    .ok_or(TypeError::NotFound(f.span, f.inner))?;
+                let fid = *fid;
+
+                let rty = rty.clone();
+                if a.len() != atys.len() {
+                    return Err(TypeError::WrongArity(pre.span, a.len(), atys.len()));
+                }
+                let mut a2 = Vec::new();
+                for (a, t) in a.iter().zip(atys.clone()) {
+                    a2.push(self.check(a, t)?);
+                }
+                Ok((Term::Method(Box::new(o), fid, a2), rty))
             }
             Pre::BinOp(op, a, b) => {
                 let (a, bt, rt) = match op.ty() {

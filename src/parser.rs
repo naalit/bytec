@@ -76,6 +76,8 @@ enum Tok<'a> {
     Semicolon,
     // ,
     Comma,
+    // .
+    Dot,
 }
 struct Lexer<'a> {
     input: &'a str,
@@ -265,6 +267,7 @@ impl<'a> Iterator for Lexer<'a> {
             ';' => self.single(Tok::Semicolon),
             '=' => self.single(Tok::Equals),
             ',' => self.single(Tok::Comma),
+            '.' => self.single(Tok::Dot),
 
             '"' => {
                 let start = self.pos;
@@ -449,7 +452,7 @@ impl<'a> Parser<'a> {
     }
 
     fn factor(&mut self) -> Result<Option<SPre>, Error> {
-        let mut t = match self.atom()? {
+        let mut t = match self.method()? {
             Some(t) => t,
             None => return Ok(None),
         };
@@ -463,12 +466,50 @@ impl<'a> Parser<'a> {
 
             self.next();
 
-            let rhs = self.atom()?.ok_or(self.err("expected expression"))?;
+            let rhs = self.method()?.ok_or(self.err("expected expression"))?;
             let span = Span(t.span.0, rhs.span.1);
             t = Box::new(Spanned::new(Pre::BinOp(op, t, rhs), span));
         }
 
         Ok(Some(t))
+    }
+
+    fn method(&mut self) -> Result<Option<SPre>, Error> {
+        let mut t = match self.atom()? {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        while self.peek().as_deref() == Some(&Tok::Dot) {
+            self.next();
+            let name = self.name().ok_or(self.err("expected method name"))?;
+            let args = self.call_args()?;
+            let span = Span(t.span.0, self.lexer.pos);
+            t = Box::new(Spanned::new(Pre::Method(t, name, args), span));
+        }
+
+        Ok(Some(t))
+    }
+
+    fn call_args(&mut self) -> Result<Vec<SPre>, Error> {
+        self.expect(Tok::OpenParen, "'('")?;
+        let mut args = Vec::new();
+        while self.peek().as_deref() != Some(&Tok::CloseParen) {
+            let x = self.term()?.ok_or(self.err("expected function argument"))?;
+            args.push(x);
+            match self.peek().as_deref() {
+                Some(Tok::Comma) => {
+                    self.next();
+                }
+                Some(Tok::CloseParen) => (),
+                _ => return Err(self.err("expected ',' or ')'")),
+            }
+        }
+        match self.next().as_deref() {
+            Some(Tok::CloseParen) => Ok(args),
+            None => return Err(self.err("unclosed argument list, expected ')'")),
+            _ => unreachable!(),
+        }
     }
 
     fn atom(&mut self) -> Result<Option<SPre>, Error> {
@@ -515,36 +556,17 @@ impl<'a> Parser<'a> {
                     Span(start, self.lexer.pos),
                 ))))
             }
-            // variable or function call
+            // variable or function or method call
             Some(Tok::Name(_)) => {
                 let name = self.name().unwrap();
                 let var = Box::new(Spanned::new(Pre::Var(name.inner), name.span));
                 match self.peek().as_deref() {
                     Some(Tok::OpenParen) => {
-                        self.next();
-                        let mut args = Vec::new();
-                        while self.peek().as_deref() != Some(&Tok::CloseParen) {
-                            let x = self.term()?.ok_or(self.err("expected function argument"))?;
-                            args.push(x);
-                            match self.peek().as_deref() {
-                                Some(Tok::Comma) => {
-                                    self.next();
-                                }
-                                Some(Tok::CloseParen) => (),
-                                _ => return Err(self.err("expected ',' or ')'")),
-                            }
-                        }
-                        match self.next() {
-                            Some(Spanned {
-                                inner: Tok::CloseParen,
-                                span,
-                            }) => Ok(Some(Box::new(Spanned::new(
-                                Pre::Call(name, args),
-                                Span(var.span.0, span.1),
-                            )))),
-                            None => return Err(self.err("unclosed argument list, expected ')'")),
-                            _ => unreachable!(),
-                        }
+                        let args = self.call_args()?;
+                        Ok(Some(Box::new(Spanned::new(
+                            Pre::Call(name, args),
+                            Span(var.span.0, self.lexer.pos),
+                        ))))
                     }
                     _ => Ok(Some(var)),
                 }
@@ -640,6 +662,47 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses the part of a function after the `fn` but before the `=` or `{`
+    /// For example, `add(pub x: i32, y: i32): i32`
+    fn prototype(
+        &mut self,
+    ) -> Result<(Spanned<RawSym>, Vec<(RawSym, PreType, bool)>, PreType), Error> {
+        let name = self.name().ok_or(self.err("expected function name"))?;
+        self.expect(Tok::OpenParen, "'('")?;
+        let mut args = Vec::new();
+        while self.peek().as_deref() != Some(&Tok::CloseParen) {
+            let public = if self.peek().as_deref() == Some(&Tok::Pub) {
+                self.next();
+                true
+            } else {
+                false
+            };
+
+            let n = self
+                .name()
+                .ok_or(self.err("expected argument name or ')'"))?;
+            self.expect(Tok::Colon, "':'")?;
+
+            let t = self.ty()?.ok_or(self.err("expected argument type"))?;
+            args.push((n.inner, t, public));
+            match self.peek().as_deref() {
+                Some(Tok::Comma) => {
+                    self.next();
+                }
+                Some(Tok::CloseParen) => (),
+                _ => return Err(self.err("expected ',' or ')'")),
+            }
+        }
+        self.expect(Tok::CloseParen, "closing ')'")?;
+        let ret_type = if let Some(&Tok::Colon) = self.peek().as_deref() {
+            self.next();
+            self.ty()?.ok_or(self.err("expected return type"))?
+        } else {
+            PreType::Unit
+        };
+        Ok((name, args, ret_type))
+    }
+
     fn item(&mut self) -> Result<Option<PreItem>, Error> {
         match self.peek().as_deref() {
             None => Ok(None),
@@ -651,8 +714,45 @@ impl<'a> Parser<'a> {
                 // `class` always means an external class, because you can't define them in bytec (for now)
                 self.next();
                 let name = self.name().ok_or(self.err("expected class name"))?;
-                self.expect(Tok::Semicolon, "expected ';'")?;
-                Ok(Some(PreItem::ExternClass(*name)))
+                match self.next().as_deref() {
+                    Some(Tok::Semicolon) => Ok(Some(PreItem::ExternClass(*name, Vec::new()))),
+                    Some(Tok::OpenBrace) => {
+                        let mut methods = Vec::new();
+
+                        while *self.peek().ok_or(self.err("expected closing '}'"))?
+                            != Tok::CloseBrace
+                        {
+                            self.expect(Tok::Fn, "'fn' or closing '}'")?;
+                            let (name, args, ret_ty) = self.prototype()?;
+                            let mapping = if *self.peek().ok_or(self.err("expected closing '}'"))?
+                                == Tok::Equals
+                            {
+                                self.next();
+                                if let Some(Tok::LitS(s)) = self.next().as_deref() {
+                                    self.bindings.raw(s)
+                                } else {
+                                    return Err(
+                                        self.err("expected Java method name as string literal")
+                                    );
+                                }
+                            } else {
+                                *name
+                            };
+                            self.expect(Tok::Semicolon, "';'")?;
+                            let f = PreEFn {
+                                name,
+                                ret_ty,
+                                args,
+                                mapping,
+                            };
+                            methods.push(f);
+                        }
+                        self.next();
+
+                        Ok(Some(PreItem::ExternClass(*name, methods)))
+                    }
+                    _ => return Err(self.err("expected ';' or '{'")),
+                }
             }
             Some(Tok::Extern | Tok::Fn) => {
                 // fn f(x: T, y: T): Z = x
@@ -674,39 +774,7 @@ impl<'a> Parser<'a> {
                     },
                     _ => unreachable!(),
                 };
-                let name = self.name().ok_or(self.err("expected function name"))?;
-                self.expect(Tok::OpenParen, "'('")?;
-                let mut args = Vec::new();
-                while self.peek().as_deref() != Some(&Tok::CloseParen) {
-                    let public = if self.peek().as_deref() == Some(&Tok::Pub) {
-                        self.next();
-                        true
-                    } else {
-                        false
-                    };
-
-                    let n = self
-                        .name()
-                        .ok_or(self.err("expected argument name or ')'"))?;
-                    self.expect(Tok::Colon, "':'")?;
-
-                    let t = self.ty()?.ok_or(self.err("expected argument type"))?;
-                    args.push((n.inner, t, public));
-                    match self.peek().as_deref() {
-                        Some(Tok::Comma) => {
-                            self.next();
-                        }
-                        Some(Tok::CloseParen) => (),
-                        _ => return Err(self.err("expected ',' or ')'")),
-                    }
-                }
-                self.expect(Tok::CloseParen, "closing ')'")?;
-                let ret_type = if let Some(&Tok::Colon) = self.peek().as_deref() {
-                    self.next();
-                    self.ty()?.ok_or(self.err("expected return type"))?
-                } else {
-                    PreType::Unit
-                };
+                let (name, args, ret_type) = self.prototype()?;
 
                 if ext {
                     self.expect(Tok::Equals, "'='")?;

@@ -7,18 +7,10 @@ extern {
 
 extern fn println(s: str) = "out.println";
 
-class Random;
-fn rand(pub r: Random, pub max: i32): i32 {
-    // Bytec needs to see rand returning a value of type i32
-    // But Java doesn't accept double return, so we need an if(true) so it's not unreachable
-    // In the near future, bytec will support extern expressions which fix this
-    extern {
-        if (true) {
-            return r.nextInt(max);
-        }
-    }
-    0
+class Random {
+    fn next_int(max: i32): i32 = "nextInt";
 }
+fn rand(r: Random): i32 = r.next_int(10);
 
 fn triple(pub x: i32): i32 {
     fn add(x: i32, y: i32): i32 = x + y;

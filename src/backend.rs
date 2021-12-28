@@ -86,6 +86,7 @@ enum JTerm {
     Var(JVar, JTy),
     Lit(JLit),
     Call(JFnId, Vec<JTerm>, JTy),
+    Method(Box<JTerm>, JFnId, Vec<JTerm>, JTy),
     BinOp(BinOp, Box<JTerm>, Box<JTerm>),
     None,
 }
@@ -171,7 +172,7 @@ impl<'a> Gen<'a> {
             s.to_string()
         }
     }
-    fn item_str(&self, v: JFnId) -> String {
+    fn fn_str(&self, v: JFnId) -> String {
         let (i, b) = self.names[&v.0];
         let s = self.bindings.resolve_raw(i);
         if b {
@@ -193,7 +194,25 @@ impl JTerm {
             },
             JTerm::Call(f, a, _) => {
                 let mut buf = String::new();
-                buf.push_str(&cxt.item_str(*f));
+                buf.push_str(&cxt.fn_str(*f));
+                buf.push('(');
+
+                let mut first = true;
+                for i in a {
+                    if !first {
+                        buf.push_str(", ");
+                    }
+                    first = false;
+
+                    buf.push_str(&i.gen(cxt));
+                }
+                buf.push(')');
+
+                buf
+            }
+            JTerm::Method(obj, f, a, _) => {
+                let mut buf = format!("({}).", obj.gen(cxt));
+                buf.push_str(&cxt.fn_str(*f));
                 buf.push('(');
 
                 let mut first = true;
@@ -305,7 +324,7 @@ impl JFn {
             buf,
             "public static {} {}(",
             self.ret_ty.gen(cxt),
-            cxt.item_str(self.item)
+            cxt.fn_str(self.item)
         )
         .unwrap();
         let names = cxt.names.clone();
@@ -431,6 +450,7 @@ impl JTerm {
                 JLit::Str(_) => JTy::String,
             },
             JTerm::Call(_, _, t) => t.clone(),
+            JTerm::Method(_, _, _, t) => t.clone(),
             JTerm::BinOp(op, a, _) => match op.ty() {
                 BinOpType::Comp => JTy::Bool,
                 BinOpType::Arith => a.ty(),
@@ -459,6 +479,15 @@ impl Term {
             Term::Call(f, a) => {
                 let item = cxt.fun(*f).unwrap();
                 JTerm::Call(
+                    item,
+                    a.iter().map(|x| x.lower(cxt)).collect(),
+                    cxt.fn_ret_tys.get(&item).unwrap().clone(),
+                )
+            }
+            Term::Method(o, f, a) => {
+                let item = cxt.fun(*f).unwrap();
+                JTerm::Method(
+                    Box::new(o.lower(cxt)),
                     item,
                     a.iter().map(|x| x.lower(cxt)).collect(),
                     cxt.fn_ret_tys.get(&item).unwrap().clone(),
