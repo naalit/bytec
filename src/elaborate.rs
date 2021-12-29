@@ -71,6 +71,22 @@ impl<S: Copy, T> Env<S, T> {
 
 struct ClassInfo {
     methods: Vec<(RawSym, FnId, FnType)>,
+    variants: Option<Vec<RawSym>>,
+}
+impl ClassInfo {
+    fn new_class(methods: Vec<(RawSym, FnId, FnType)>) -> Self {
+        ClassInfo {
+            methods,
+            variants: None,
+        }
+    }
+
+    fn new_enum(variants: Vec<RawSym>) -> Self {
+        ClassInfo {
+            methods: Vec::new(),
+            variants: Some(variants),
+        }
+    }
 }
 
 struct Cxt<'b> {
@@ -246,7 +262,11 @@ impl<'b> Cxt<'b> {
                         Ok((*f.name, id, ty))
                     })
                     .collect::<Result<_, _>>()?;
-                self.create_class(*name, ClassInfo { methods });
+                self.create_class(*name, ClassInfo::new_class(methods));
+                Ok(())
+            }
+            PreItem::Enum(name, variants, _ext) => {
+                self.create_class(*name, ClassInfo::new_enum(variants.clone()));
                 Ok(())
             }
         }
@@ -310,13 +330,23 @@ impl<'b> Cxt<'b> {
                 }))
             }
             PreItem::ExternClass(s, _) => Ok(Item::ExternClass(self.class(*s).unwrap())),
+            PreItem::Enum(name, variants, ext) => Ok(Item::Enum(
+                self.class(*name).unwrap(),
+                variants.clone(),
+                *ext,
+            )),
         }
     }
 
     fn check_stmt(&mut self, stmt: &PreStatement) -> Result<Option<Statement>, TypeError> {
         match stmt {
             PreStatement::Item(
-                item @ (PreItem::Fn(_) | PreItem::ExternFn(_) | PreItem::ExternClass(_, _)),
+                item
+                @
+                (PreItem::Fn(_)
+                | PreItem::ExternFn(_)
+                | PreItem::ExternClass(_, _)
+                | PreItem::Enum(_, _, _)),
             ) => {
                 self.declare_item(item)?;
                 let item = self.check_item(item)?;
@@ -362,6 +392,17 @@ impl<'b> Cxt<'b> {
                 },
                 Literal::Str(_) => Ok((Term::Lit(*l, Type::Str), Type::Str)),
             },
+            Pre::Variant(a, b) => {
+                let class = self
+                    .class(**a)
+                    .ok_or(TypeError::NotFound(a.span, a.inner))?;
+                let variants = self.class_info(class).variants.as_ref();
+                if variants.map_or(true, |v| v.iter().all(|x| *x != **b)) {
+                    return Err(TypeError::NotFound(b.span, b.inner));
+                }
+
+                Ok((Term::Variant(class, **b), Type::Class(class)))
+            }
             Pre::Call(f, a) => {
                 let (fid, FnType(atys, rty)) =
                     self.fun(**f).ok_or(TypeError::NotFound(f.span, **f))?;
@@ -444,6 +485,51 @@ impl<'b> Cxt<'b> {
                     .map(Box::new);
 
                 Ok((Term::If(Box::new(cond), Box::new(yes), no), ty))
+            }
+            Pre::Match(x, branches) => {
+                let xspan = x.span;
+                let (x, xty) = self.infer(x)?;
+
+                let variants = match &xty {
+                    Type::Class(tid) => self
+                        .class_info(*tid)
+                        .variants
+                        .as_ref()
+                        .ok_or(TypeError::NoMethods(xspan, xty))?,
+                    _ => return Err(TypeError::NoMethods(xspan, xty)),
+                };
+                let mut covered: Vec<_> = variants.iter().map(|x| (*x, false)).collect();
+
+                let mut v = Vec::new();
+                let mut rty = None;
+                for (s, t) in branches {
+                    let t = match &rty {
+                        None => {
+                            let (t, ty) = self.infer(t)?;
+                            rty = Some(ty);
+                            t
+                        }
+                        Some(rty) => self.check(t, rty.clone())?,
+                    };
+                    if let Some(s2) = **s {
+                        let (_, b) = covered
+                            .iter_mut()
+                            .find(|(x, _)| *x == s2)
+                            .ok_or(TypeError::NotFound(s.span, s2))?;
+                        if *b {
+                            // TODO warnings
+                            eprintln!(
+                                "Warning: duplicate branch for pattern '{}'",
+                                self.bindings.resolve_raw(s2)
+                            );
+                        } else {
+                            *b = true;
+                        }
+                    }
+                    v.push((**s, t));
+                }
+
+                Ok((Term::Match(Box::new(x), v), rty.unwrap()))
             }
         }
     }

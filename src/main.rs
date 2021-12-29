@@ -73,7 +73,7 @@ fn main() {
         Err(x) => {
             // An extremely simple copy of Rust's error message design
             // TODO show the whole span, show secondary message
-            let (mut line, mut col) = (0, x.span.0);
+            let (mut line, mut col) = (1, x.span.0);
             let mut line_str = None;
             for l in buf.lines() {
                 if col <= l.len() {

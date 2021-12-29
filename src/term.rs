@@ -74,6 +74,8 @@ pub enum Term {
     BinOp(BinOp, Box<Term>, Box<Term>),
     Block(Vec<Statement>, Option<Box<Term>>),
     If(Box<Term>, Box<Term>, Option<Box<Term>>),
+    Variant(TypeId, RawSym),
+    Match(Box<Term>, Vec<(Option<RawSym>, Term)>),
 }
 pub enum Statement {
     Term(Term),
@@ -86,6 +88,8 @@ pub enum Item {
     ExternFn(ExternFn),
     ExternClass(TypeId),
     InlineJava(RawSym),
+    /// If the bool is true, it's extern and shouldn't be generated
+    Enum(TypeId, Vec<RawSym>, bool),
 }
 pub struct Fn {
     pub id: FnId,
@@ -130,6 +134,10 @@ pub enum Pre {
     Block(Vec<PreStatement>, Option<SPre>),
     // if a { b } else { c }
     If(SPre, SPre, Option<SPre>),
+    // Direction::North
+    Variant(Spanned<RawSym>, Spanned<RawSym>),
+    // match x { s => t, else => u }
+    Match(SPre, Vec<(Spanned<Option<RawSym>>, SPre)>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -154,6 +162,7 @@ pub enum PreItem {
     ExternFn(PreEFn),
     InlineJava(RawSym),
     ExternClass(RawSym, Vec<PreEFn>),
+    Enum(RawSym, Vec<RawSym>, bool),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -234,6 +243,7 @@ impl Term {
         match self {
             Term::Var(s) => Term::Var(cln.get(*s)),
             Term::Lit(l, t) => Term::Lit(*l, t.clone()),
+            Term::Variant(tid, s) => Term::Variant(*tid, *s),
             Term::Call(f, a) => Term::Call(*f, a.iter().map(|x| x.cloned_(cln)).collect()),
             Term::Method(o, f, a) => Term::Method(
                 Box::new(o.cloned_(cln)),
@@ -250,6 +260,10 @@ impl Term {
                 Box::new(b.cloned_(cln)),
                 c.as_ref().map(|x| Box::new(x.cloned_(cln))),
             ),
+            Term::Match(x, branches) => {
+                let branches = branches.iter().map(|(s, t)| (*s, t.cloned_(cln))).collect();
+                Term::Match(Box::new(x.cloned_(cln)), branches)
+            }
         }
     }
 }
@@ -295,6 +309,9 @@ impl Term {
                 Literal::Str(s) => Doc::start('"').add(cxt.resolve_raw(*s)).add('"'),
             }
             .style(Style::Literal),
+            Term::Variant(tid, s) => Doc::start(cxt.resolve_raw(cxt.type_name(*tid)))
+                .add("::")
+                .add(cxt.resolve_raw(*s)),
             Term::Call(f, a) => Doc::start(cxt.resolve_raw(cxt.fn_name(*f)))
                 .add("(")
                 .chain(Doc::intersperse(
@@ -341,6 +358,28 @@ impl Term {
                         .map(|no| Doc::keyword(" else").space().chain(no.pretty(cxt)))
                         .unwrap_or(Doc::none()),
                 ),
+            Term::Match(x, branches) => Doc::keyword("match")
+                .space()
+                .chain(x.pretty(cxt))
+                .space()
+                .add('{')
+                .line()
+                .chain(Doc::intersperse(
+                    branches.iter().map(|(s, t)| {
+                        match s {
+                            Some(s) => Doc::start(cxt.resolve_raw(*s)),
+                            None => Doc::keyword("else"),
+                        }
+                        .space()
+                        .add("=>")
+                        .space()
+                        .chain(t.pretty(cxt))
+                    }),
+                    Doc::start(',').line(),
+                ))
+                .indent()
+                .line()
+                .add('}'),
         }
     }
 }
@@ -398,6 +437,25 @@ impl Item {
                         .style(Style::Literal),
                 )
                 .add(";"),
+            Item::Enum(id, variants, ext) => {
+                let mut doc = Doc::none();
+                if *ext {
+                    doc = Doc::keyword("extern").space();
+                }
+                doc.chain(Doc::keyword("enum"))
+                    .space()
+                    .add(cxt.resolve_raw(cxt.type_name(*id)))
+                    .space()
+                    .add('{')
+                    .line()
+                    .chain(Doc::intersperse(
+                        variants
+                            .iter()
+                            .map(|x| Doc::start(cxt.resolve_raw(*x)).add(',').line()),
+                        Doc::none(),
+                    ))
+                    .add('}')
+            }
             Item::ExternClass(c) => Doc::start(cxt.resolve_raw(cxt.type_name(*c))),
             Item::InlineJava(s) => Doc::keyword("extern")
                 .space()

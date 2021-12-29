@@ -40,11 +40,11 @@
 		"keywords": {
 			"patterns": [{
 				"name": "keyword.control.bytec",
-				"match": "\\b(if|else|while|for|loop|try|catch)\\b"
+				"match": "\\b(if|else|while|for|loop|try|catch|match)\\b"
 			},
 			{
 				"name": "keyword.other.bytec",
-				"match": "\\b(fn|pub|let|extern|class|i32|i64|str|bool)\\b"
+				"match": "\\b(fn|pub|let|extern|class|enum|i32|i64|str|bool)\\b"
 			}]
 		},
 		"symbols": {
@@ -90,7 +90,7 @@
 				},
 				{
 					"name": "keyword.control.java",
-					"match": "\\b(if|else|while|for|try|catch|do|return)\\b"
+					"match": "\\b(if|else|while|for|try|catch|do|return|switch|case)\\b"
 				},
 				{
 					"name": "keyword.other.java",

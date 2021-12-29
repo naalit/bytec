@@ -7,6 +7,15 @@ extern {
 
 extern fn println(s: str) = "out.println";
 
+enum Bool {
+    True,
+    False,
+}
+fn not(b: Bool): Bool = match b {
+    True => Bool::False,
+    False => Bool::True,
+};
+
 class Random {
     fn next_int(max: i32): i32 = "nextInt";
 }

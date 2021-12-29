@@ -10,14 +10,26 @@ pub fn codegen(code: &[Item], bindings: &mut Bindings, out_class: &str) -> Strin
     // Declare items
     let mut mappings = Vec::new();
     let mut java = Vec::new();
+    let mut enums = Vec::new();
     for i in code {
-        let (name, ret, m) = match i {
-            Item::Fn(f) => (f.id, &f.ret_ty, None),
-            Item::ExternFn(f) => (f.id, &f.ret_ty, Some(f.mapping)),
+        let (name, ret, m, public) = match i {
+            Item::Fn(f) => (f.id, &f.ret_ty, cxt.bindings.fn_name(f.id), f.public),
+            Item::ExternFn(f) => (f.id, &f.ret_ty, f.mapping, true),
             Item::ExternClass(c) => {
                 let class = cxt.fresh_class();
                 cxt.types.push((*c, class));
-                mappings.push((class.0, cxt.bindings.type_name(*c)));
+                mappings.push((class.0, cxt.bindings.type_name(*c), false));
+
+                continue;
+            }
+            Item::Enum(c, variants, ext) => {
+                let class = cxt.fresh_class();
+                cxt.types.push((*c, class));
+                mappings.push((class.0, cxt.bindings.type_name(*c), false));
+
+                if !ext {
+                    enums.push((class, variants));
+                }
 
                 continue;
             }
@@ -31,24 +43,19 @@ pub fn codegen(code: &[Item], bindings: &mut Bindings, out_class: &str) -> Strin
 
         let ret = ret.lower(&cxt);
         cxt.fn_ret_tys.insert(item, ret);
-        if let Some(m) = m {
-            mappings.push((item.0, m));
-        }
+        mappings.push((item.0, m, !public));
     }
     for i in code {
         i.lower(&mut cxt);
     }
 
-    let fns = cxt.fns;
+    let fns = cxt.items;
     let mut gen = Gen::new(bindings);
-    // Declare functions
-    for f in &fns {
-        gen.names.insert(f.item.0, (f.name.clone(), !f.public));
+    // Declare items
+    for (i, m, b) in mappings {
+        gen.names.insert(i, (m, b));
     }
-    for (i, m) in mappings {
-        gen.names.insert(i, (m, false));
-    }
-    // Generate functions
+    // Generate items
     let mut s = String::new();
     // Add module-level inline Java at the top
     for i in java {
@@ -88,6 +95,7 @@ enum JTerm {
     Call(JFnId, Vec<JTerm>, JTy),
     Method(Box<JTerm>, JFnId, Vec<JTerm>, JTy),
     BinOp(BinOp, Box<JTerm>, Box<JTerm>),
+    Variant(JClass, RawSym),
     None,
 }
 
@@ -97,6 +105,7 @@ enum JStmt {
     Set(JVar, JTerm),
     Term(JTerm),
     If(JTerm, Vec<JStmt>, Vec<JStmt>),
+    Switch(JTerm, Vec<(RawSym, Vec<JStmt>)>, Vec<JStmt>),
     Ret(JTerm),
     InlineJava(RawSym),
 }
@@ -131,6 +140,14 @@ struct JFn {
     args: Vec<(RawSym, JVar, JTy)>,
     body: Vec<JStmt>,
     public: bool,
+}
+
+/// This only includes the items that actually need to appear in the Java code
+/// i.e. not extern things
+#[derive(Clone, Debug, PartialEq)]
+enum JItem {
+    Fn(JFn),
+    Enum(JClass, Vec<RawSym>),
 }
 
 // CODEGEN
@@ -173,6 +190,15 @@ impl<'a> Gen<'a> {
         }
     }
     fn fn_str(&self, v: JFnId) -> String {
+        let (i, b) = self.names[&v.0];
+        let s = self.bindings.resolve_raw(i);
+        if b {
+            format!("{}${}", s, v.0)
+        } else {
+            s.to_string()
+        }
+    }
+    fn class_str(&self, v: JClass) -> String {
         let (i, b) = self.names[&v.0];
         let s = self.bindings.resolve_raw(i);
         if b {
@@ -243,6 +269,13 @@ impl JTerm {
                 write!(buf, " ({})", b.gen(cxt)).unwrap();
                 buf
             }
+            JTerm::Variant(class, variant) => {
+                format!(
+                    "{}.{}",
+                    cxt.bindings.resolve_raw(cxt.names[&class.0].0),
+                    cxt.bindings.resolve_raw(*variant)
+                )
+            }
             JTerm::None => "<None>".into(),
         }
     }
@@ -252,7 +285,7 @@ impl JStmt {
         match self {
             JStmt::Let(n, t, v, None) => {
                 cxt.names.insert(v.0, (*n, !v.1));
-                format!("{} {};", t.gen(cxt), cxt.name_str(*v))
+                format!("{} {} = {};", t.gen(cxt), cxt.name_str(*v), t.null())
             }
             JStmt::Let(n, t, v, Some(x)) => {
                 cxt.names.insert(v.0, (*n, !v.1));
@@ -300,6 +333,42 @@ impl JStmt {
 
                 s
             }
+            JStmt::Switch(x, branches, default) => {
+                let mut s = format!("switch ({}) {{", x.gen(cxt));
+                for (sym, block) in branches {
+                    // case Variant:
+                    s.push('\n');
+                    s.push_str(cxt.indent());
+                    s.push_str("case ");
+                    s.push_str(cxt.bindings.resolve_raw(*sym));
+                    s.push(':');
+
+                    cxt.push();
+                    for i in block {
+                        s.push('\n');
+                        s.push_str(cxt.indent());
+                        s.push_str(&i.gen(cxt));
+                    }
+                    cxt.pop();
+                }
+
+                s.push('\n');
+                s.push_str(cxt.indent());
+                s.push_str("default:");
+                cxt.push();
+                for i in default {
+                    s.push('\n');
+                    s.push_str(cxt.indent());
+                    s.push_str(&i.gen(cxt));
+                }
+                cxt.pop();
+
+                s.push('\n');
+                s.push_str(cxt.indent());
+                s.push('}');
+
+                s
+            }
             JStmt::InlineJava(s) => cxt.bindings.resolve_raw(*s).to_string(),
         }
     }
@@ -314,6 +383,16 @@ impl JTy {
             JTy::Void => "void".into(),
             // Classes are all external, so are never mangled
             JTy::Class(c) => cxt.bindings.resolve_raw(cxt.names[&c.0].0).into(),
+        }
+    }
+    fn null(&self) -> &'static str {
+        match self {
+            JTy::I32 => "0",
+            JTy::I64 => "0L",
+            JTy::Bool => "false",
+            JTy::String => "null",
+            JTy::Void => unreachable!(),
+            JTy::Class(_) => "null",
         }
     }
 }
@@ -358,6 +437,32 @@ impl JFn {
         buf
     }
 }
+impl JItem {
+    fn gen(&self, cxt: &mut Gen) -> String {
+        match self {
+            JItem::Fn(f) => f.gen(cxt),
+            JItem::Enum(tid, variants) => {
+                let mut buf = String::new();
+                write!(buf, "public static enum {} {{", cxt.class_str(*tid),).unwrap();
+                cxt.push();
+
+                for i in variants {
+                    buf.push('\n');
+                    buf.push_str(cxt.indent());
+                    buf.push_str(cxt.bindings.resolve_raw(*i));
+                    buf.push(',');
+                }
+
+                cxt.pop();
+                buf.push('\n');
+                buf.push_str(cxt.indent());
+                buf.push_str("}\n");
+                buf.push_str(cxt.indent());
+                buf
+            }
+        }
+    }
+}
 
 // LOWERING
 
@@ -372,7 +477,7 @@ struct Cxt<'a> {
     types: Vec<(TypeId, JClass)>,
     block: Vec<JStmt>,
     blocks: Vec<usize>,
-    fns: Vec<JFn>,
+    items: Vec<JItem>,
     next: u64,
 }
 impl<'a> Cxt<'a> {
@@ -387,7 +492,7 @@ impl<'a> Cxt<'a> {
             types: Vec::new(),
             block: Vec::new(),
             blocks: Vec::new(),
-            fns: Vec::new(),
+            items: Vec::new(),
             next: 0,
         }
     }
@@ -456,6 +561,7 @@ impl JTerm {
                 BinOpType::Arith => a.ty(),
                 BinOpType::Logic => JTy::Bool,
             },
+            JTerm::Variant(class, _) => JTy::Class(*class),
             JTerm::None => JTy::Void,
         }
     }
@@ -476,6 +582,7 @@ impl Term {
                 },
                 Literal::Str(s) => JTerm::Lit(JLit::Str(*s)),
             },
+            Term::Variant(tid, s) => JTerm::Variant(cxt.class(*tid).unwrap(), *s),
             Term::Call(f, a) => {
                 let item = cxt.fun(*f).unwrap();
                 JTerm::Call(
@@ -544,6 +651,57 @@ impl Term {
                     JTerm::None
                 }
             }
+            Term::Match(x, branches) => {
+                let x = x.lower(cxt);
+
+                let var = cxt.fresh_var(false);
+                let raw = cxt.bindings.raw("_then");
+
+                let mut v = Vec::new();
+                let mut default = None;
+                let mut rty = None;
+                let mut do_var = false;
+                for (s, t) in branches {
+                    cxt.push_block();
+                    let t = t.lower(cxt);
+                    let ty = t.ty();
+                    if rty.is_none() {
+                        do_var = ty != JTy::Void;
+                        if do_var {
+                            cxt.tys.insert(var, ty.clone());
+                        }
+                        rty = Some(ty);
+                    }
+                    if do_var {
+                        cxt.block.push(JStmt::Set(var, t));
+                    }
+                    let block = cxt.pop_block();
+
+                    match s {
+                        Some(s) => v.push((*s, block)),
+                        None => {
+                            if default.is_none() {
+                                default = Some(block);
+                            } else {
+                                eprintln!("Warning: duplicate default branches in match");
+                            }
+                        }
+                    }
+                }
+
+                if do_var {
+                    cxt.block
+                        .push(JStmt::Let(raw, rty.as_ref().cloned().unwrap(), var, None));
+                }
+                cxt.block
+                    .push(JStmt::Switch(x, v, default.unwrap_or_default()));
+
+                if do_var {
+                    JTerm::Var(var, rty.unwrap())
+                } else {
+                    JTerm::None
+                }
+            }
         }
     }
 }
@@ -598,14 +756,21 @@ impl Item {
                 std::mem::swap(&mut block, &mut cxt.block);
                 let ret_ty = f.ret_ty.lower(cxt);
                 let item = cxt.fun(f.id).unwrap();
-                cxt.fns.push(JFn {
+                cxt.items.push(JItem::Fn(JFn {
                     name: cxt.bindings.fn_name(f.id),
                     item,
                     ret_ty,
                     args,
                     body: block,
                     public: f.public,
-                });
+                }));
+            }
+            Item::Enum(tid, variants, ext) => {
+                if !ext {
+                    let class = cxt.class(*tid).unwrap();
+
+                    cxt.items.push(JItem::Enum(class, variants.clone()));
+                }
             }
             Item::ExternFn(_) => (),
             Item::ExternClass(_) => (),

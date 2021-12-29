@@ -38,6 +38,10 @@ enum Tok<'a> {
     Bool,
     // class
     Class,
+    // match
+    Match,
+    // enum
+    Enum,
 
     // +
     Add,
@@ -59,6 +63,10 @@ enum Tok<'a> {
     Geq,
     // <=
     Leq,
+    // =>
+    WideArrow,
+    // ::
+    DoubleColon,
 
     // (
     OpenParen,
@@ -122,6 +130,8 @@ impl<'a> Lexer<'a> {
             "else" => Tok::Else,
             "bool" => Tok::Bool,
             "class" => Tok::Class,
+            "match" => Tok::Match,
+            "enum" => Tok::Enum,
             _ => Tok::Name(name),
         };
 
@@ -258,6 +268,8 @@ impl<'a> Iterator for Lexer<'a> {
             '<' if self.peekn(1) == Some('=') => self.single_n(Tok::Leq, 2),
             '>' => self.single(Tok::Gt),
             '<' => self.single(Tok::Lt),
+            '=' if self.peekn(1) == Some('>') => self.single_n(Tok::WideArrow, 2),
+            ':' if self.peekn(1) == Some(':') => self.single_n(Tok::DoubleColon, 2),
 
             '(' => self.single(Tok::OpenParen),
             ')' => self.single(Tok::CloseParen),
@@ -556,6 +568,54 @@ impl<'a> Parser<'a> {
                     Span(start, self.lexer.pos),
                 ))))
             }
+            Some(Tok::Match) => {
+                let start = self.lexer.pos;
+                self.next();
+                let scrutinee = self
+                    .term()?
+                    .ok_or(self.err("expected expression to match on"))?;
+
+                self.expect(Tok::OpenBrace, "'{'")?;
+
+                let mut branches = Vec::new();
+                loop {
+                    match self.peek().as_deref() {
+                        Some(Tok::Name(_)) => {
+                            let name = self.name().unwrap();
+                            self.expect(Tok::WideArrow, "'=>'")?;
+                            let term = self.term()?.ok_or(self.err("expected expression"))?;
+                            branches.push((Spanned::new(Some(*name), name.span), term));
+                        }
+                        Some(Tok::Else) => {
+                            let espan = self.span();
+                            self.next();
+                            self.expect(Tok::WideArrow, "'=>'")?;
+                            let term = self.term()?.ok_or(self.err("expected expression"))?;
+                            branches.push((Spanned::new(None, espan), term));
+                        }
+                        Some(Tok::CloseBrace) => {
+                            self.next();
+                            break;
+                        }
+                        _ => return Err(self.err("expected match branch or '}'")),
+                    }
+                    match self.peek().as_deref() {
+                        Some(Tok::Comma) => {
+                            self.next();
+                        }
+                        Some(Tok::CloseBrace) => {
+                            self.next();
+                            break;
+                        }
+                        _ => return Err(self.err("expected ',' or '}'")),
+                    }
+                }
+
+                Ok(Some(Box::new(Spanned::new(
+                    Pre::Match(scrutinee, branches),
+                    Span(start, self.lexer.pos),
+                ))))
+            }
             // variable or function or method call
             Some(Tok::Name(_)) => {
                 let name = self.name().unwrap();
@@ -565,6 +625,14 @@ impl<'a> Parser<'a> {
                         let args = self.call_args()?;
                         Ok(Some(Box::new(Spanned::new(
                             Pre::Call(name, args),
+                            Span(var.span.0, self.lexer.pos),
+                        ))))
+                    }
+                    Some(Tok::DoubleColon) => {
+                        self.next();
+                        let m = self.name().ok_or(self.err("expected name"))?;
+                        Ok(Some(Box::new(Spanned::new(
+                            Pre::Variant(name, m),
                             Span(var.span.0, self.lexer.pos),
                         ))))
                     }
@@ -583,6 +651,7 @@ impl<'a> Parser<'a> {
                 self.next();
                 let mut block = Vec::new();
                 if self.peek().as_deref() == Some(&Tok::CloseBrace) {
+                    self.next();
                     return Ok(Some(Box::new(Spanned::new(
                         Pre::Block(Vec::new(), None),
                         Span(start, self.lexer.pos),
@@ -703,6 +772,30 @@ impl<'a> Parser<'a> {
         Ok((name, args, ret_type))
     }
 
+    /// Parses an enum declaration, starting right after the `enum` keyword
+    fn enum_dec(&mut self, ext: bool) -> Result<PreItem, Error> {
+        let name = self.name().ok_or(self.err("expected enum name"))?;
+        self.expect(Tok::OpenBrace, "'{'")?;
+
+        let mut v = Vec::new();
+        loop {
+            if let Some(name) = self.name() {
+                v.push(*name);
+                if self.peek().as_deref() == Some(&Tok::Comma) {
+                    self.next();
+                    continue;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        self.expect(Tok::CloseBrace, "closing '}'")?;
+
+        Ok(PreItem::Enum(*name, v, ext))
+    }
+
     fn item(&mut self) -> Result<Option<PreItem>, Error> {
         match self.peek().as_deref() {
             None => Ok(None),
@@ -754,7 +847,7 @@ impl<'a> Parser<'a> {
                     _ => return Err(self.err("expected ';' or '{'")),
                 }
             }
-            Some(Tok::Extern | Tok::Fn) => {
+            Some(Tok::Extern | Tok::Fn | Tok::Enum) => {
                 // fn f(x: T, y: T): Z = x
                 let (public, ext) = match &*self.next().unwrap() {
                     Tok::Fn => match self.peek().as_deref() {
@@ -764,8 +857,10 @@ impl<'a> Parser<'a> {
                         }
                         _ => (false, false),
                     },
+                    Tok::Enum => return self.enum_dec(false).map(Some),
                     Tok::Extern => match self.next().as_deref() {
                         Some(Tok::Fn) => (false, true),
+                        Some(Tok::Enum) => return self.enum_dec(true).map(Some),
                         Some(Tok::LitS(s)) => {
                             self.expect(Tok::Semicolon, "';'")?;
                             return Ok(Some(PreItem::InlineJava(self.bindings.raw(s))));
