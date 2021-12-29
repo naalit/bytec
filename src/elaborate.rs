@@ -93,6 +93,7 @@ struct Cxt<'b> {
     vars: Env<Sym, Type>,
     fns: Env<FnId, FnType>,
     classes: Env<TypeId, ClassInfo>,
+    ret_tys: Vec<Option<Type>>,
     bindings: &'b mut Bindings,
     extra_items: Vec<Item>,
 }
@@ -102,6 +103,7 @@ impl<'b> Cxt<'b> {
             vars: Env::new(),
             fns: Env::new(),
             classes: Env::new(),
+            ret_tys: Vec::new(),
             bindings,
             extra_items: Vec::new(),
         }
@@ -126,15 +128,27 @@ impl<'b> Cxt<'b> {
             .2
     }
 
+    /// Returns the return type of the innermost function
+    fn ret_ty(&self) -> Type {
+        self.ret_tys
+            .iter()
+            .rfind(|x| x.is_some())
+            .unwrap()
+            .clone()
+            .unwrap()
+    }
+
     /// Start a new scope
-    fn push(&mut self) {
+    fn push(&mut self, rty: Option<Type>) {
         self.vars.push();
         self.fns.push();
+        self.ret_tys.push(rty);
     }
     /// End the most recent scope
     fn pop(&mut self) {
         self.vars.pop();
         self.fns.pop();
+        self.ret_tys.pop();
     }
 
     /// Creates a new binding with a name
@@ -301,7 +315,7 @@ impl<'b> Cxt<'b> {
                 let (fid, fty) = self.fun(**name).unwrap();
                 let FnType(atys, rty) = fty.clone();
 
-                self.push();
+                self.push(Some(rty.clone()));
                 let mut args2 = Vec::new();
                 for ((a, _, public), t) in args.iter().zip(atys) {
                     let a = self.create(*a, t.clone(), *public);
@@ -328,7 +342,7 @@ impl<'b> Cxt<'b> {
                 let (fid, fty) = self.fun(**name).unwrap();
                 let FnType(atys, rty) = fty.clone();
 
-                self.push();
+                self.push(Some(rty.clone()));
                 let mut args2 = Vec::new();
                 for ((a, _, public), t) in args.iter().zip(atys) {
                     let a = self.create(*a, t.clone(), *public);
@@ -370,6 +384,15 @@ impl<'b> Cxt<'b> {
             }
             PreStatement::Item(PreItem::InlineJava(s)) => Ok(Some(Statement::InlineJava(*s))),
             PreStatement::Term(t) => self.infer(t).map(|(x, _)| Some(Statement::Term(x))),
+            PreStatement::While(cond, block) => {
+                let cond = self.check(cond, Type::Bool)?;
+                let mut block2 = Vec::new();
+                for i in block {
+                    self.check_stmt(i)?.map(|x| block2.push(x));
+                }
+
+                Ok(Some(Statement::While(cond, block2)))
+            }
             PreStatement::Let {
                 name,
                 ty,
@@ -385,7 +408,7 @@ impl<'b> Cxt<'b> {
                     None => self.infer(value)?,
                 };
                 let n = self.create(*name, t.clone(), *public);
-                Ok(Some(Statement::Let(n, t, Box::new(x))))
+                Ok(Some(Statement::Let(n, t, x)))
             }
         }
     }
@@ -408,6 +431,21 @@ impl<'b> Cxt<'b> {
                 Literal::Str(_) => Ok((Term::Lit(*l, Type::Str), Type::Str)),
                 Literal::Bool(_) => Ok((Term::Lit(*l, Type::Bool), Type::Bool)),
             },
+            // These default to (), but can be coerced to any type - see check()
+            Pre::Break => Ok((Term::Break, Type::Unit)),
+            Pre::Continue => Ok((Term::Continue, Type::Unit)),
+            Pre::Return(x) => {
+                let rty = self.ret_ty();
+                if x.is_none() && rty != Type::Unit {
+                    return Err(TypeError::Unify(pre.span, Type::Unit, rty));
+                }
+                let x = x
+                    .as_ref()
+                    .map(|x| self.check(x, rty))
+                    .transpose()?
+                    .map(Box::new);
+                Ok((Term::Return(x), Type::Unit))
+            }
             Pre::Variant(a, b) => {
                 let class = self
                     .class(**a)
@@ -470,7 +508,7 @@ impl<'b> Cxt<'b> {
                 Ok((Term::BinOp(*op, Box::new(a), Box::new(b)), rt))
             }
             Pre::Block(v, e) => {
-                self.push();
+                self.push(None);
 
                 let mut v2 = Vec::new();
                 for i in v {
@@ -580,7 +618,25 @@ impl<'b> Cxt<'b> {
                 let b = self.check(b, ty)?;
                 Ok(Term::BinOp(*op, Box::new(a), Box::new(b)))
             }
-            (Pre::Lit(l, None), Type::I32 | Type::I64) => Ok(Term::Lit(*l, ty)),
+            (Pre::Lit(l @ Literal::Int(_), None), Type::I32 | Type::I64) => Ok(Term::Lit(*l, ty)),
+
+            // These technically return the never type `!`, but that's too complicated for bytec
+            // Instead, they just coerce to anything they're checked against, but default to ()
+            (Pre::Break, _) => Ok(Term::Break),
+            (Pre::Continue, _) => Ok(Term::Continue),
+            (Pre::Return(x), _) => {
+                let rty = self.ret_ty();
+                if x.is_none() && rty != Type::Unit {
+                    return Err(TypeError::Unify(pre.span, Type::Unit, rty));
+                }
+                let x = x
+                    .as_ref()
+                    .map(|x| self.check(x, rty))
+                    .transpose()?
+                    .map(Box::new);
+                Ok(Term::Return(x))
+            }
+
             _ => {
                 let (term, ity) = self.infer(pre)?;
                 if ty == ity {

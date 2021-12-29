@@ -80,6 +80,8 @@ struct JVar(u64, bool);
 struct JFnId(u64);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 struct JClass(u64);
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+struct JBlock(u64);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum JLit {
@@ -106,8 +108,12 @@ enum JStmt {
     Set(JVar, JTerm),
     Term(JTerm),
     If(JTerm, Vec<JStmt>, Vec<JStmt>),
-    Switch(JTerm, Vec<(RawSym, Vec<JStmt>)>, Vec<JStmt>),
-    Ret(JTerm),
+    Switch(JBlock, JTerm, Vec<(RawSym, Vec<JStmt>)>, Vec<JStmt>),
+    While(JBlock, JTerm, Vec<JStmt>),
+    RangeFor(JBlock, RawSym, JVar, JTerm, JTerm, Vec<JStmt>),
+    Continue(JBlock),
+    Break(JBlock),
+    Ret(Option<JTerm>),
     InlineJava(RawSym),
 }
 
@@ -302,7 +308,53 @@ impl JStmt {
                 s.push(';');
                 s
             }
-            JStmt::Ret(x) => format!("return {};", x.gen(cxt)),
+            JStmt::While(k, cond, block) => {
+                let mut s = format!("b${}: while ({}) {{", k.0, cond.gen(cxt));
+                cxt.push();
+                for i in block {
+                    s.push('\n');
+                    s.push_str(cxt.indent());
+                    s.push_str(&i.gen(cxt));
+                }
+                cxt.pop();
+
+                s.push('\n');
+                s.push_str(cxt.indent());
+                s.push('}');
+
+                s
+            }
+            JStmt::RangeFor(k, n, var, a, b, block) => {
+                cxt.names.insert(var.0, (*n, !var.1));
+                let i = cxt.name_str(*var);
+                let mut s = format!(
+                    "b${}: for (int {} = {}, $end = {}; {} < $end; {}++) {{",
+                    k.0,
+                    i,
+                    a.gen(cxt),
+                    b.gen(cxt),
+                    i,
+                    i
+                );
+
+                cxt.push();
+                for i in block {
+                    s.push('\n');
+                    s.push_str(cxt.indent());
+                    s.push_str(&i.gen(cxt));
+                }
+                cxt.pop();
+
+                s.push('\n');
+                s.push_str(cxt.indent());
+                s.push('}');
+
+                s
+            }
+            JStmt::Continue(k) => format!("continue b${};", k.0),
+            JStmt::Break(k) => format!("break b${};", k.0),
+            JStmt::Ret(None) => "return;".into(),
+            JStmt::Ret(Some(x)) => format!("return {};", x.gen(cxt)),
             JStmt::If(cond, a, b) => {
                 let mut s = format!("if ({}) {{", cond.gen(cxt));
                 cxt.push();
@@ -335,8 +387,8 @@ impl JStmt {
 
                 s
             }
-            JStmt::Switch(x, branches, default) => {
-                let mut s = format!("switch ({}) {{", x.gen(cxt));
+            JStmt::Switch(k, x, branches, default) => {
+                let mut s = format!("b${}: switch ({}) {{", k.0, x.gen(cxt));
                 for (sym, block) in branches {
                     // case Variant:
                     s.push('\n');
@@ -353,7 +405,7 @@ impl JStmt {
                     }
                     s.push('\n');
                     s.push_str(cxt.indent());
-                    s.push_str("break;");
+                    write!(s, "break b${};", k.0).unwrap();
                     cxt.pop();
                 }
 
@@ -481,7 +533,7 @@ struct Cxt<'a> {
     fn_ret_tys: HashMap<JFnId, JTy>,
     types: Vec<(TypeId, JClass)>,
     block: Vec<JStmt>,
-    blocks: Vec<usize>,
+    blocks: Vec<(Option<JBlock>, usize)>,
     items: Vec<JItem>,
     next: u64,
 }
@@ -515,14 +567,21 @@ impl<'a> Cxt<'a> {
         self.types.iter().rfind(|(k, _v)| *k == s).map(|(_k, v)| *v)
     }
 
+    fn block_label(&self) -> Option<JBlock> {
+        self.blocks.iter().rev().find_map(|(x, _)| x.clone())
+    }
+    fn push_loop(&mut self, k: JBlock) {
+        self.push();
+        self.blocks.push((Some(k), self.block.len()));
+    }
     /// Implies push()
     fn push_block(&mut self) {
         self.push();
-        self.blocks.push(self.block.len());
+        self.blocks.push((None, self.block.len()));
     }
     fn pop_block(&mut self) -> Vec<JStmt> {
         self.pop();
-        self.block.split_off(self.blocks.pop().unwrap())
+        self.block.split_off(self.blocks.pop().unwrap().1)
     }
 
     fn push(&mut self) {
@@ -547,6 +606,10 @@ impl<'a> Cxt<'a> {
     fn fresh_class(&mut self) -> JClass {
         self.next += 1;
         JClass(self.next)
+    }
+    fn fresh_block(&mut self) -> JBlock {
+        self.next += 1;
+        JBlock(self.next)
     }
 }
 
@@ -589,6 +652,23 @@ impl Term {
                 Literal::Str(s) => JTerm::Lit(JLit::Str(*s)),
                 Literal::Bool(b) => JTerm::Lit(JLit::Bool(*b)),
             },
+            Term::Break => {
+                cxt.block.push(JStmt::Break(
+                    cxt.block_label().expect("'break' outside of loop"),
+                ));
+                JTerm::None
+            }
+            Term::Continue => {
+                cxt.block.push(JStmt::Continue(
+                    cxt.block_label().expect("'continue' outside of loop"),
+                ));
+                JTerm::None
+            }
+            Term::Return(x) => {
+                let x = x.as_ref().map(|x| x.lower(cxt));
+                cxt.block.push(JStmt::Ret(x));
+                JTerm::None
+            }
             Term::Variant(tid, s) => JTerm::Variant(cxt.class(*tid).unwrap(), *s),
             Term::Call(f, a) => {
                 let item = cxt.fun(*f).unwrap();
@@ -700,8 +780,9 @@ impl Term {
                     cxt.block
                         .push(JStmt::Let(raw, rty.as_ref().cloned().unwrap(), var, None));
                 }
+                let k = cxt.fresh_block();
                 cxt.block
-                    .push(JStmt::Switch(x, v, default.unwrap_or_default()));
+                    .push(JStmt::Switch(k, x, v, default.unwrap_or_default()));
 
                 if do_var {
                     JTerm::Var(var, rty.unwrap())
@@ -726,6 +807,18 @@ impl Statement {
                 let x = x.lower(cxt);
                 cxt.tys.insert(var, t.clone());
                 cxt.block.push(JStmt::Let(n.raw(), t, var, Some(x)));
+            }
+            Statement::While(cond, block) => {
+                let cond = cond.lower(cxt);
+
+                let k = cxt.fresh_block();
+                cxt.push_loop(k);
+                for i in block {
+                    i.lower(cxt);
+                }
+                let block = cxt.pop_block();
+
+                cxt.block.push(JStmt::While(k, cond, block));
             }
             Statement::InlineJava(s) => {
                 cxt.block.push(JStmt::InlineJava(*s));
@@ -756,7 +849,7 @@ impl Item {
                     (JTerm::None, _) => (),
                     // Java doesn't like using 'return' with void functions
                     (ret, Type::Unit) => cxt.block.push(JStmt::Term(ret)),
-                    (ret, _) => cxt.block.push(JStmt::Ret(ret)),
+                    (ret, _) => cxt.block.push(JStmt::Ret(Some(ret))),
                 }
                 cxt.pop();
 

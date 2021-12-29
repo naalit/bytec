@@ -40,7 +40,7 @@
 		"keywords": {
 			"patterns": [{
 				"name": "keyword.control.bytec",
-				"match": "\\b(if|else|while|for|loop|try|catch|match)\\b"
+				"match": "\\b(if|else|while|for|loop|try|catch|match|break|continue|return)\\b"
 			},
 			{
 				"name": "keyword.other.bytec",
@@ -90,7 +90,7 @@
 				},
 				{
 					"name": "keyword.control.java",
-					"match": "\\b(if|else|while|for|try|catch|do|return|switch|case)\\b"
+					"match": "\\b(if|else|while|for|try|catch|do|return|switch|case|break|continue)\\b"
 				},
 				{
 					"name": "keyword.other.java",

@@ -46,6 +46,16 @@ enum Tok<'a> {
     True,
     // false
     False,
+    // loop
+    Loop,
+    // while
+    While,
+    // break
+    Break,
+    // continue
+    Continue,
+    // return
+    Return,
 
     // +
     Add,
@@ -138,6 +148,11 @@ impl<'a> Lexer<'a> {
             "enum" => Tok::Enum,
             "true" => Tok::True,
             "false" => Tok::False,
+            "loop" => Tok::Loop,
+            "while" => Tok::While,
+            "break" => Tok::Break,
+            "continue" => Tok::Continue,
+            "return" => Tok::Return,
             _ => Tok::Name(name),
         };
 
@@ -561,6 +576,19 @@ impl<'a> Parser<'a> {
                     self.span(),
                 ))))
             }
+            Some(Tok::Break) => {
+                self.next();
+                Ok(Some(Box::new(Spanned::new(Pre::Break, self.span()))))
+            }
+            Some(Tok::Continue) => {
+                self.next();
+                Ok(Some(Box::new(Spanned::new(Pre::Continue, self.span()))))
+            }
+            Some(Tok::Return) => {
+                self.next();
+                let x = self.term()?;
+                Ok(Some(Box::new(Spanned::new(Pre::Return(x), self.span()))))
+            }
             Some(Tok::If) => {
                 let start = self.lexer.pos;
                 self.next();
@@ -944,6 +972,33 @@ impl<'a> Parser<'a> {
         match self.peek().as_deref() {
             Some(Tok::Fn | Tok::Extern | Tok::ExternBlock(_)) => {
                 Ok(self.item()?.map(PreStatement::Item))
+            }
+            Some(Tok::While | Tok::Loop) => {
+                let cond = match &*self.next().unwrap() {
+                    Tok::While => self.term()?.ok_or(self.err("expected while condition"))?,
+                    Tok::Loop => Box::new(Spanned::new(
+                        Pre::Lit(Literal::Bool(true), None),
+                        self.span(),
+                    )),
+                    _ => unreachable!(),
+                };
+
+                self.expect(Tok::OpenBrace, "'{'")?;
+                let mut block = Vec::new();
+                loop {
+                    if self.peek().as_deref() == Some(&Tok::CloseBrace) {
+                        self.next();
+                        break;
+                    }
+
+                    let stmt = self.stmt()?.ok_or(self.err("expected statement"))?;
+                    if matches!(&stmt, PreStatement::Term(x) if x.needs_semicolon()) {
+                        self.expect(Tok::Semicolon, "';' after expression statement")?;
+                    }
+                    block.push(stmt);
+                }
+
+                Ok(Some(PreStatement::While(cond, block)))
             }
             Some(Tok::Let) => {
                 self.next();

@@ -53,8 +53,22 @@ fn compare_strings(a: str, b: str): bool = a == b;
 fn is_five(i: i32): bool {
     if i == 12 {
         println("it's not five, it's twelve!");
+        return false;
     }
     i == 5
+}
+
+fn looper(r: Random) {
+    while rand(r) > 2 {
+        println("Looping!");
+    }
+    // or, equivalently
+    loop {
+        if rand(r) < 2 {
+            break;
+        }
+        println("Looping!");
+    }
 }
 
 fn pub main() = println(id("thirteen"));

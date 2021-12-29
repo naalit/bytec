@@ -156,12 +156,16 @@ pub enum Term {
     BinOp(BinOp, Box<Term>, Box<Term>),
     Block(Vec<Statement>, Option<Box<Term>>),
     If(Box<Term>, Box<Term>, Option<Box<Term>>),
+    Break,
+    Continue,
+    Return(Option<Box<Term>>),
     Variant(TypeId, RawSym),
     Match(Box<Term>, Vec<(Option<RawSym>, Term)>),
 }
 pub enum Statement {
     Term(Term),
-    Let(Sym, Type, Box<Term>),
+    Let(Sym, Type, Term),
+    While(Term, Vec<Statement>),
     InlineJava(RawSym),
 }
 
@@ -216,6 +220,12 @@ pub enum Pre {
     Block(Vec<PreStatement>, Option<SPre>),
     // if a { b } else { c }
     If(SPre, SPre, Option<SPre>),
+    // break
+    Break,
+    // continue
+    Continue,
+    // return x
+    Return(Option<SPre>),
     // Direction::North
     Variant(Spanned<RawSym>, Spanned<RawSym>),
     // match x { s => t, else => u }
@@ -251,6 +261,7 @@ pub enum PreItem {
 pub enum PreStatement {
     Item(PreItem),
     Term(SPre),
+    While(SPre, Vec<PreStatement>),
     Let {
         name: RawSym,
         ty: Option<PreType>,
@@ -277,6 +288,9 @@ impl Pre {
             | Pre::Call(_, _)
             | Pre::Method(_, _, _)
             | Pre::Variant(_, _)
+            | Pre::Break
+            | Pre::Continue
+            | Pre::Return(_)
             | Pre::BinOp(_, _, _) => true,
             // These don't need semicolons since they end in a closing brace
             Pre::Block(_, _) | Pre::If(_, _, _) | Pre::Match(_, _) => false,
@@ -361,6 +375,9 @@ impl Term {
                 let branches = branches.iter().map(|(s, t)| (*s, t.cloned_(cln))).collect();
                 Term::Match(Box::new(x.cloned_(cln)), branches)
             }
+            Term::Break => Term::Break,
+            Term::Continue => Term::Continue,
+            Term::Return(x) => Term::Return(x.as_ref().map(|x| Box::new(x.cloned_(cln)))),
         }
     }
 }
@@ -368,7 +385,10 @@ impl Statement {
     fn cloned_(&self, cln: &mut Cloner) -> Statement {
         match self {
             Statement::Term(t) => Statement::Term(t.cloned_(cln)),
-            Statement::Let(n, t, x) => Statement::Let(*n, t.clone(), Box::new(x.cloned_(cln))),
+            Statement::Let(n, t, x) => Statement::Let(*n, t.clone(), x.cloned_(cln)),
+            Statement::While(a, b) => {
+                Statement::While(a.cloned_(cln), b.iter().map(|x| x.cloned_(cln)).collect())
+            }
             Statement::InlineJava(s) => Self::InlineJava(*s),
         }
     }
@@ -478,6 +498,10 @@ impl Term {
                 .indent()
                 .line()
                 .add('}'),
+            Term::Break => Doc::keyword("break"),
+            Term::Continue => Doc::keyword("continue"),
+            Term::Return(None) => Doc::keyword("return"),
+            Term::Return(Some(x)) => Doc::keyword("return").space().chain(x.pretty(cxt)),
         }
     }
 }
@@ -584,6 +608,19 @@ impl Statement {
                 .space()
                 .chain(x.pretty(cxt))
                 .add(";"),
+            Statement::While(cond, block) => Doc::keyword("while")
+                .space()
+                .chain(cond.pretty(cxt))
+                .space()
+                .add("{")
+                .line()
+                .chain(Doc::intersperse(
+                    block.iter().map(|x| x.pretty(cxt)),
+                    Doc::none().line(),
+                ))
+                .indent()
+                .line()
+                .add("}"),
             Statement::InlineJava(s) => Doc::keyword("extern")
                 .space()
                 .chain(
