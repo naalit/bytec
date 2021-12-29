@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf, sync::RwLock};
 
 pub use crate::binding::*;
 pub use crate::pretty::Doc;
@@ -62,6 +62,88 @@ pub enum Literal {
     /// Java doesn't have unsigned integers, which makes int literals convenient
     Int(i64),
     Str(RawSym),
+    Bool(bool),
+}
+
+lazy_static::lazy_static! {
+    pub static ref INPUT_PATH: RwLock<PathBuf> = RwLock::new(PathBuf::new());
+    pub static ref INPUT_SOURCE: RwLock<String> = RwLock::new(String::new());
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+impl Severity {
+    pub fn start(self) -> Doc {
+        match self {
+            Severity::Error => Doc::start("error").style(Style::BoldRed),
+            Severity::Warning => Doc::start("warning").style(Style::BoldYellow),
+        }
+    }
+    pub fn style(self) -> Style {
+        match self {
+            Severity::Error => Style::BoldRed,
+            Severity::Warning => Style::BoldYellow,
+        }
+    }
+}
+
+impl Error {
+    pub fn emit(self, severity: Severity) {
+        // An extremely simple copy of Rust's error message design
+        // TODO show the whole span, show secondary message
+        let source = INPUT_SOURCE.read().unwrap();
+        let (mut line, mut col) = (1, self.span.0);
+        let mut line_str = None;
+        for l in source.lines() {
+            if col <= l.len() {
+                line_str = Some(l);
+                break;
+            } else {
+                line += 1;
+                col -= l.len() + 1;
+            }
+        }
+        severity
+            .start()
+            .add(": ")
+            .chain(self.inner)
+            .style(Style::Bold)
+            .hardline()
+            .chain(
+                Doc::start("    --> ")
+                    .style(Style::Special)
+                    .add(
+                        INPUT_PATH
+                            .read()
+                            .unwrap()
+                            .file_name()
+                            .unwrap()
+                            .to_str()
+                            .unwrap(),
+                    )
+                    .chain(Doc::start(":"))
+                    .add(line)
+                    .chain(Doc::start(":"))
+                    .add(col + 1),
+            )
+            .hardline()
+            .chain(Doc::start("     |").style(Style::Special))
+            .hardline()
+            .chain(
+                Doc::start(format!("{:4} |", line))
+                    .style(Style::Special)
+                    .space()
+                    .add(line_str.unwrap_or("")),
+            )
+            .hardline()
+            .chain(Doc::start("     |").style(Style::Special).space().chain(
+                Doc::start(format!("{:>width$}", "^", width = col + 1)).style(severity.style()),
+            ))
+            .emit();
+    }
 }
 
 // Syntax
@@ -187,6 +269,21 @@ pub enum PreType {
     Class(Spanned<RawSym>),
 }
 
+impl Pre {
+    pub fn needs_semicolon(&self) -> bool {
+        match self {
+            Pre::Var(_)
+            | Pre::Lit(_, _)
+            | Pre::Call(_, _)
+            | Pre::Method(_, _, _)
+            | Pre::Variant(_, _)
+            | Pre::BinOp(_, _, _) => true,
+            // These don't need semicolons since they end in a closing brace
+            Pre::Block(_, _) | Pre::If(_, _, _) | Pre::Match(_, _) => false,
+        }
+    }
+}
+
 // Cloning logic
 
 struct Cloner<'a> {
@@ -307,6 +404,7 @@ impl Term {
                     _ => unreachable!(),
                 }),
                 Literal::Str(s) => Doc::start('"').add(cxt.resolve_raw(*s)).add('"'),
+                Literal::Bool(t) => Doc::start(t),
             }
             .style(Style::Literal),
             Term::Variant(tid, s) => Doc::start(cxt.resolve_raw(cxt.type_name(*tid)))
@@ -451,18 +549,23 @@ impl Item {
                     .chain(Doc::intersperse(
                         variants
                             .iter()
-                            .map(|x| Doc::start(cxt.resolve_raw(*x)).add(',').line()),
-                        Doc::none(),
+                            .map(|x| Doc::start(cxt.resolve_raw(*x)).add(',')),
+                        Doc::none().line(),
                     ))
+                    .indent()
+                    .line()
                     .add('}')
             }
             Item::ExternClass(c) => Doc::start(cxt.resolve_raw(cxt.type_name(*c))),
             Item::InlineJava(s) => Doc::keyword("extern")
                 .space()
-                .add('"')
-                .add(cxt.resolve_raw(*s))
-                .add('"')
-                .add(";"),
+                .chain(
+                    Doc::start('"')
+                        .add(cxt.resolve_raw(*s))
+                        .add('"')
+                        .style(Style::Literal),
+                )
+                .add(';'),
         }
     }
 }
@@ -483,9 +586,13 @@ impl Statement {
                 .add(";"),
             Statement::InlineJava(s) => Doc::keyword("extern")
                 .space()
-                .add('{')
-                .add(cxt.resolve_raw(*s))
-                .add('}'),
+                .chain(
+                    Doc::start('"')
+                        .add(cxt.resolve_raw(*s))
+                        .add('"')
+                        .style(Style::Literal),
+                )
+                .add(';'),
         }
     }
 }

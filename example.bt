@@ -15,6 +15,10 @@ fn not(b: Bool): Bool = match b {
     True => Bool::False,
     False => Bool::True,
 };
+fn to_bool(b: Bool): bool = match b {
+    True => true,
+    False => false,
+};
 
 class Random {
     fn next_int(max: i32): i32 = "nextInt";

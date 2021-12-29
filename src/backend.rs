@@ -86,6 +86,7 @@ enum JLit {
     Int(i32),
     Long(i64),
     Str(RawSym),
+    Bool(bool),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -217,6 +218,7 @@ impl JTerm {
                 JLit::Int(i) => i.to_string(),
                 JLit::Long(i) => format!("{}L", i),
                 JLit::Str(s) => format!("\"{}\"", cxt.bindings.resolve_raw(*s)),
+                JLit::Bool(b) => b.to_string(),
             },
             JTerm::Call(f, a, _) => {
                 let mut buf = String::new();
@@ -553,6 +555,7 @@ impl JTerm {
                 JLit::Int(_) => JTy::I32,
                 JLit::Long(_) => JTy::I64,
                 JLit::Str(_) => JTy::String,
+                JLit::Bool(_) => JTy::Bool,
             },
             JTerm::Call(_, _, t) => t.clone(),
             JTerm::Method(_, _, _, t) => t.clone(),
@@ -581,6 +584,7 @@ impl Term {
                     _ => unreachable!(),
                 },
                 Literal::Str(s) => JTerm::Lit(JLit::Str(*s)),
+                Literal::Bool(b) => JTerm::Lit(JLit::Bool(*b)),
             },
             Term::Variant(tid, s) => JTerm::Variant(cxt.class(*tid).unwrap(), *s),
             Term::Call(f, a) => {
@@ -683,7 +687,7 @@ impl Term {
                             if default.is_none() {
                                 default = Some(block);
                             } else {
-                                eprintln!("Warning: duplicate default branches in match");
+                                unreachable!()
                             }
                         }
                     }

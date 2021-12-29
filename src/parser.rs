@@ -42,6 +42,10 @@ enum Tok<'a> {
     Match,
     // enum
     Enum,
+    // true
+    True,
+    // false
+    False,
 
     // +
     Add,
@@ -132,6 +136,8 @@ impl<'a> Lexer<'a> {
             "class" => Tok::Class,
             "match" => Tok::Match,
             "enum" => Tok::Enum,
+            "true" => Tok::True,
+            "false" => Tok::False,
             _ => Tok::Name(name),
         };
 
@@ -541,6 +547,20 @@ impl<'a> Parser<'a> {
                     q.span,
                 ))))
             }
+            Some(Tok::True) => {
+                self.next();
+                Ok(Some(Box::new(Spanned::new(
+                    Pre::Lit(Literal::Bool(true), None),
+                    self.span(),
+                ))))
+            }
+            Some(Tok::False) => {
+                self.next();
+                Ok(Some(Box::new(Spanned::new(
+                    Pre::Lit(Literal::Bool(false), None),
+                    self.span(),
+                ))))
+            }
             Some(Tok::If) => {
                 let start = self.lexer.pos;
                 self.next();
@@ -579,26 +599,30 @@ impl<'a> Parser<'a> {
 
                 let mut branches = Vec::new();
                 loop {
-                    match self.peek().as_deref() {
+                    let needs_semicolon = match self.peek().as_deref() {
                         Some(Tok::Name(_)) => {
                             let name = self.name().unwrap();
                             self.expect(Tok::WideArrow, "'=>'")?;
                             let term = self.term()?.ok_or(self.err("expected expression"))?;
+                            let n = term.needs_semicolon();
                             branches.push((Spanned::new(Some(*name), name.span), term));
+                            n
                         }
                         Some(Tok::Else) => {
                             let espan = self.span();
                             self.next();
                             self.expect(Tok::WideArrow, "'=>'")?;
                             let term = self.term()?.ok_or(self.err("expected expression"))?;
+                            let n = term.needs_semicolon();
                             branches.push((Spanned::new(None, espan), term));
+                            n
                         }
                         Some(Tok::CloseBrace) => {
                             self.next();
                             break;
                         }
                         _ => return Err(self.err("expected match branch or '}'")),
-                    }
+                    };
                     match self.peek().as_deref() {
                         Some(Tok::Comma) => {
                             self.next();
@@ -607,6 +631,7 @@ impl<'a> Parser<'a> {
                             self.next();
                             break;
                         }
+                        _ if !needs_semicolon => (),
                         _ => return Err(self.err("expected ',' or '}'")),
                     }
                 }
@@ -685,6 +710,9 @@ impl<'a> Parser<'a> {
                                 Pre::Block(block, None),
                                 Span(start, self.lexer.pos),
                             ))));
+                        }
+                        (PreStatement::Term(x), _) if x.needs_semicolon() => {
+                            return Err(self.err("expected ';' after expression statement"))
                         }
                         (x, _) => {
                             block.push(x);

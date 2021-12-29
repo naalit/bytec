@@ -163,6 +163,8 @@ enum TypeError {
     Unify(Span, Type, Type),
     WrongArity(Span, usize, usize),
     NoMethods(Span, Type),
+    NoVariants(Span, Type),
+    MissingPattern(Span, Vec<RawSym>),
 }
 impl TypeError {
     fn to_error(self, bindings: &Bindings) -> Error {
@@ -191,6 +193,19 @@ impl TypeError {
                 Doc::start("Value of type ")
                     .chain(ty.pretty(bindings))
                     .add(" doesn't have methods"),
+                span,
+            ),
+            TypeError::NoVariants(span, ty) => Spanned::new(
+                Doc::start("Value of type ")
+                    .chain(ty.pretty(bindings))
+                    .add(" doesn't have variants and can't be matched on"),
+                span,
+            ),
+            TypeError::MissingPattern(span, missing) => Spanned::new(
+                Doc::start("Inexhaustive match: missing patterns: ").chain(Doc::intersperse(
+                    missing.iter().map(|x| Doc::start(bindings.resolve_raw(*x))),
+                    Doc::start(','),
+                )),
                 span,
             ),
         }
@@ -391,6 +406,7 @@ impl<'b> Cxt<'b> {
                     None => Ok((Term::Lit(*l, Type::I32), Type::I32)),
                 },
                 Literal::Str(_) => Ok((Term::Lit(*l, Type::Str), Type::Str)),
+                Literal::Bool(_) => Ok((Term::Lit(*l, Type::Bool), Type::Bool)),
             },
             Pre::Variant(a, b) => {
                 let class = self
@@ -495,13 +511,14 @@ impl<'b> Cxt<'b> {
                         .class_info(*tid)
                         .variants
                         .as_ref()
-                        .ok_or(TypeError::NoMethods(xspan, xty))?,
-                    _ => return Err(TypeError::NoMethods(xspan, xty)),
+                        .ok_or(TypeError::NoVariants(xspan, xty))?,
+                    _ => return Err(TypeError::NoVariants(xspan, xty)),
                 };
                 let mut covered: Vec<_> = variants.iter().map(|x| (*x, false)).collect();
 
                 let mut v = Vec::new();
                 let mut rty = None;
+                let mut had_default = false;
                 for (s, t) in branches {
                     let t = match &rty {
                         None => {
@@ -517,16 +534,38 @@ impl<'b> Cxt<'b> {
                             .find(|(x, _)| *x == s2)
                             .ok_or(TypeError::NotFound(s.span, s2))?;
                         if *b {
-                            // TODO warnings
-                            eprintln!(
-                                "Warning: duplicate branch for pattern '{}'",
-                                self.bindings.resolve_raw(s2)
-                            );
+                            Spanned::new(
+                                Doc::start("Duplicate branch for pattern ")
+                                    .add(self.bindings.resolve_raw(s2)),
+                                s.span,
+                            )
+                            .emit(Severity::Warning);
                         } else {
                             *b = true;
                         }
+                    } else {
+                        if had_default {
+                            Spanned::new(Doc::start("Duplicate default branch in pattern match, this one is unreachable"),
+                                s.span,
+                            ).emit(Severity::Warning);
+                            continue;
+                        } else {
+                            had_default = true;
+                        }
                     }
                     v.push((**s, t));
+                }
+
+                if !had_default {
+                    let mut missing = Vec::new();
+                    for (s, b) in covered {
+                        if !b {
+                            missing.push(s);
+                        }
+                    }
+                    if !missing.is_empty() {
+                        return Err(TypeError::MissingPattern(xspan, missing));
+                    }
                 }
 
                 Ok((Term::Match(Box::new(x), v), rty.unwrap()))
