@@ -351,6 +351,9 @@ impl JStmt {
                         s.push_str(cxt.indent());
                         s.push_str(&i.gen(cxt));
                     }
+                    s.push('\n');
+                    s.push_str(cxt.indent());
+                    s.push_str("break;");
                     cxt.pop();
                 }
 
