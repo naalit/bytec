@@ -90,6 +90,10 @@ enum Tok<'a> {
     OpenBrace,
     // }
     CloseBrace,
+    // [
+    OpenBracket,
+    // ]
+    CloseBracket,
     // :
     Colon,
     // =
@@ -296,6 +300,8 @@ impl<'a> Iterator for Lexer<'a> {
             ')' => self.single(Tok::CloseParen),
             '{' => self.single(Tok::OpenBrace),
             '}' => self.single(Tok::CloseBrace),
+            '[' => self.single(Tok::OpenBracket),
+            ']' => self.single(Tok::CloseBracket),
             ':' => self.single(Tok::Colon),
             ';' => self.single(Tok::Semicolon),
             '=' => self.single(Tok::Equals),
@@ -513,18 +519,30 @@ impl<'a> Parser<'a> {
             None => return Ok(None),
         };
 
-        while self.peek().as_deref() == Some(&Tok::Dot) {
-            self.next();
+        loop {
+            match self.peek().as_deref() {
+                Some(Tok::Dot) => {
+                    self.next();
 
-            if let Some(Tok::LitI(i)) = self.peek().as_deref() {
-                self.next();
-                let span = Span(t.span.0, self.lexer.pos);
-                t = Box::new(Spanned::new(Pre::TupleIdx(t, *i as usize), span));
-            } else {
-                let name = self.name().ok_or(self.err("expected method name"))?;
-                let args = self.call_args()?;
-                let span = Span(t.span.0, self.lexer.pos);
-                t = Box::new(Spanned::new(Pre::Method(t, name, args), span));
+                    if let Some(Tok::LitI(i)) = self.peek().as_deref() {
+                        self.next();
+                        let span = Span(t.span.0, self.lexer.pos);
+                        t = Box::new(Spanned::new(Pre::TupleIdx(t, *i as usize), span));
+                    } else {
+                        let name = self.name().ok_or(self.err("expected method name"))?;
+                        let args = self.call_args()?;
+                        let span = Span(t.span.0, self.lexer.pos);
+                        t = Box::new(Spanned::new(Pre::Method(t, name, args), span));
+                    }
+                }
+                Some(Tok::OpenBracket) => {
+                    self.next();
+                    let idx = self.term()?.ok_or(self.err("expected expression"))?;
+                    self.expect(Tok::CloseBracket, "closing ']'")?;
+                    let span = Span(t.span.0, self.lexer.pos);
+                    t = Box::new(Spanned::new(Pre::ArrayIdx(t, idx), span));
+                }
+                _ => break,
             }
         }
 
@@ -728,6 +746,31 @@ impl<'a> Parser<'a> {
                     ))))
                 }
             }
+            Some(Tok::OpenBracket) => {
+                let start = self.lexer.pos;
+                self.next();
+
+                let mut v = Vec::new();
+                loop {
+                    if self.peek().as_deref() == Some(&Tok::CloseBracket) {
+                        self.next();
+                        break;
+                    }
+
+                    v.push(self.term()?.ok_or(self.err("expected term"))?);
+                    if self.peek().as_deref() == Some(&Tok::Comma) {
+                        self.next();
+                    } else {
+                        self.expect(Tok::CloseBracket, "closing ']'")?;
+                        break;
+                    }
+                }
+
+                Ok(Some(Box::new(Spanned::new(
+                    Pre::Array(v),
+                    Span(start, self.lexer.pos),
+                ))))
+            }
             Some(Tok::OpenBrace) => {
                 // block
                 let start = self.lexer.pos;
@@ -799,6 +842,12 @@ impl<'a> Parser<'a> {
             Some(Tok::Str) => {
                 self.next();
                 Ok(Some(PreType::Str))
+            }
+            Some(Tok::OpenBracket) => {
+                self.next();
+                let inner = self.ty()?.ok_or(self.err("expected type"))?;
+                self.expect(Tok::CloseBracket, "closing ']'")?;
+                Ok(Some(PreType::Array(Box::new(inner))))
             }
             Some(Tok::OpenParen) => {
                 self.next();

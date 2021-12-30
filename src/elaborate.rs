@@ -243,6 +243,7 @@ impl<'b> Cxt<'b> {
                 .map(|x| self.elab_type(x))
                 .collect::<Result<Vec<_>, _>>()
                 .map(Type::Tuple),
+            PreType::Array(t) => Ok(Type::Array(Box::new(self.elab_type(t)?))),
         }
     }
 
@@ -485,6 +486,37 @@ impl<'b> Cxt<'b> {
                     _ => todo!("not tuple error"),
                 };
                 Ok((Term::TupleIdx(Box::new(x), *i), t))
+            }
+            Pre::Array(v) => {
+                let mut ty = None;
+                let mut v2 = Vec::new();
+                for i in v {
+                    match ty.clone() {
+                        None => {
+                            let (i, t) = self.infer(i)?;
+                            v2.push(i);
+                            ty = Some(t);
+                        }
+                        Some(ty) => {
+                            let i = self.check(i, ty)?;
+                            v2.push(i);
+                        }
+                    }
+                }
+                // Make an empty array default to [()]
+                Ok((
+                    Term::Array(v2),
+                    Type::Array(Box::new(ty.unwrap_or(Type::Unit))),
+                ))
+            }
+            Pre::ArrayIdx(arr, idx) => {
+                let (arr, aty) = self.infer(arr)?;
+                let ty = match aty {
+                    Type::Array(t) => *t,
+                    _ => todo!("not an array error"),
+                };
+                let idx = self.check(idx, Type::I32)?;
+                Ok((Term::ArrayIdx(Box::new(arr), Box::new(idx)), ty))
             }
             Pre::Call(f, a) => {
                 let (fid, FnType(atys, rty)) =

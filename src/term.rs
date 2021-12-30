@@ -161,6 +161,8 @@ pub enum Term {
     Variant(TypeId, RawSym),
     Tuple(Vec<Term>),
     TupleIdx(Box<Term>, usize),
+    Array(Vec<Term>),
+    ArrayIdx(Box<Term>, Box<Term>),
     Match(Box<Term>, Vec<(Option<RawSym>, Term)>),
 }
 pub enum Statement {
@@ -201,6 +203,7 @@ pub enum Type {
     Unit,
     Class(TypeId),
     Tuple(Vec<Type>),
+    Array(Box<Type>),
 }
 
 // Presyntax
@@ -234,6 +237,10 @@ pub enum Pre {
     Tuple(Vec<SPre>),
     // x.0
     TupleIdx(SPre, usize),
+    // [a, b, c]
+    Array(Vec<SPre>),
+    // x[i]
+    ArrayIdx(SPre, SPre),
     // match x { s => t, else => u }
     Match(SPre, Vec<(Spanned<Option<RawSym>>, SPre)>),
 }
@@ -284,6 +291,7 @@ pub enum PreType {
     Str,
     Class(Spanned<RawSym>),
     Tuple(Vec<PreType>),
+    Array(Box<PreType>),
 }
 
 impl Pre {
@@ -299,6 +307,8 @@ impl Pre {
             | Pre::Return(_)
             | Pre::Tuple(_)
             | Pre::TupleIdx(_, _)
+            | Pre::Array(_)
+            | Pre::ArrayIdx(_, _)
             | Pre::BinOp(_, _, _) => true,
             // These don't need semicolons since they end in a closing brace
             Pre::Block(_, _) | Pre::If(_, _, _) | Pre::Match(_, _) => false,
@@ -365,6 +375,10 @@ impl Term {
             Term::Variant(tid, s) => Term::Variant(*tid, *s),
             Term::Tuple(v) => Term::Tuple(v.iter().map(|x| x.cloned_(cln)).collect()),
             Term::TupleIdx(x, i) => Term::TupleIdx(Box::new(x.cloned_(cln)), *i),
+            Term::Array(v) => Term::Array(v.iter().map(|x| x.cloned_(cln)).collect()),
+            Term::ArrayIdx(arr, i) => {
+                Term::ArrayIdx(Box::new(arr.cloned_(cln)), Box::new(i.cloned_(cln)))
+            }
             Term::Call(o, f, a) => Term::Call(
                 o.as_ref().map(|o| Box::new(o.cloned_(cln))),
                 *f,
@@ -448,6 +462,13 @@ impl Term {
                 ))
                 .add(')'),
             Term::TupleIdx(x, i) => x.pretty(cxt).add('.').add(i),
+            Term::Array(v) => Doc::start('[')
+                .chain(Doc::intersperse(
+                    v.iter().map(|x| x.pretty(cxt)),
+                    Doc::start(',').space(),
+                ))
+                .add(']'),
+            Term::ArrayIdx(arr, i) => arr.pretty(cxt).add('[').chain(i.pretty(cxt)).add(']'),
             Term::Call(None, f, a) => Doc::start(cxt.resolve_raw(cxt.fn_name(*f)))
                 .add("(")
                 .chain(Doc::intersperse(
@@ -666,6 +687,7 @@ impl Type {
                     Doc::start(",").space(),
                 ))
                 .add(')'),
+            Type::Array(t) => Doc::start('[').chain(t.pretty(cxt)).add(']'),
         }
     }
 }

@@ -786,6 +786,18 @@ impl<'a> Cxt<'a> {
 }
 
 impl JTerm {
+    /// Whether this term is simple enough to be 1 bytecode instruction.
+    /// Simple instructions can be duplicated freely.
+    fn simple(&self) -> bool {
+        match self {
+            JTerm::Var(_, _) | JTerm::Variant(_, _) | JTerm::Lit(_) => true,
+            JTerm::Call(_, _, _, _)
+            | JTerm::BinOp(_, _, _)
+            | JTerm::Index(_, _, _)
+            | JTerm::Array(_, _) => false,
+        }
+    }
+
     fn ty(&self) -> JTy {
         match self {
             JTerm::Var(_, t) => t.clone(),
@@ -849,6 +861,56 @@ impl Term {
             Term::TupleIdx(x, i) => {
                 let x = x.lower(cxt);
                 x.to_vec().swap_remove(*i)
+            }
+            Term::Array(v) => {
+                let mut v2 = Vec::new();
+                let mut len = 0;
+                for i in v {
+                    len += 1;
+                    let i = i.lower(cxt);
+
+                    // Split into tuple/struct members to put in arrays
+                    if v2.is_empty() {
+                        v2 = i.into_iter().map(|x| (x.ty(), vec![x])).collect();
+                    } else {
+                        assert_eq!(i.len(), v2.len());
+                        for ((_, arr), elem) in v2.iter_mut().zip(i) {
+                            arr.push(elem);
+                        }
+                    }
+                }
+                return JTerms::Tuple(
+                    v2.into_iter()
+                        .map(|(ty, arr)| JTerm::Array(arr, JTy::Array(Box::new(ty))))
+                        .chain(std::iter::once(JTerm::Lit(JLit::Int(len))))
+                        .collect(),
+                );
+            }
+            Term::ArrayIdx(arr, idx) => {
+                let arrs = arr.lower(cxt);
+                let mut idx = idx.lower(cxt).one();
+                // The last element in the list is the length
+                let narrs = arrs.len() - 1;
+                if narrs > 1 && !idx.simple() {
+                    // Don't recompute idx every time, store it in a local
+                    let raw = cxt.bindings.raw("$_idx");
+                    let var = cxt.fresh_var(false);
+                    cxt.block.push(JStmt::Let(raw, JTy::I32, var, Some(idx)));
+                    idx = JTerm::Var(var, JTy::I32);
+                }
+                // TODO optional bounds checking
+                return JTerms::Tuple(
+                    arrs.into_iter()
+                        .take(narrs)
+                        .map(|arr| {
+                            let ty = match arr.ty() {
+                                JTy::Array(t) => *t,
+                                _ => unreachable!(),
+                            };
+                            JTerm::Index(Box::new(arr), Box::new(idx.clone()), ty)
+                        })
+                        .collect(),
+                );
             }
             Term::Call(o, f, a) => {
                 let fn_id = cxt.fun(*f).unwrap();
@@ -1108,6 +1170,19 @@ impl Type {
             Type::Unit => return JTys::empty(),
             Type::Class(c) => JTy::Class(cxt.class(*c).unwrap()),
             Type::Tuple(v) => return JTys::Tuple(v.iter().flat_map(|x| x.lower(cxt)).collect()),
+            // Automatic struct-of-arrays
+            // This actually has basically no effect on bytecode count - in testing, it only made a one instruction difference
+            // It also includes the length at the end so that the array is dynamic
+            Type::Array(t) => {
+                return JTys::Tuple(
+                    t.lower(cxt)
+                        .into_iter()
+                        .map(Box::new)
+                        .map(JTy::Array)
+                        .chain(std::iter::once(JTy::I32))
+                        .collect(),
+                )
+            }
         })
     }
 }
