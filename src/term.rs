@@ -151,8 +151,7 @@ impl Error {
 pub enum Term {
     Var(Sym),
     Lit(Literal, Type),
-    Call(FnId, Vec<Term>),
-    Method(Box<Term>, FnId, Vec<Term>),
+    Call(Option<Box<Term>>, FnId, Vec<Term>),
     BinOp(BinOp, Box<Term>, Box<Term>),
     Block(Vec<Statement>, Option<Box<Term>>),
     If(Box<Term>, Box<Term>, Option<Box<Term>>),
@@ -355,9 +354,8 @@ impl Term {
             Term::Var(s) => Term::Var(cln.get(*s)),
             Term::Lit(l, t) => Term::Lit(*l, t.clone()),
             Term::Variant(tid, s) => Term::Variant(*tid, *s),
-            Term::Call(f, a) => Term::Call(*f, a.iter().map(|x| x.cloned_(cln)).collect()),
-            Term::Method(o, f, a) => Term::Method(
-                Box::new(o.cloned_(cln)),
+            Term::Call(o, f, a) => Term::Call(
+                o.as_ref().map(|o| Box::new(o.cloned_(cln))),
                 *f,
                 a.iter().map(|x| x.cloned_(cln)).collect(),
             ),
@@ -430,14 +428,14 @@ impl Term {
             Term::Variant(tid, s) => Doc::start(cxt.resolve_raw(cxt.type_name(*tid)))
                 .add("::")
                 .add(cxt.resolve_raw(*s)),
-            Term::Call(f, a) => Doc::start(cxt.resolve_raw(cxt.fn_name(*f)))
+            Term::Call(None, f, a) => Doc::start(cxt.resolve_raw(cxt.fn_name(*f)))
                 .add("(")
                 .chain(Doc::intersperse(
                     a.iter().map(|x| x.pretty(cxt)),
                     Doc::start(",").space(),
                 ))
                 .add(")"),
-            Term::Method(o, f, a) => o
+            Term::Call(Some(o), f, a) => o
                 .pretty(cxt)
                 .add('.')
                 .add(cxt.resolve_raw(cxt.fn_name(*f)))

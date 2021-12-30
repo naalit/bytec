@@ -468,7 +468,7 @@ impl<'b> Cxt<'b> {
                 for (a, t) in a.iter().zip(atys.clone()) {
                     a2.push(self.check(a, t)?);
                 }
-                Ok((Term::Call(fid, a2), rty))
+                Ok((Term::Call(None, fid, a2), rty))
             }
             Pre::Method(o_, f, a) => {
                 let (o, t) = self.infer(o_)?;
@@ -490,7 +490,7 @@ impl<'b> Cxt<'b> {
                 for (a, t) in a.iter().zip(atys.clone()) {
                     a2.push(self.check(a, t)?);
                 }
-                Ok((Term::Method(Box::new(o), fid, a2), rty))
+                Ok((Term::Call(Some(Box::new(o)), fid, a2), rty))
             }
             Pre::BinOp(op, a, b) => {
                 let (a, bt, rt) = match op.ty() {

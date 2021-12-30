@@ -95,11 +95,11 @@ enum JLit {
 enum JTerm {
     Var(JVar, JTy),
     Lit(JLit),
-    Call(JFnId, Vec<JTerm>, JTy),
-    Method(Box<JTerm>, JFnId, Vec<JTerm>, JTy),
+    Call(Option<Box<JTerm>>, JFnId, Vec<JTerm>, JTy),
     BinOp(BinOp, Box<JTerm>, Box<JTerm>),
     Variant(JClass, RawSym),
-    None,
+    Array(Vec<JTerm>, JTy),
+    Index(Box<JTerm>, Box<JTerm>, JTy),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -113,7 +113,13 @@ enum JStmt {
     RangeFor(JBlock, RawSym, JVar, JTerm, JTerm, Vec<JStmt>),
     Continue(JBlock),
     Break(JBlock),
-    Ret(Option<JTerm>),
+    Ret(JFnId, Vec<JTerm>),
+    MultiCall(
+        Option<Box<JTerm>>,
+        JFnId,
+        Vec<JTerm>,
+        Vec<(RawSym, JVar, JTy)>,
+    ),
     InlineJava(RawSym),
 }
 
@@ -123,8 +129,8 @@ enum JTy {
     I64,
     Bool,
     String,
-    Void,
     Class(JClass),
+    Array(Box<JTy>),
 }
 impl JTy {
     fn primitive(&self) -> bool {
@@ -132,9 +138,9 @@ impl JTy {
             JTy::I32 => true,
             JTy::I64 => true,
             JTy::Bool => true,
-            JTy::Void => true,
             JTy::String => false,
             JTy::Class(_) => false,
+            JTy::Array(_) => false,
         }
     }
 }
@@ -143,7 +149,7 @@ impl JTy {
 struct JFn {
     name: RawSym,
     item: JFnId,
-    ret_ty: JTy,
+    ret_tys: Vec<JTy>,
     args: Vec<(RawSym, JVar, JTy)>,
     body: Vec<JStmt>,
     public: bool,
@@ -155,6 +161,81 @@ struct JFn {
 enum JItem {
     Fn(JFn),
     Enum(JClass, Vec<RawSym>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum MaybeList<T> {
+    One(T),
+    Tuple(Vec<T>),
+}
+impl<T> MaybeList<T> {
+    fn one(self) -> T {
+        match self {
+            MaybeList::One(t) => t,
+            MaybeList::Tuple(mut v) => {
+                if v.len() == 1 {
+                    v.pop().unwrap()
+                } else {
+                    panic!("backend: one object required, but got {}", v.len())
+                }
+            }
+        }
+    }
+
+    fn to_vec(self) -> Vec<T> {
+        match self {
+            MaybeList::One(t) => vec![t],
+            MaybeList::Tuple(v) => v,
+        }
+    }
+
+    fn is_none(&self) -> bool {
+        matches!(self, MaybeList::Tuple(v) if v.is_empty())
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            MaybeList::One(_) => 1,
+            MaybeList::Tuple(v) => v.len(),
+        }
+    }
+
+    fn map<U>(self, mut f: impl FnMut(T) -> U) -> MaybeList<U> {
+        match self {
+            MaybeList::One(x) => MaybeList::One(f(x)),
+            MaybeList::Tuple(v) => MaybeList::Tuple(v.into_iter().map(f).collect()),
+        }
+    }
+
+    fn empty() -> Self {
+        Self::Tuple(Vec::new())
+    }
+}
+impl<T> From<MaybeList<T>> for Vec<T> {
+    fn from(j: MaybeList<T>) -> Vec<T> {
+        j.to_vec()
+    }
+}
+impl<T> IntoIterator for MaybeList<T> {
+    type Item = T;
+    type IntoIter = <Vec<T> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.to_vec().into_iter()
+    }
+}
+
+type JTerms = MaybeList<JTerm>;
+type JTys = MaybeList<JTy>;
+type JVars = MaybeList<JVar>;
+
+impl JTerms {
+    fn ty(&self) -> JTys {
+        match self {
+            MaybeList::One(t) => MaybeList::One(t.ty()),
+            MaybeList::Tuple(v) => MaybeList::Tuple(v.iter().map(|x| x.ty()).collect()),
+        }
+    }
 }
 
 // CODEGEN
@@ -226,7 +307,7 @@ impl JTerm {
                 JLit::Str(s) => format!("\"{}\"", cxt.bindings.resolve_raw(*s)),
                 JLit::Bool(b) => b.to_string(),
             },
-            JTerm::Call(f, a, _) => {
+            JTerm::Call(None, f, a, _) => {
                 let mut buf = String::new();
                 buf.push_str(&cxt.fn_str(*f));
                 buf.push('(');
@@ -244,7 +325,7 @@ impl JTerm {
 
                 buf
             }
-            JTerm::Method(obj, f, a, _) => {
+            JTerm::Call(Some(obj), f, a, _) => {
                 let mut buf = format!("({}).", obj.gen(cxt));
                 buf.push_str(&cxt.fn_str(*f));
                 buf.push('(');
@@ -284,7 +365,18 @@ impl JTerm {
                     cxt.bindings.resolve_raw(*variant)
                 )
             }
-            JTerm::None => "<None>".into(),
+            JTerm::Array(v, t) => {
+                let mut buf = format!("new {}{{ ", t.gen(cxt));
+                for i in v {
+                    buf.push_str(&i.gen(cxt));
+                    buf.push_str(", ");
+                }
+                buf.push('}');
+                buf
+            }
+            JTerm::Index(arr, i, _) => {
+                format!("{}[{}]", arr.gen(cxt), i.gen(cxt))
+            }
         }
     }
 }
@@ -302,7 +394,6 @@ impl JStmt {
             JStmt::Set(v, x) => {
                 format!("{} = {};", cxt.name_str(*v), x.gen(cxt))
             }
-            JStmt::Term(JTerm::None) => "".to_string(),
             JStmt::Term(x) => {
                 let mut s = x.gen(cxt);
                 s.push(';');
@@ -353,8 +444,22 @@ impl JStmt {
             }
             JStmt::Continue(k) => format!("continue b${};", k.0),
             JStmt::Break(k) => format!("break b${};", k.0),
-            JStmt::Ret(None) => "return;".into(),
-            JStmt::Ret(Some(x)) => format!("return {};", x.gen(cxt)),
+            JStmt::Ret(_, v) if v.is_empty() => "return;".into(),
+            JStmt::Ret(_, v) if v.len() == 1 => format!("return {};", v[0].gen(cxt)),
+            JStmt::Ret(f, v) => {
+                let mut s = String::new();
+
+                for (i, t) in v.iter().enumerate() {
+                    s.push('\n');
+                    s.push_str(cxt.indent());
+                    write!(s, "{}$_arg{}$S = {};", cxt.fn_str(*f), i, t.gen(cxt)).unwrap();
+                }
+
+                s.push('\n');
+                s.push_str(cxt.indent());
+                s.push_str("return;");
+                s
+            }
             JStmt::If(cond, a, b) => {
                 let mut s = format!("if ({}) {{", cond.gen(cxt));
                 cxt.push();
@@ -426,6 +531,45 @@ impl JStmt {
 
                 s
             }
+            JStmt::MultiCall(o, f, args, rets) => {
+                let mut buf = o
+                    .as_ref()
+                    .map(|x| {
+                        let mut s = x.gen(cxt);
+                        s.push('.');
+                        s
+                    })
+                    .unwrap_or_default();
+                buf.push_str(&cxt.fn_str(*f));
+                buf.push('(');
+
+                let mut first = true;
+                for i in args {
+                    if !first {
+                        buf.push_str(", ");
+                    }
+                    first = false;
+
+                    buf.push_str(&i.gen(cxt));
+                }
+                buf.push_str(");");
+
+                for (i, (raw, v, t)) in rets.iter().enumerate() {
+                    cxt.names.insert(v.0, (*raw, v.1));
+                    write!(
+                        buf,
+                        "\n{}{} {} = {}$_arg{}$S;",
+                        cxt.indent(),
+                        t.gen(cxt),
+                        cxt.name_str(*v),
+                        cxt.fn_str(*f),
+                        i
+                    )
+                    .unwrap();
+                }
+
+                buf
+            }
             JStmt::InlineJava(s) => cxt.bindings.resolve_raw(*s).to_string(),
         }
     }
@@ -437,9 +581,13 @@ impl JTy {
             JTy::I64 => "long".into(),
             JTy::Bool => "boolean".into(),
             JTy::String => "String".into(),
-            JTy::Void => "void".into(),
             // Classes are all external, so are never mangled
             JTy::Class(c) => cxt.bindings.resolve_raw(cxt.names[&c.0].0).into(),
+            JTy::Array(t) => {
+                let mut s = t.gen(cxt);
+                s.push_str("[]");
+                s
+            }
         }
     }
     fn null(&self) -> &'static str {
@@ -448,8 +596,8 @@ impl JTy {
             JTy::I64 => "0L",
             JTy::Bool => "false",
             JTy::String => "null",
-            JTy::Void => unreachable!(),
             JTy::Class(_) => "null",
+            JTy::Array(_) => "null",
         }
     }
 }
@@ -459,7 +607,11 @@ impl JFn {
         write!(
             buf,
             "public static {} {}(",
-            self.ret_ty.gen(cxt),
+            if self.ret_tys.len() == 1 {
+                self.ret_tys[0].gen(cxt)
+            } else {
+                "void".into()
+            },
             cxt.fn_str(self.item)
         )
         .unwrap();
@@ -527,13 +679,14 @@ impl JItem {
 struct Cxt<'a> {
     bindings: &'a mut Bindings,
     scopes: Vec<(usize, usize, usize)>,
-    vars: Vec<(Sym, JVar)>,
+    vars: Vec<(Sym, JVars)>,
     tys: HashMap<JVar, JTy>,
     fn_ids: Vec<(FnId, JFnId)>,
-    fn_ret_tys: HashMap<JFnId, JTy>,
+    fn_ret_tys: HashMap<JFnId, JTys>,
     types: Vec<(TypeId, JClass)>,
     block: Vec<JStmt>,
     blocks: Vec<(Option<JBlock>, usize)>,
+    current_fn: JFnId,
     items: Vec<JItem>,
     next: u64,
 }
@@ -549,13 +702,17 @@ impl<'a> Cxt<'a> {
             types: Vec::new(),
             block: Vec::new(),
             blocks: Vec::new(),
+            current_fn: JFnId(0),
             items: Vec::new(),
             next: 0,
         }
     }
 
-    fn var(&self, s: Sym) -> Option<JVar> {
-        self.vars.iter().rfind(|(k, _v)| *k == s).map(|(_k, v)| *v)
+    fn var(&self, s: Sym) -> Option<JVars> {
+        self.vars
+            .iter()
+            .rfind(|(k, _v)| *k == s)
+            .map(|(_k, v)| v.clone())
     }
     fn fun(&self, s: FnId) -> Option<JFnId> {
         self.fn_ids
@@ -623,25 +780,25 @@ impl JTerm {
                 JLit::Str(_) => JTy::String,
                 JLit::Bool(_) => JTy::Bool,
             },
-            JTerm::Call(_, _, t) => t.clone(),
-            JTerm::Method(_, _, _, t) => t.clone(),
+            JTerm::Call(_, _, _, t) => t.clone(),
+            JTerm::Array(_, t) => t.clone(),
+            JTerm::Index(_, _, t) => t.clone(),
             JTerm::BinOp(op, a, _) => match op.ty() {
                 BinOpType::Comp => JTy::Bool,
                 BinOpType::Arith => a.ty(),
                 BinOpType::Logic => JTy::Bool,
             },
             JTerm::Variant(class, _) => JTy::Class(*class),
-            JTerm::None => JTy::Void,
         }
     }
 }
 
 impl Term {
-    fn lower(&self, cxt: &mut Cxt) -> JTerm {
-        match self {
+    fn lower(&self, cxt: &mut Cxt) -> JTerms {
+        JTerms::One(match self {
             Term::Var(s) => {
                 let var = cxt.var(*s).unwrap();
-                JTerm::Var(var, cxt.tys.get(&var).unwrap().clone())
+                return var.map(|var| JTerm::Var(var, cxt.tys.get(&var).unwrap().clone()));
             }
             Term::Lit(l, t) => match l {
                 Literal::Int(i) => match t {
@@ -656,111 +813,143 @@ impl Term {
                 cxt.block.push(JStmt::Break(
                     cxt.block_label().expect("'break' outside of loop"),
                 ));
-                JTerm::None
+                return JTerms::empty();
             }
             Term::Continue => {
                 cxt.block.push(JStmt::Continue(
                     cxt.block_label().expect("'continue' outside of loop"),
                 ));
-                JTerm::None
+                return JTerms::empty();
             }
             Term::Return(x) => {
                 let x = x.as_ref().map(|x| x.lower(cxt));
-                cxt.block.push(JStmt::Ret(x));
-                JTerm::None
+                cxt.block.push(JStmt::Ret(
+                    cxt.current_fn,
+                    x.into_iter().flatten().collect(),
+                ));
+                return JTerms::empty();
             }
             Term::Variant(tid, s) => JTerm::Variant(cxt.class(*tid).unwrap(), *s),
-            Term::Call(f, a) => {
-                let item = cxt.fun(*f).unwrap();
-                JTerm::Call(
-                    item,
-                    a.iter().map(|x| x.lower(cxt)).collect(),
-                    cxt.fn_ret_tys.get(&item).unwrap().clone(),
-                )
+            Term::Call(o, f, a) => {
+                let fn_id = cxt.fun(*f).unwrap();
+                let o = o.as_ref().map(|x| Box::new(x.lower(cxt).one()));
+                let args = a.iter().flat_map(|x| x.lower(cxt)).collect();
+                let rtys = cxt.fn_ret_tys.get(&fn_id).unwrap().clone();
+                match rtys {
+                    MaybeList::One(rty) => JTerm::Call(o, fn_id, args, rty),
+                    MaybeList::Tuple(v) => {
+                        // MultiCall time
+                        let mut vars = Vec::new();
+                        let mut terms = Vec::new();
+                        for (i, ty) in v.into_iter().enumerate() {
+                            let var = cxt.fresh_var(false);
+                            cxt.tys.insert(var, ty.clone());
+                            let raw = cxt.bindings.raw(format!(
+                                "{}$_call_arg{}",
+                                cxt.bindings.resolve_raw(cxt.bindings.fn_name(*f)),
+                                i
+                            ));
+                            terms.push(JTerm::Var(var, ty.clone()));
+                            vars.push((raw, var, ty));
+                        }
+                        cxt.block.push(JStmt::MultiCall(o, fn_id, args, vars));
+
+                        return JTerms::Tuple(terms);
+                    }
+                }
             }
-            Term::Method(o, f, a) => {
-                let item = cxt.fun(*f).unwrap();
-                JTerm::Method(
-                    Box::new(o.lower(cxt)),
-                    item,
-                    a.iter().map(|x| x.lower(cxt)).collect(),
-                    cxt.fn_ret_tys.get(&item).unwrap().clone(),
-                )
-            }
-            Term::BinOp(op, a, b) => {
-                JTerm::BinOp(*op, Box::new(a.lower(cxt)), Box::new(b.lower(cxt)))
-            }
+            Term::BinOp(op, a, b) => JTerm::BinOp(
+                *op,
+                Box::new(a.lower(cxt).one()),
+                Box::new(b.lower(cxt).one()),
+            ),
             Term::Block(v, e) => {
                 cxt.push();
                 for i in v {
                     i.lower(cxt);
                 }
-                let r = e.as_ref().map(|x| x.lower(cxt)).unwrap_or(JTerm::None);
+                let r = e
+                    .as_ref()
+                    .map(|x| x.lower(cxt))
+                    .unwrap_or(JTerms::Tuple(Vec::new()));
                 cxt.pop();
-                r
+                return r;
             }
             Term::If(cond, a, b) => {
-                let cond = cond.lower(cxt);
+                let cond = cond.lower(cxt).one();
 
                 cxt.push_block();
                 let a = a.lower(cxt);
                 let ty = a.ty();
-                // It's important that we don't try to make a void variable, Java doesn't like that
-                let do_var = ty != JTy::Void;
 
-                let var = cxt.fresh_var(false);
-                let raw = cxt.bindings.raw("_then");
-                if do_var {
-                    cxt.tys.insert(var, ty.clone());
-                    cxt.block.push(JStmt::Set(var, a));
+                let vars: Vec<_> = ty
+                    .clone()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        (
+                            cxt.fresh_var(false),
+                            cxt.bindings.raw(format!("_then${}", i)),
+                            t,
+                        )
+                    })
+                    .collect();
+                for ((var, _, ty), a) in vars.iter().zip(a) {
+                    cxt.tys.insert(*var, ty.clone());
+                    cxt.block.push(JStmt::Set(*var, a));
                 }
                 let a = cxt.pop_block();
 
                 let b = if let Some(b) = b {
                     cxt.push_block();
                     let b = b.lower(cxt);
-                    if do_var {
-                        cxt.block.push(JStmt::Set(var, b));
+                    for ((var, _, _), b) in vars.iter().zip(b) {
+                        cxt.block.push(JStmt::Set(*var, b));
                     }
                     cxt.pop_block()
                 } else {
                     Vec::new()
                 };
 
-                if do_var {
+                let mut ret = Vec::new();
+                for (var, raw, ty) in vars {
                     cxt.block.push(JStmt::Let(raw, ty.clone(), var, None));
+                    ret.push(JTerm::Var(var, ty));
                 }
                 cxt.block.push(JStmt::If(cond, a, b));
 
-                if do_var {
-                    JTerm::Var(var, ty)
-                } else {
-                    JTerm::None
-                }
+                return JTerms::Tuple(ret);
             }
             Term::Match(x, branches) => {
-                let x = x.lower(cxt);
-
-                let var = cxt.fresh_var(false);
-                let raw = cxt.bindings.raw("_then");
+                let x = x.lower(cxt).one();
 
                 let mut v = Vec::new();
                 let mut default = None;
-                let mut rty = None;
-                let mut do_var = false;
+                let mut vars: Option<Vec<_>> = None;
                 for (s, t) in branches {
                     cxt.push_block();
                     let t = t.lower(cxt);
-                    let ty = t.ty();
-                    if rty.is_none() {
-                        do_var = ty != JTy::Void;
-                        if do_var {
-                            cxt.tys.insert(var, ty.clone());
+                    if vars.is_none() {
+                        let ty = t.ty();
+                        vars = Some(
+                            ty.clone()
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, t)| {
+                                    (
+                                        cxt.fresh_var(false),
+                                        cxt.bindings.raw(format!("_then${}", i)),
+                                        t,
+                                    )
+                                })
+                                .collect(),
+                        );
+                        for (var, _, ty) in vars.as_ref().unwrap() {
+                            cxt.tys.insert(*var, ty.clone());
                         }
-                        rty = Some(ty);
                     }
-                    if do_var {
-                        cxt.block.push(JStmt::Set(var, t));
+                    for ((var, _, _), t) in vars.as_ref().unwrap().iter().zip(t) {
+                        cxt.block.push(JStmt::Set(*var, t));
                     }
                     let block = cxt.pop_block();
 
@@ -776,40 +965,45 @@ impl Term {
                     }
                 }
 
-                if do_var {
-                    cxt.block
-                        .push(JStmt::Let(raw, rty.as_ref().cloned().unwrap(), var, None));
+                let mut ret = Vec::new();
+                for (var, raw, ty) in vars.unwrap() {
+                    cxt.block.push(JStmt::Let(raw, ty.clone(), var, None));
+                    ret.push(JTerm::Var(var, ty));
                 }
                 let k = cxt.fresh_block();
                 cxt.block
                     .push(JStmt::Switch(k, x, v, default.unwrap_or_default()));
 
-                if do_var {
-                    JTerm::Var(var, rty.unwrap())
-                } else {
-                    JTerm::None
-                }
+                return JTerms::Tuple(ret);
             }
-        }
+        })
     }
 }
 impl Statement {
     fn lower(&self, cxt: &mut Cxt) {
         match self {
             Statement::Term(x) => {
-                let term = x.lower(cxt);
-                cxt.block.push(JStmt::Term(term));
+                let terms = x.lower(cxt);
+                for i in terms {
+                    cxt.block.push(JStmt::Term(i));
+                }
             }
             Statement::Let(n, t, x) => {
-                let var = cxt.fresh_var(cxt.bindings.public(*n));
-                cxt.vars.push((*n, var));
-                let t = t.lower(cxt);
                 let x = x.lower(cxt);
-                cxt.tys.insert(var, t.clone());
-                cxt.block.push(JStmt::Let(n.raw(), t, var, Some(x)));
+                let t = t.lower(cxt);
+                let mut vars = Vec::new();
+
+                for (x, t) in x.into_iter().zip(t) {
+                    let var = cxt.fresh_var(cxt.bindings.public(*n));
+                    cxt.tys.insert(var, t.clone());
+                    cxt.block.push(JStmt::Let(n.raw(), t, var, Some(x)));
+                    vars.push(var);
+                }
+
+                cxt.vars.push((*n, JVars::Tuple(vars)));
             }
             Statement::While(cond, block) => {
-                let cond = cond.lower(cxt);
+                let cond = cond.lower(cxt).one();
 
                 let k = cxt.fresh_block();
                 cxt.push_loop(k);
@@ -833,33 +1027,40 @@ impl Item {
             Item::InlineJava(_) => (),
             Item::Fn(f) => {
                 let mut block = Vec::new();
+                let fn_id = cxt.fun(f.id).unwrap();
                 std::mem::swap(&mut block, &mut cxt.block);
 
                 cxt.push();
+                cxt.current_fn = fn_id;
                 let mut args = Vec::new();
                 for (name, ty) in &f.args {
-                    let var = cxt.fresh_var(cxt.bindings.public(*name));
-                    let ty = ty.lower(cxt);
-                    args.push((name.raw(), var, ty.clone()));
-                    cxt.tys.insert(var, ty);
-                    cxt.vars.push((name.clone(), var));
+                    let mut vars = Vec::new();
+                    for ty in ty.lower(cxt) {
+                        let var = cxt.fresh_var(cxt.bindings.public(*name));
+                        args.push((name.raw(), var, ty.clone()));
+                        cxt.tys.insert(var, ty);
+                        vars.push(var);
+                    }
+                    cxt.vars.push((name.clone(), JVars::Tuple(vars)));
                 }
                 let ret = f.body.lower(cxt);
                 match (ret, &f.ret_ty) {
-                    (JTerm::None, _) => (),
                     // Java doesn't like using 'return' with void functions
-                    (ret, Type::Unit) => cxt.block.push(JStmt::Term(ret)),
-                    (ret, _) => cxt.block.push(JStmt::Ret(Some(ret))),
+                    (ret, Type::Unit) => {
+                        for i in ret {
+                            cxt.block.push(JStmt::Term(i))
+                        }
+                    }
+                    (ret, _) => cxt.block.push(JStmt::Ret(fn_id, ret.into())),
                 }
                 cxt.pop();
 
                 std::mem::swap(&mut block, &mut cxt.block);
                 let ret_ty = f.ret_ty.lower(cxt);
-                let item = cxt.fun(f.id).unwrap();
                 cxt.items.push(JItem::Fn(JFn {
                     name: cxt.bindings.fn_name(f.id),
-                    item,
-                    ret_ty,
+                    item: fn_id,
+                    ret_tys: ret_ty.into(),
                     args,
                     body: block,
                     public: f.public,
@@ -878,14 +1079,14 @@ impl Item {
     }
 }
 impl Type {
-    fn lower(&self, cxt: &Cxt) -> JTy {
-        match self {
+    fn lower(&self, cxt: &Cxt) -> JTys {
+        JTys::One(match self {
             Type::I32 => JTy::I32,
             Type::I64 => JTy::I64,
             Type::Bool => JTy::Bool,
             Type::Str => JTy::String,
-            Type::Unit => JTy::Void,
+            Type::Unit => return JTys::empty(),
             Type::Class(c) => JTy::Class(cxt.class(*c).unwrap()),
-        }
+        })
     }
 }
