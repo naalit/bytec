@@ -159,6 +159,8 @@ pub enum Term {
     Continue,
     Return(Option<Box<Term>>),
     Variant(TypeId, RawSym),
+    Tuple(Vec<Term>),
+    TupleIdx(Box<Term>, usize),
     Match(Box<Term>, Vec<(Option<RawSym>, Term)>),
 }
 pub enum Statement {
@@ -198,6 +200,7 @@ pub enum Type {
     Str,
     Unit,
     Class(TypeId),
+    Tuple(Vec<Type>),
 }
 
 // Presyntax
@@ -227,6 +230,10 @@ pub enum Pre {
     Return(Option<SPre>),
     // Direction::North
     Variant(Spanned<RawSym>, Spanned<RawSym>),
+    // (a, b)
+    Tuple(Vec<SPre>),
+    // x.0
+    TupleIdx(SPre, usize),
     // match x { s => t, else => u }
     Match(SPre, Vec<(Spanned<Option<RawSym>>, SPre)>),
 }
@@ -269,14 +276,14 @@ pub enum PreStatement {
     },
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PreType {
     I32,
     I64,
     Bool,
     Str,
-    Unit,
     Class(Spanned<RawSym>),
+    Tuple(Vec<PreType>),
 }
 
 impl Pre {
@@ -290,6 +297,8 @@ impl Pre {
             | Pre::Break
             | Pre::Continue
             | Pre::Return(_)
+            | Pre::Tuple(_)
+            | Pre::TupleIdx(_, _)
             | Pre::BinOp(_, _, _) => true,
             // These don't need semicolons since they end in a closing brace
             Pre::Block(_, _) | Pre::If(_, _, _) | Pre::Match(_, _) => false,
@@ -354,12 +363,16 @@ impl Term {
             Term::Var(s) => Term::Var(cln.get(*s)),
             Term::Lit(l, t) => Term::Lit(*l, t.clone()),
             Term::Variant(tid, s) => Term::Variant(*tid, *s),
+            Term::Tuple(v) => Term::Tuple(v.iter().map(|x| x.cloned_(cln)).collect()),
+            Term::TupleIdx(x, i) => Term::TupleIdx(Box::new(x.cloned_(cln)), *i),
             Term::Call(o, f, a) => Term::Call(
                 o.as_ref().map(|o| Box::new(o.cloned_(cln))),
                 *f,
                 a.iter().map(|x| x.cloned_(cln)).collect(),
             ),
-            Term::BinOp(_, _, _) => todo!(),
+            Term::BinOp(op, a, b) => {
+                Term::BinOp(*op, Box::new(a.cloned_(cln)), Box::new(b.cloned_(cln)))
+            }
             Term::Block(v, e) => {
                 let v = v.iter().map(|x| x.cloned_(cln)).collect();
                 Term::Block(v, e.as_ref().map(|x| Box::new(x.cloned_(cln))))
@@ -428,6 +441,13 @@ impl Term {
             Term::Variant(tid, s) => Doc::start(cxt.resolve_raw(cxt.type_name(*tid)))
                 .add("::")
                 .add(cxt.resolve_raw(*s)),
+            Term::Tuple(v) => Doc::start('(')
+                .chain(Doc::intersperse(
+                    v.iter().map(|x| x.pretty(cxt)),
+                    Doc::start(",").space(),
+                ))
+                .add(')'),
+            Term::TupleIdx(x, i) => x.pretty(cxt).add('.').add(i),
             Term::Call(None, f, a) => Doc::start(cxt.resolve_raw(cxt.fn_name(*f)))
                 .add("(")
                 .chain(Doc::intersperse(
@@ -640,6 +660,12 @@ impl Type {
             Type::Str => Doc::keyword("str"),
             Type::Unit => Doc::start("()"),
             Type::Class(c) => Doc::start(cxt.resolve_raw(cxt.type_name(*c))),
+            Type::Tuple(v) => Doc::start('(')
+                .chain(Doc::intersperse(
+                    v.iter().map(|x| x.pretty(cxt)),
+                    Doc::start(",").space(),
+                ))
+                .add(')'),
         }
     }
 }

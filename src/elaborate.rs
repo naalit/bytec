@@ -233,11 +233,16 @@ impl<'b> Cxt<'b> {
             PreType::I64 => Ok(Type::I64),
             PreType::Bool => Ok(Type::Bool),
             PreType::Str => Ok(Type::Str),
-            PreType::Unit => Ok(Type::Unit),
+            PreType::Tuple(v) if v.is_empty() => Ok(Type::Unit),
             PreType::Class(name) => self
                 .class(**name)
                 .map(Type::Class)
                 .ok_or(TypeError::NotFound(name.span, **name)),
+            PreType::Tuple(v) => v
+                .iter()
+                .map(|x| self.elab_type(x))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Type::Tuple),
         }
     }
 
@@ -457,6 +462,30 @@ impl<'b> Cxt<'b> {
 
                 Ok((Term::Variant(class, **b), Type::Class(class)))
             }
+            Pre::Tuple(v) => {
+                let mut terms = Vec::new();
+                let mut tys = Vec::new();
+                for i in v {
+                    let (term, ty) = self.infer(i)?;
+                    terms.push(term);
+                    tys.push(ty);
+                }
+                Ok((Term::Tuple(terms), Type::Tuple(tys)))
+            }
+            Pre::TupleIdx(x, i) => {
+                let (x, t) = self.infer(x)?;
+                let t = match t {
+                    Type::Tuple(mut v) => {
+                        if *i < v.len() {
+                            v.swap_remove(*i)
+                        } else {
+                            todo!("out of bounds error")
+                        }
+                    }
+                    _ => todo!("not tuple error"),
+                };
+                Ok((Term::TupleIdx(Box::new(x), *i), t))
+            }
             Pre::Call(f, a) => {
                 let (fid, FnType(atys, rty)) =
                     self.fun(**f).ok_or(TypeError::NotFound(f.span, **f))?;
@@ -619,6 +648,13 @@ impl<'b> Cxt<'b> {
                 Ok(Term::BinOp(*op, Box::new(a), Box::new(b)))
             }
             (Pre::Lit(l @ Literal::Int(_), None), Type::I32 | Type::I64) => Ok(Term::Lit(*l, ty)),
+
+            (Pre::Tuple(a), Type::Tuple(b)) => a
+                .iter()
+                .zip(b)
+                .map(|(x, ty)| self.check(x, ty.clone()))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Term::Tuple),
 
             // These technically return the never type `!`, but that's too complicated for bytec
             // Instead, they just coerce to anything they're checked against, but default to ()

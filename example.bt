@@ -58,6 +58,10 @@ fn is_five(i: i32): bool {
     i == 5
 }
 
+fn swap(a: i32, b: i32): (i32, i32) = (b, a);
+fn sum(x: (i32, i32)): i32 = x.0 + x.1;
+fn combine(a: i32, b: i32): i32 = sum(swap(a, b));
+
 fn looper(r: Random) {
     while rand(r) > 2 {
         println("Looping!");

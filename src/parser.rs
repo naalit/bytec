@@ -515,10 +515,17 @@ impl<'a> Parser<'a> {
 
         while self.peek().as_deref() == Some(&Tok::Dot) {
             self.next();
-            let name = self.name().ok_or(self.err("expected method name"))?;
-            let args = self.call_args()?;
-            let span = Span(t.span.0, self.lexer.pos);
-            t = Box::new(Spanned::new(Pre::Method(t, name, args), span));
+
+            if let Some(Tok::LitI(i)) = self.peek().as_deref() {
+                self.next();
+                let span = Span(t.span.0, self.lexer.pos);
+                t = Box::new(Spanned::new(Pre::TupleIdx(t, *i as usize), span));
+            } else {
+                let name = self.name().ok_or(self.err("expected method name"))?;
+                let args = self.call_args()?;
+                let span = Span(t.span.0, self.lexer.pos);
+                t = Box::new(Spanned::new(Pre::Method(t, name, args), span));
+            }
         }
 
         Ok(Some(t))
@@ -693,10 +700,33 @@ impl<'a> Parser<'a> {
                 }
             }
             Some(Tok::OpenParen) => {
+                let start = self.lexer.pos;
                 self.next();
-                let t = self.term()?;
-                self.expect(Tok::CloseParen, "closing ')'")?;
-                Ok(t)
+
+                let mut v = Vec::new();
+                loop {
+                    if self.peek().as_deref() == Some(&Tok::CloseParen) {
+                        self.next();
+                        break;
+                    }
+
+                    v.push(self.term()?.ok_or(self.err("expected term"))?);
+                    if self.peek().as_deref() == Some(&Tok::Comma) {
+                        self.next();
+                    } else {
+                        self.expect(Tok::CloseParen, "closing ')'")?;
+                        break;
+                    }
+                }
+
+                if v.len() == 1 {
+                    Ok(Some(v.pop().unwrap()))
+                } else {
+                    Ok(Some(Box::new(Spanned::new(
+                        Pre::Tuple(v),
+                        Span(start, self.lexer.pos),
+                    ))))
+                }
             }
             Some(Tok::OpenBrace) => {
                 // block
@@ -772,8 +802,28 @@ impl<'a> Parser<'a> {
             }
             Some(Tok::OpenParen) => {
                 self.next();
-                self.expect(Tok::CloseParen, "closing ')'")?;
-                Ok(Some(PreType::Unit))
+
+                let mut v = Vec::new();
+                loop {
+                    if self.peek().as_deref() == Some(&Tok::CloseParen) {
+                        self.next();
+                        break;
+                    }
+
+                    v.push(self.ty()?.ok_or(self.err("expected type"))?);
+                    if self.peek().as_deref() == Some(&Tok::Comma) {
+                        self.next();
+                    } else {
+                        self.expect(Tok::CloseParen, "closing ')'")?;
+                        break;
+                    }
+                }
+
+                if v.len() == 1 {
+                    Ok(Some(v.pop().unwrap()))
+                } else {
+                    Ok(Some(PreType::Tuple(v)))
+                }
             }
             Some(Tok::Name(n)) => {
                 let span = self.span();
@@ -823,7 +873,7 @@ impl<'a> Parser<'a> {
             self.next();
             self.ty()?.ok_or(self.err("expected return type"))?
         } else {
-            PreType::Unit
+            PreType::Tuple(Vec::new())
         };
         Ok((name, args, ret_type))
     }

@@ -148,7 +148,7 @@ impl JTy {
 #[derive(Clone, Debug, PartialEq)]
 struct JFn {
     name: RawSym,
-    item: JFnId,
+    fn_id: JFnId,
     ret_tys: Vec<JTy>,
     args: Vec<(RawSym, JVar, JTy)>,
     body: Vec<JStmt>,
@@ -450,13 +450,11 @@ impl JStmt {
                 let mut s = String::new();
 
                 for (i, t) in v.iter().enumerate() {
+                    write!(s, "{}$_ret{}$S = {};", cxt.fn_str(*f), i, t.gen(cxt)).unwrap();
                     s.push('\n');
                     s.push_str(cxt.indent());
-                    write!(s, "{}$_arg{}$S = {};", cxt.fn_str(*f), i, t.gen(cxt)).unwrap();
                 }
 
-                s.push('\n');
-                s.push_str(cxt.indent());
                 s.push_str("return;");
                 s
             }
@@ -555,10 +553,10 @@ impl JStmt {
                 buf.push_str(");");
 
                 for (i, (raw, v, t)) in rets.iter().enumerate() {
-                    cxt.names.insert(v.0, (*raw, v.1));
+                    cxt.names.insert(v.0, (*raw, !v.1));
                     write!(
                         buf,
-                        "\n{}{} {} = {}$_arg{}$S;",
+                        "\n{}{} {} = {}$_ret{}$S;",
                         cxt.indent(),
                         t.gen(cxt),
                         cxt.name_str(*v),
@@ -604,6 +602,23 @@ impl JTy {
 impl JFn {
     fn gen(&self, cxt: &mut Gen) -> String {
         let mut buf = String::new();
+
+        if self.ret_tys.len() != 1 {
+            // Generate static variables to return tuples into
+            // This uses a little bit less bytecode than using e.g. custom classes
+            for (i, ty) in self.ret_tys.iter().enumerate() {
+                write!(
+                    buf,
+                    "public static {} {}$_ret{}$S;\n{}",
+                    ty.gen(cxt),
+                    cxt.fn_str(self.fn_id),
+                    i,
+                    cxt.indent(),
+                )
+                .unwrap();
+            }
+        }
+
         write!(
             buf,
             "public static {} {}(",
@@ -612,7 +627,7 @@ impl JFn {
             } else {
                 "void".into()
             },
-            cxt.fn_str(self.item)
+            cxt.fn_str(self.fn_id)
         )
         .unwrap();
         let names = cxt.names.clone();
@@ -830,6 +845,11 @@ impl Term {
                 return JTerms::empty();
             }
             Term::Variant(tid, s) => JTerm::Variant(cxt.class(*tid).unwrap(), *s),
+            Term::Tuple(v) => return JTerms::Tuple(v.iter().flat_map(|x| x.lower(cxt)).collect()),
+            Term::TupleIdx(x, i) => {
+                let x = x.lower(cxt);
+                x.to_vec().swap_remove(*i)
+            }
             Term::Call(o, f, a) => {
                 let fn_id = cxt.fun(*f).unwrap();
                 let o = o.as_ref().map(|x| Box::new(x.lower(cxt).one()));
@@ -845,7 +865,7 @@ impl Term {
                             let var = cxt.fresh_var(false);
                             cxt.tys.insert(var, ty.clone());
                             let raw = cxt.bindings.raw(format!(
-                                "{}$_call_arg{}",
+                                "{}$_call_ret{}",
                                 cxt.bindings.resolve_raw(cxt.bindings.fn_name(*f)),
                                 i
                             ));
@@ -1059,7 +1079,7 @@ impl Item {
                 let ret_ty = f.ret_ty.lower(cxt);
                 cxt.items.push(JItem::Fn(JFn {
                     name: cxt.bindings.fn_name(f.id),
-                    item: fn_id,
+                    fn_id,
                     ret_tys: ret_ty.into(),
                     args,
                     body: block,
@@ -1087,6 +1107,7 @@ impl Type {
             Type::Str => JTy::String,
             Type::Unit => return JTys::empty(),
             Type::Class(c) => JTy::Class(cxt.class(*c).unwrap()),
+            Type::Tuple(v) => return JTys::Tuple(v.iter().flat_map(|x| x.lower(cxt)).collect()),
         })
     }
 }
