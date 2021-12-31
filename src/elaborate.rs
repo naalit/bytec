@@ -533,25 +533,52 @@ impl<'b> Cxt<'b> {
             }
             Pre::Method(o_, f, a) => {
                 let (o, t) = self.infer(o_)?;
-                let methods = match t {
-                    Type::Class(c) => &self.class_info(c).methods,
-                    t => return Err(TypeError::NoMethods(o_.span, t)),
-                };
-                let (_, fid, FnType(atys, rty)) = methods
-                    .iter()
-                    .find(|(s, _, _)| *s == **f)
-                    .ok_or(TypeError::NotFound(f.span, f.inner))?;
-                let fid = *fid;
+                match t {
+                    Type::Class(c) => {
+                        let methods = &self.class_info(c).methods;
+                        let (_, fid, FnType(atys, rty)) = methods
+                            .iter()
+                            .find(|(s, _, _)| *s == **f)
+                            .ok_or(TypeError::NotFound(f.span, f.inner))?;
+                        let fid = *fid;
 
-                let rty = rty.clone();
-                if a.len() != atys.len() {
-                    return Err(TypeError::WrongArity(pre.span, a.len(), atys.len()));
+                        let rty = rty.clone();
+                        if a.len() != atys.len() {
+                            return Err(TypeError::WrongArity(pre.span, a.len(), atys.len()));
+                        }
+                        let mut a2 = Vec::new();
+                        for (a, t) in a.iter().zip(atys.clone()) {
+                            a2.push(self.check(a, t)?);
+                        }
+                        Ok((Term::Call(Some(Box::new(o)), fid, a2), rty))
+                    }
+                    Type::Array(t) => match self.bindings.resolve_raw(**f) {
+                        "len" => {
+                            if a.len() != 0 {
+                                return Err(TypeError::WrongArity(pre.span, a.len(), 0));
+                            }
+                            Ok((Term::ArrayMethod(Box::new(o), ArrayMethod::Len), Type::I32))
+                        }
+                        "pop" => {
+                            if a.len() != 0 {
+                                return Err(TypeError::WrongArity(pre.span, a.len(), 0));
+                            }
+                            Ok((Term::ArrayMethod(Box::new(o), ArrayMethod::Pop), *t))
+                        }
+                        "push" => {
+                            if a.len() != 1 {
+                                return Err(TypeError::WrongArity(pre.span, a.len(), 1));
+                            }
+                            let x = self.check(&a[0], *t)?;
+                            Ok((
+                                Term::ArrayMethod(Box::new(o), ArrayMethod::Push(Box::new(x))),
+                                Type::Unit,
+                            ))
+                        }
+                        _ => return Err(TypeError::NotFound(f.span, f.inner)),
+                    },
+                    t => return Err(TypeError::NoMethods(o_.span, t)),
                 }
-                let mut a2 = Vec::new();
-                for (a, t) in a.iter().zip(atys.clone()) {
-                    a2.push(self.check(a, t)?);
-                }
-                Ok((Term::Call(Some(Box::new(o)), fid, a2), rty))
             }
             Pre::BinOp(op, a, b) => {
                 let (a, bt, rt) = match op.ty() {

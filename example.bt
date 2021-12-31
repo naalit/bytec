@@ -66,6 +66,13 @@ fn make_arr(): [(i32, str)] = [(1, "one"), (2, "two"), (3, "three")];
 fn take_arr(a: [(i32, str)]): i32 = a[1].0;
 fn arrays(): i32 = take_arr(make_arr());
 
+fn test_methods(x: [i32]): i32 {
+    let a = x.pop();
+    x.push(92);
+    let b = x.len();
+    a + b
+}
+
 fn looper(r: Random) {
     while rand(r) > 2 {
         println("Looping!");

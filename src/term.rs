@@ -148,6 +148,12 @@ impl Error {
 
 // Syntax
 
+pub enum ArrayMethod {
+    Len,
+    Pop,
+    Push(Box<Term>),
+}
+
 pub enum Term {
     Var(Sym),
     Lit(Literal, Type),
@@ -163,6 +169,7 @@ pub enum Term {
     TupleIdx(Box<Term>, usize),
     Array(Vec<Term>),
     ArrayIdx(Box<Term>, Box<Term>),
+    ArrayMethod(Box<Term>, ArrayMethod),
     Match(Box<Term>, Vec<(Option<RawSym>, Term)>),
 }
 pub enum Statement {
@@ -379,6 +386,9 @@ impl Term {
             Term::ArrayIdx(arr, i) => {
                 Term::ArrayIdx(Box::new(arr.cloned_(cln)), Box::new(i.cloned_(cln)))
             }
+            Term::ArrayMethod(arr, m) => {
+                Term::ArrayMethod(Box::new(arr.cloned_(cln)), m.cloned_(cln))
+            }
             Term::Call(o, f, a) => Term::Call(
                 o.as_ref().map(|o| Box::new(o.cloned_(cln))),
                 *f,
@@ -415,6 +425,15 @@ impl Statement {
                 Statement::While(a.cloned_(cln), b.iter().map(|x| x.cloned_(cln)).collect())
             }
             Statement::InlineJava(s) => Self::InlineJava(*s),
+        }
+    }
+}
+impl ArrayMethod {
+    fn cloned_(&self, cln: &mut Cloner) -> ArrayMethod {
+        match self {
+            ArrayMethod::Len => ArrayMethod::Len,
+            ArrayMethod::Pop => ArrayMethod::Pop,
+            ArrayMethod::Push(x) => ArrayMethod::Push(Box::new(x.cloned_(cln))),
         }
     }
 }
@@ -469,6 +488,11 @@ impl Term {
                 ))
                 .add(']'),
             Term::ArrayIdx(arr, i) => arr.pretty(cxt).add('[').chain(i.pretty(cxt)).add(']'),
+            Term::ArrayMethod(arr, m) => arr.pretty(cxt).add('.').chain(match m {
+                ArrayMethod::Len => Doc::start("len()"),
+                ArrayMethod::Pop => Doc::start("pop()"),
+                ArrayMethod::Push(x) => Doc::start("push(").chain(x.pretty(cxt)).add(')'),
+            }),
             Term::Call(None, f, a) => Doc::start(cxt.resolve_raw(cxt.fn_name(*f)))
                 .add("(")
                 .chain(Doc::intersperse(
