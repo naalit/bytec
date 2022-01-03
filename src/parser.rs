@@ -451,16 +451,19 @@ impl<'a> Parser<'a> {
         next
     }
 
-    fn err(&self, err: &(impl std::fmt::Display + ?Sized)) -> Error {
+    fn err(&mut self, err: &(impl std::fmt::Display + ?Sized)) -> Error {
         Spanned::new(Doc::start(err), self.span())
     }
 
-    fn span(&self) -> Span {
-        Span(self.lexer.pos - 1, self.lexer.pos)
+    fn span(&mut self) -> Span {
+        self.peek()
+            .map(|x| x.span)
+            .unwrap_or(Span(self.lexer.pos - 1, self.lexer.pos))
     }
 
     fn expect(&mut self, tok: Tok, msg: &str) -> Result<(), Error> {
-        if self.next().as_deref() == Some(&tok) {
+        if self.peek().as_deref() == Some(&tok) {
+            self.next();
             Ok(())
         } else {
             Err(self.err(&format!("expected {}", msg)))
@@ -1103,15 +1106,11 @@ impl<'a> Parser<'a> {
                     None
                 };
 
-                if self.next().as_deref() != Some(&Tok::Equals) {
-                    return Err(self.err("expected '='"));
-                }
+                self.expect(Tok::Equals, "'='")?;
 
                 let value = self.term()?.ok_or(self.err("expected expression"))?;
 
-                if self.next().as_deref() != Some(&Tok::Semicolon) {
-                    return Err(self.err("expected ';'"));
-                }
+                self.expect(Tok::Semicolon, "';'")?;
 
                 Ok(Some(PreItem::Let(name, ty, value, public)))
             }
@@ -1119,9 +1118,13 @@ impl<'a> Parser<'a> {
                 // `class` always means an external class, because you can't define them in bytec (for now)
                 self.next();
                 let name = self.name().ok_or(self.err("expected class name"))?;
-                match self.next().as_deref() {
-                    Some(Tok::Semicolon) => Ok(Some(PreItem::ExternClass(*name, Vec::new()))),
+                match self.peek().as_deref() {
+                    Some(Tok::Semicolon) => {
+                        self.next();
+                        Ok(Some(PreItem::ExternClass(*name, Vec::new())))
+                    }
                     Some(Tok::OpenBrace) => {
+                        self.next();
                         let mut methods = Vec::new();
 
                         while *self.peek().ok_or(self.err("expected closing '}'"))?
@@ -1133,7 +1136,8 @@ impl<'a> Parser<'a> {
                                 == Tok::Equals
                             {
                                 self.next();
-                                if let Some(Tok::LitS(s)) = self.next().as_deref() {
+                                if let Some(Tok::LitS(s)) = self.peek().as_deref() {
+                                    self.next();
                                     self.bindings.raw(s)
                                 } else {
                                     return Err(
@@ -1177,7 +1181,7 @@ impl<'a> Parser<'a> {
                             self.expect(Tok::Semicolon, "';'")?;
                             return Ok(Some(PreItem::InlineJava(self.bindings.raw(s))));
                         }
-                        _ => return Err(self.err("expected 'fn' or inline Java string")),
+                        _ => return Err(self.err("expected 'fn', 'enum', or inline Java string")),
                     },
                     _ => unreachable!(),
                 };
@@ -1185,10 +1189,11 @@ impl<'a> Parser<'a> {
 
                 if ext {
                     self.expect(Tok::Equals, "'='")?;
-                    let mapping = match self.next().as_deref() {
+                    let mapping = match self.peek().as_deref() {
                         Some(Tok::LitS(m)) => self.bindings.raw(m),
                         _ => return Err(self.err("expected Java function name as string literal")),
                     };
+                    self.next();
                     self.expect(Tok::Semicolon, "';'")?;
 
                     Ok(Some(PreItem::ExternFn(PreEFn {
@@ -1300,9 +1305,16 @@ impl<'a> Parser<'a> {
     pub fn top_level(&mut self) -> Result<Vec<PreItem>, Error> {
         let mut v = Vec::new();
         while self.peek().is_some() {
-            match self.item()? {
-                Some(x) => v.push(x),
-                None => {
+            match self.item() {
+                Ok(Some(x)) => v.push(x),
+                Err(e) => {
+                    if let Some(x) = self.next_err.take() {
+                        return Err(x);
+                    } else {
+                        return Err(e);
+                    }
+                }
+                Ok(None) => {
                     if let Some(x) = self.next_err.take() {
                         return Err(x);
                     } else {

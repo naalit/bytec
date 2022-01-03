@@ -183,6 +183,10 @@ enum TypeError {
     NoVariants(Span, Type),
     MissingPattern(Span, Vec<RawSym>),
     Duplicate(Span, RawSym),
+    NotArray(Span, Type),
+    NotTuple(Span, Type),
+    TupleOutOfBounds(Span, Type, usize),
+    NotLValue(Span, Term),
 }
 impl TypeError {
     fn to_error(self, bindings: &Bindings) -> Error {
@@ -230,6 +234,26 @@ impl TypeError {
                 Doc::start("Duplicate definition of item named '")
                     .add(bindings.resolve_raw(name))
                     .add("'"),
+                span,
+            ),
+            TypeError::NotArray(span, t) => Spanned::new(
+                Doc::start("Expected an array, got value of type ").chain(t.pretty(bindings)),
+                span,
+            ),
+            TypeError::NotTuple(span, t) => Spanned::new(
+                Doc::start("Expected a tuple, got value of type ").chain(t.pretty(bindings)),
+                span,
+            ),
+            TypeError::TupleOutOfBounds(span, t, i) => Spanned::new(
+                Doc::start("Tuple index ")
+                    .add(i)
+                    .add(" out of bounds for type ")
+                    .chain(t.pretty(bindings)),
+                span,
+            ),
+            TypeError::NotLValue(span, v) => Spanned::new(
+                Doc::start("Can only assign to variables and array indices, not ")
+                    .chain(v.pretty(bindings)),
                 span,
             ),
         }
@@ -438,20 +462,20 @@ impl<'b> Cxt<'b> {
 
                 Ok(Some(Statement::While(cond, block2)))
             }
-            PreStatement::For(s, public, a, b, block) => {
+            PreStatement::For(s, public, pa, b, block) => {
                 let (iter, t) = match b {
                     // Range
                     Some(b) => {
-                        let a = self.check(a, Type::I32)?;
+                        let a = self.check(pa, Type::I32)?;
                         let b = self.check(b, Type::I32)?;
                         (ForIter::Range(Box::new(a), Box::new(b)), Type::I32)
                     }
                     // Array
                     None => {
-                        let (a, t) = self.infer(a)?;
+                        let (a, t) = self.infer(pa)?;
                         match t {
                             Type::Array(t) => (ForIter::Array(Box::new(a)), *t),
-                            _ => todo!("error: not array"),
+                            t => return Err(TypeError::NotArray(pa.span, t)),
                         }
                     }
                 };
@@ -519,17 +543,17 @@ impl<'b> Cxt<'b> {
                 }
                 Ok((Term::Tuple(terms), Type::Tuple(tys)))
             }
-            Pre::TupleIdx(x, i) => {
-                let (x, t) = self.infer(x)?;
+            Pre::TupleIdx(px, i) => {
+                let (x, t) = self.infer(px)?;
                 let t = match t {
                     Type::Tuple(mut v) => {
                         if *i < v.len() {
                             v.swap_remove(*i)
                         } else {
-                            todo!("out of bounds error")
+                            return Err(TypeError::TupleOutOfBounds(pre.span, Type::Tuple(v), *i));
                         }
                     }
-                    _ => todo!("not tuple error"),
+                    t => return Err(TypeError::NotTuple(px.span, t)),
                 };
                 Ok((Term::TupleIdx(Box::new(x), *i), t))
             }
@@ -553,24 +577,24 @@ impl<'b> Cxt<'b> {
                 let ty = ty.unwrap_or(Type::Unit);
                 Ok((Term::Array(v2, ty.clone()), Type::Array(Box::new(ty))))
             }
-            Pre::ArrayIdx(arr, idx) => {
-                let (arr, aty) = self.infer(arr)?;
+            Pre::ArrayIdx(parr, idx) => {
+                let (arr, aty) = self.infer(parr)?;
                 let ty = match aty {
                     Type::Array(t) => *t,
-                    _ => todo!("not an array error"),
+                    t => return Err(TypeError::NotArray(parr.span, t)),
                 };
                 let idx = self.check(idx, Type::I32)?;
                 Ok((Term::ArrayIdx(Box::new(arr), Box::new(idx)), ty))
             }
-            Pre::Set(l, op, x) => {
-                let (l, t) = self.infer(l)?;
+            Pre::Set(pl, op, x) => {
+                let (l, t) = self.infer(pl)?;
                 let l = match l {
                     Term::Var(s) => LValue::Var(s),
                     Term::ArrayIdx(b, i) if matches!(&*b, Term::Var(_)) => match *b {
                         Term::Var(s) => LValue::Idx(s, i),
                         _ => unreachable!(),
                     },
-                    _ => todo!("error: not an lvalue"),
+                    l => return Err(TypeError::NotLValue(pl.span, l)),
                 };
                 let x = self.check(x, t)?;
 

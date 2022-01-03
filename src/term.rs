@@ -109,7 +109,7 @@ impl Severity {
 impl Error {
     pub fn emit(self, severity: Severity) {
         // An extremely simple copy of Rust's error message design
-        // TODO show the whole span, show secondary message
+        // TODO show multiline spans, show secondary message
         let source = INPUT_SOURCE.read().unwrap();
         let (mut line, mut col) = (1, self.span.0);
         let mut line_str = None;
@@ -122,6 +122,12 @@ impl Error {
                 col -= l.len() + 1;
             }
         }
+        let line_str = line_str.unwrap_or("");
+        let mut end = col + self.span.1 - self.span.0;
+        if end > line_str.len() {
+            end = line_str.len();
+        }
+        let caret_str: String = std::iter::repeat('^').take(end - col).collect();
         severity
             .start()
             .add(": ")
@@ -152,12 +158,15 @@ impl Error {
                 Doc::start(format!("{:4} |", line))
                     .style(Style::Special)
                     .space()
-                    .add(line_str.unwrap_or("")),
+                    .add(line_str),
             )
             .hardline()
-            .chain(Doc::start("     |").style(Style::Special).space().chain(
-                Doc::start(format!("{:>width$}", "^", width = col + 1)).style(severity.style()),
-            ))
+            .chain(
+                Doc::start("     |").style(Style::Special).space().chain(
+                    Doc::start(format!("{:>width$}{}", "", caret_str, width = col))
+                        .style(severity.style()),
+                ),
+            )
             .emit();
     }
 }
