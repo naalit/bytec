@@ -58,6 +58,18 @@ pub fn codegen(code: &[Item], bindings: &mut Bindings, out_class: &str) -> Strin
                 java.push(*s);
                 continue;
             }
+            Item::Let(s, t, _) => {
+                let t = t.lower(&cxt);
+                let mut vars = Vec::new();
+                for t in t {
+                    let var = cxt.fresh_var(cxt.bindings.public(*s));
+                    cxt.tys.insert(var, t);
+                    mappings.push((var.0, s.raw(), !var.1));
+                    vars.push(var);
+                }
+                cxt.vars.push((*s, JVars::Tuple(vars)));
+                continue;
+            }
         };
         let item = cxt.fresh_fn();
         cxt.fn_ids.push((name, item));
@@ -185,6 +197,7 @@ struct JFn {
 enum JItem {
     Fn(JFn),
     Enum(JClass, Vec<RawSym>),
+    Let(JVar, JTy, JTerm),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -391,6 +404,15 @@ impl JTerm {
                     cxt.bindings.resolve_raw(cxt.names[&class.0].0),
                     cxt.bindings.resolve_raw(*variant)
                 )
+            }
+            // We expand capacity by doubling, so don't allow creating an array with 0 capacity
+            // Instead, an empty array starts with 8 capacity
+            JTerm::Array(v, t) if v.is_empty() => {
+                let t = match t {
+                    JTy::Array(t) => &**t,
+                    _ => unreachable!(),
+                };
+                format!("new {}[8]", t.gen(cxt))
             }
             JTerm::Array(v, t) => {
                 let mut buf = format!("new {}{{ ", t.gen(cxt));
@@ -726,6 +748,15 @@ impl JItem {
                 buf.push_str(cxt.indent());
                 buf
             }
+            JItem::Let(var, ty, x) => {
+                format!(
+                    "public static {} {} = {};\n{}",
+                    ty.gen(cxt),
+                    cxt.name_str(*var),
+                    x.gen(cxt),
+                    cxt.indent()
+                )
+            }
         }
     }
 }
@@ -939,7 +970,16 @@ impl Term {
                     return JTerms::empty();
                 }
             },
-            Term::Array(v) => {
+            Term::Array(v, t) if v.is_empty() => {
+                let t = t.lower(cxt);
+                return JTerms::Tuple(
+                    t.into_iter()
+                        .map(|ty| JTerm::Array(Vec::new(), JTy::Array(Box::new(ty))))
+                        .chain(std::iter::once(JTerm::Lit(JLit::Int(0))))
+                        .collect(),
+                );
+            }
+            Term::Array(v, _) => {
                 let mut v2 = Vec::new();
                 let mut len = 0;
                 for i in v {
@@ -1330,6 +1370,16 @@ impl Item {
             }
             Item::ExternFn(_) => (),
             Item::ExternClass(_) => (),
+            Item::Let(name, ty, x) => {
+                let var = cxt.var(*name).unwrap();
+                let ty = ty.lower(cxt);
+                let x = x.lower(cxt);
+                assert_eq!(var.len(), ty.len());
+                assert_eq!(ty.len(), x.len());
+                for ((var, ty), x) in var.into_iter().zip(ty).zip(x) {
+                    cxt.items.push(JItem::Let(var, ty, x));
+                }
+            }
         }
     }
 }

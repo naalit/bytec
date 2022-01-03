@@ -174,7 +174,8 @@ pub enum Term {
     Variant(TypeId, RawSym),
     Tuple(Vec<Term>),
     TupleIdx(Box<Term>, usize),
-    Array(Vec<Term>),
+    // (array, inner type (needed for empty arrays in backend))
+    Array(Vec<Term>, Type),
     ArrayIdx(Box<Term>, Box<Term>),
     ArrayMethod(Box<Term>, ArrayMethod),
     Set(LValue, Option<BinOp>, Box<Term>),
@@ -194,6 +195,7 @@ pub enum Item {
     InlineJava(RawSym),
     /// If the bool is true, it's extern and shouldn't be generated
     Enum(TypeId, Vec<RawSym>, bool),
+    Let(Sym, Type, Term),
 }
 pub struct Fn {
     pub id: FnId,
@@ -285,6 +287,7 @@ pub enum PreItem {
     InlineJava(RawSym),
     ExternClass(RawSym, Vec<PreEFn>),
     Enum(RawSym, Vec<RawSym>, bool),
+    Let(Spanned<RawSym>, Option<PreType>, SPre, bool),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -292,12 +295,6 @@ pub enum PreStatement {
     Item(PreItem),
     Term(SPre),
     While(SPre, Vec<PreStatement>),
-    Let {
-        name: RawSym,
-        ty: Option<PreType>,
-        value: SPre,
-        public: bool,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -380,7 +377,7 @@ impl Term {
             Term::Variant(tid, s) => Term::Variant(*tid, *s),
             Term::Tuple(v) => Term::Tuple(v.iter().map(|x| x.cloned_(cln)).collect()),
             Term::TupleIdx(x, i) => Term::TupleIdx(Box::new(x.cloned_(cln)), *i),
-            Term::Array(v) => Term::Array(v.iter().map(|x| x.cloned_(cln)).collect()),
+            Term::Array(v, t) => Term::Array(v.iter().map(|x| x.cloned_(cln)).collect(), t.clone()),
             Term::ArrayIdx(arr, i) => {
                 Term::ArrayIdx(Box::new(arr.cloned_(cln)), Box::new(i.cloned_(cln)))
             }
@@ -488,7 +485,7 @@ impl Term {
                 ))
                 .add(')'),
             Term::TupleIdx(x, i) => x.pretty(cxt).add('.').add(i),
-            Term::Array(v) => Doc::start('[')
+            Term::Array(v, _) => Doc::start('[')
                 .chain(Doc::intersperse(
                     v.iter().map(|x| x.pretty(cxt)),
                     Doc::start(',').space(),
@@ -667,6 +664,17 @@ impl Item {
                         .style(Style::Literal),
                 )
                 .add(';'),
+            Item::Let(n, t, x) => Doc::keyword("let")
+                .space()
+                .add(cxt.resolve(*n))
+                .add(":")
+                .space()
+                .chain(t.pretty(cxt))
+                .space()
+                .add("=")
+                .space()
+                .chain(x.pretty(cxt))
+                .add(";"),
         }
     }
 }

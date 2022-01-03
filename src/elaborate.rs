@@ -280,6 +280,17 @@ impl<'b> Cxt<'b> {
                 self.create_fn(f.name, FnType(args, rty))?;
                 Ok(())
             }
+            PreItem::Let(name, ty, x, public) => {
+                if self.var(**name).is_some() {
+                    return Err(TypeError::Duplicate(name.span, **name));
+                }
+                let ty = match ty {
+                    Some(ty) => self.elab_type(ty)?,
+                    None => self.infer(x)?.1,
+                };
+                self.create(**name, ty, *public);
+                Ok(())
+            }
             PreItem::ExternClass(name, methods) => {
                 let methods = methods
                     .iter()
@@ -374,6 +385,12 @@ impl<'b> Cxt<'b> {
                     mapping: *mapping,
                 }))
             }
+            PreItem::Let(name, _, x, _) => {
+                let (s, t) = self.var(**name).unwrap();
+                let t = t.clone();
+                let x = self.check(x, t.clone())?;
+                Ok(Item::Let(s, t, x))
+            }
             PreItem::ExternClass(s, _) => Ok(Item::ExternClass(self.class(*s).unwrap())),
             PreItem::Enum(name, variants, ext) => Ok(Item::Enum(
                 self.class(*name).unwrap(),
@@ -399,6 +416,18 @@ impl<'b> Cxt<'b> {
                 Ok(None)
             }
             PreStatement::Item(PreItem::InlineJava(s)) => Ok(Some(Statement::InlineJava(*s))),
+            PreStatement::Item(PreItem::Let(name, ty, value, public)) => {
+                let (x, t) = match ty {
+                    Some(t) => {
+                        let t = self.elab_type(t)?;
+                        let x = self.check(value, t.clone())?;
+                        (x, t)
+                    }
+                    None => self.infer(value)?,
+                };
+                let n = self.create(**name, t.clone(), *public);
+                Ok(Some(Statement::Let(n, t, x)))
+            }
             PreStatement::Term(t) => self.infer(t).map(|(x, _)| Some(Statement::Term(x))),
             PreStatement::While(cond, block) => {
                 let cond = self.check(cond, Type::Bool)?;
@@ -408,23 +437,6 @@ impl<'b> Cxt<'b> {
                 }
 
                 Ok(Some(Statement::While(cond, block2)))
-            }
-            PreStatement::Let {
-                name,
-                ty,
-                value,
-                public,
-            } => {
-                let (x, t) = match ty {
-                    Some(t) => {
-                        let t = self.elab_type(t)?;
-                        let x = self.check(value, t.clone())?;
-                        (x, t)
-                    }
-                    None => self.infer(value)?,
-                };
-                let n = self.create(*name, t.clone(), *public);
-                Ok(Some(Statement::Let(n, t, x)))
             }
         }
     }
@@ -514,10 +526,8 @@ impl<'b> Cxt<'b> {
                     }
                 }
                 // Make an empty array default to [()]
-                Ok((
-                    Term::Array(v2),
-                    Type::Array(Box::new(ty.unwrap_or(Type::Unit))),
-                ))
+                let ty = ty.unwrap_or(Type::Unit);
+                Ok((Term::Array(v2, ty.clone()), Type::Array(Box::new(ty))))
             }
             Pre::ArrayIdx(arr, idx) => {
                 let (arr, aty) = self.infer(arr)?;
@@ -738,6 +748,14 @@ impl<'b> Cxt<'b> {
                 .map(|(x, ty)| self.check(x, ty.clone()))
                 .collect::<Result<Vec<_>, _>>()
                 .map(Term::Tuple),
+
+            (Pre::Array(v), Type::Array(t)) => {
+                let mut v2 = Vec::new();
+                for i in v {
+                    v2.push(self.check(i, (**t).clone())?);
+                }
+                Ok(Term::Array(v2, (**t).clone()))
+            }
 
             // These technically return the never type `!`, but that's too complicated for bytec
             // Instead, they just coerce to anything they're checked against, but default to ()

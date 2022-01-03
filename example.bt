@@ -93,6 +93,14 @@ fn map_plus_one(a: [i32]) {
     }
 }
 
+let counter = 0;
+let stuff: [i32] = [];
+fn add_stuff(i: i32) {
+    stuff.push(i);
+    counter += 1;
+    stuff[0] -= 1;
+}
+
 fn looper(r: Random) {
     while rand(r) > 2 {
         println("Looping!");

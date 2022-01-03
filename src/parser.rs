@@ -978,6 +978,36 @@ impl<'a> Parser<'a> {
                 self.next();
                 Ok(Some(PreItem::InlineJava(self.bindings.raw(*s))))
             }
+            Some(Tok::Let) => {
+                self.next();
+
+                let public = if self.peek().as_deref() == Some(&Tok::Pub) {
+                    self.next();
+                    true
+                } else {
+                    false
+                };
+
+                let name = self.name().ok_or(self.err("expected name"))?;
+                let ty = if self.peek().as_deref() == Some(&Tok::Colon) {
+                    self.next();
+                    Some(self.ty()?.ok_or(self.err("expected type"))?)
+                } else {
+                    None
+                };
+
+                if self.next().as_deref() != Some(&Tok::Equals) {
+                    return Err(self.err("expected '='"));
+                }
+
+                let value = self.term()?.ok_or(self.err("expected expression"))?;
+
+                if self.next().as_deref() != Some(&Tok::Semicolon) {
+                    return Err(self.err("expected ';'"));
+                }
+
+                Ok(Some(PreItem::Let(name, ty, value, public)))
+            }
             Some(Tok::Class) => {
                 // `class` always means an external class, because you can't define them in bytec (for now)
                 self.next();
@@ -1089,9 +1119,9 @@ impl<'a> Parser<'a> {
 
     fn stmt(&mut self) -> Result<Option<PreStatement>, Error> {
         match self.peek().as_deref() {
-            Some(Tok::Fn | Tok::Extern | Tok::ExternBlock(_)) => {
-                Ok(self.item()?.map(PreStatement::Item))
-            }
+            Some(
+                Tok::Fn | Tok::Extern | Tok::ExternBlock(_) | Tok::Let | Tok::Enum | Tok::Class,
+            ) => Ok(self.item()?.map(PreStatement::Item)),
             Some(Tok::While | Tok::Loop) => {
                 let cond = match &*self.next().unwrap() {
                     Tok::While => self.term()?.ok_or(self.err("expected while condition"))?,
@@ -1118,41 +1148,6 @@ impl<'a> Parser<'a> {
                 }
 
                 Ok(Some(PreStatement::While(cond, block)))
-            }
-            Some(Tok::Let) => {
-                self.next();
-
-                let public = if self.peek().as_deref() == Some(&Tok::Pub) {
-                    self.next();
-                    true
-                } else {
-                    false
-                };
-
-                let name = *self.name().ok_or(self.err("expected name"))?;
-                let ty = if self.peek().as_deref() == Some(&Tok::Colon) {
-                    self.next();
-                    Some(self.ty()?.ok_or(self.err("expected type"))?)
-                } else {
-                    None
-                };
-
-                if self.next().as_deref() != Some(&Tok::Equals) {
-                    return Err(self.err("expected '='"));
-                }
-
-                let value = self.term()?.ok_or(self.err("expected expression"))?;
-
-                if self.next().as_deref() != Some(&Tok::Semicolon) {
-                    return Err(self.err("expected ';'"));
-                }
-
-                Ok(Some(PreStatement::Let {
-                    name,
-                    ty,
-                    value,
-                    public,
-                }))
             }
             _ => Ok(self.term()?.map(PreStatement::Term)),
         }
