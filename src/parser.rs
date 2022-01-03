@@ -56,6 +56,10 @@ enum Tok<'a> {
     Continue,
     // return
     Return,
+    // for
+    For,
+    // in
+    In,
 
     // +
     Add,
@@ -104,6 +108,8 @@ enum Tok<'a> {
     Comma,
     // .
     Dot,
+    // ..
+    DotDot,
 }
 struct Lexer<'a> {
     input: &'a str,
@@ -157,6 +163,8 @@ impl<'a> Lexer<'a> {
             "break" => Tok::Break,
             "continue" => Tok::Continue,
             "return" => Tok::Return,
+            "for" => Tok::For,
+            "in" => Tok::In,
             _ => Tok::Name(name),
         };
 
@@ -248,7 +256,7 @@ impl<'a> Lexer<'a> {
                         .add("'"),
                     Span(self.pos, self.pos + 1),
                 ));
-            } else if next == '.' {
+            } else if next == '.' && !float && self.peekn(1) != Some('.') {
                 float = true;
                 buf.push(next);
                 self.nextc();
@@ -295,6 +303,7 @@ impl<'a> Iterator for Lexer<'a> {
             '<' => self.single(Tok::Lt),
             '=' if self.peekn(1) == Some('>') => self.single_n(Tok::WideArrow, 2),
             ':' if self.peekn(1) == Some(':') => self.single_n(Tok::DoubleColon, 2),
+            '.' if self.peekn(1) == Some('.') => self.single_n(Tok::DotDot, 2),
 
             '(' => self.single(Tok::OpenParen),
             ')' => self.single(Tok::CloseParen),
@@ -328,6 +337,9 @@ impl<'a> Iterator for Lexer<'a> {
                                 }
                                 Some('t') => {
                                     buf.push('\t');
+                                }
+                                Some('"') => {
+                                    buf.push('"');
                                 }
                                 Some(c) => {
                                     break Some(Err(Spanned::new(
@@ -1148,6 +1160,43 @@ impl<'a> Parser<'a> {
                 }
 
                 Ok(Some(PreStatement::While(cond, block)))
+            }
+            Some(Tok::For) => {
+                self.next();
+                let public = if self.peek().as_deref() == Some(&Tok::Pub) {
+                    self.next();
+                    true
+                } else {
+                    false
+                };
+                let var = self.name().ok_or(self.err("expected name"))?;
+
+                self.expect(Tok::In, "'in'")?;
+
+                let a = self.term()?.ok_or(self.err("expected expression"))?;
+                let b = if self.peek().as_deref() == Some(&Tok::DotDot) {
+                    self.next();
+                    Some(self.term()?.ok_or(self.err("expected expression"))?)
+                } else {
+                    None
+                };
+
+                self.expect(Tok::OpenBrace, "'{'")?;
+                let mut block = Vec::new();
+                loop {
+                    if self.peek().as_deref() == Some(&Tok::CloseBrace) {
+                        self.next();
+                        break;
+                    }
+
+                    let stmt = self.stmt()?.ok_or(self.err("expected statement"))?;
+                    if matches!(&stmt, PreStatement::Term(x) if x.needs_semicolon()) {
+                        self.expect(Tok::Semicolon, "';' after expression statement")?;
+                    }
+                    block.push(stmt);
+                }
+
+                Ok(Some(PreStatement::For(*var, public, a, b, block)))
             }
             _ => Ok(self.term()?.map(PreStatement::Term)),
         }

@@ -161,6 +161,13 @@ pub enum LValue {
     Idx(Sym, Box<Term>),
 }
 
+pub enum ForIter {
+    // for i in 0..10 (note: only i32)
+    Range(Box<Term>, Box<Term>),
+    // for i: t in arr
+    Array(Box<Term>),
+}
+
 pub enum Term {
     Var(Sym),
     Lit(Literal, Type),
@@ -185,6 +192,7 @@ pub enum Statement {
     Term(Term),
     Let(Sym, Type, Term),
     While(Term, Vec<Statement>),
+    For(Sym, ForIter, Vec<Statement>),
     InlineJava(RawSym),
 }
 
@@ -295,6 +303,8 @@ pub enum PreStatement {
     Item(PreItem),
     Term(SPre),
     While(SPre, Vec<PreStatement>),
+    // for pub a in b..c
+    For(RawSym, bool, SPre, Option<SPre>, Vec<PreStatement>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -420,6 +430,11 @@ impl Statement {
             Statement::While(a, b) => {
                 Statement::While(a.cloned_(cln), b.iter().map(|x| x.cloned_(cln)).collect())
             }
+            Statement::For(s, i, b) => Statement::For(
+                *s,
+                i.cloned_(cln),
+                b.iter().map(|x| x.cloned_(cln)).collect(),
+            ),
             Statement::InlineJava(s) => Self::InlineJava(*s),
         }
     }
@@ -438,6 +453,16 @@ impl LValue {
         match self {
             LValue::Var(x) => LValue::Var(*x),
             LValue::Idx(a, b) => LValue::Idx(*a, Box::new(b.cloned_(cln))),
+        }
+    }
+}
+impl ForIter {
+    fn cloned_(&self, cln: &mut Cloner) -> ForIter {
+        match self {
+            ForIter::Range(a, b) => {
+                ForIter::Range(Box::new(a.cloned_(cln)), Box::new(b.cloned_(cln)))
+            }
+            ForIter::Array(a) => ForIter::Array(Box::new(a.cloned_(cln))),
         }
     }
 }
@@ -706,6 +731,23 @@ impl Statement {
                 .indent()
                 .line()
                 .add("}"),
+            Statement::For(s, iter, block) => Doc::keyword("for")
+                .space()
+                .add(cxt.resolve(*s))
+                .space()
+                .chain(Doc::keyword("in"))
+                .space()
+                .chain(iter.pretty(cxt))
+                .space()
+                .add("{")
+                .line()
+                .chain(Doc::intersperse(
+                    block.iter().map(|x| x.pretty(cxt)),
+                    Doc::none().line(),
+                ))
+                .indent()
+                .line()
+                .add("}"),
             Statement::InlineJava(s) => Doc::keyword("extern")
                 .space()
                 .chain(
@@ -745,6 +787,18 @@ impl LValue {
                 .add('[')
                 .chain(i.pretty(cxt))
                 .add(']'),
+        }
+    }
+}
+impl ForIter {
+    pub fn pretty(&self, cxt: &Bindings) -> Doc {
+        match self {
+            ForIter::Range(a, b) => a
+                .pretty(cxt)
+                .nest(Prec::Atom)
+                .add("..")
+                .chain(b.pretty(cxt).nest(Prec::Atom)),
+            ForIter::Array(a) => a.pretty(cxt),
         }
     }
 }

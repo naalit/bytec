@@ -438,6 +438,30 @@ impl<'b> Cxt<'b> {
 
                 Ok(Some(Statement::While(cond, block2)))
             }
+            PreStatement::For(s, public, a, b, block) => {
+                let (iter, t) = match b {
+                    // Range
+                    Some(b) => {
+                        let a = self.check(a, Type::I32)?;
+                        let b = self.check(b, Type::I32)?;
+                        (ForIter::Range(Box::new(a), Box::new(b)), Type::I32)
+                    }
+                    // Array
+                    None => {
+                        let (a, t) = self.infer(a)?;
+                        match t {
+                            Type::Array(t) => (ForIter::Array(Box::new(a)), *t),
+                            _ => todo!("error: not array"),
+                        }
+                    }
+                };
+                let n = self.create(*s, t, *public);
+                let mut block2 = Vec::new();
+                for i in block {
+                    self.check_stmt(i)?.map(|x| block2.push(x));
+                }
+                Ok(Some(Statement::For(n, iter, block2)))
+            }
         }
     }
 

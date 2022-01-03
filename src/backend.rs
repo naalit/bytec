@@ -1309,6 +1309,66 @@ impl Statement {
 
                 cxt.block.push(JStmt::While(k, cond, block));
             }
+            Statement::For(s, iter, block) => {
+                match iter {
+                    ForIter::Range(a, b) => {
+                        let a = a.lower(cxt).one();
+                        let b = b.lower(cxt).one();
+
+                        let v = cxt.fresh_var(cxt.bindings.public(*s));
+                        cxt.tys.insert(v, JTy::I32);
+
+                        let k = cxt.fresh_block();
+                        cxt.push_loop(k);
+                        for i in block {
+                            i.lower(cxt);
+                        }
+                        let block = cxt.pop_block();
+
+                        cxt.block.push(JStmt::RangeFor(k, s.raw(), v, a, b, block));
+                    }
+                    ForIter::Array(arr) => {
+                        let arr = arr.lower(cxt);
+                        let t = arr.ty();
+
+                        let start = JTerm::Lit(JLit::Int(0));
+                        let len = arr.clone().to_vec().pop().unwrap();
+
+                        let ix_var = cxt.fresh_var(false);
+                        cxt.tys.insert(ix_var, JTy::I32);
+
+                        let k = cxt.fresh_block();
+                        cxt.push_loop(k);
+                        // let s = arr[i];
+                        let mut vars = Vec::new();
+                        for (x, t) in arr.clone().into_iter().zip(t) {
+                            let t = match t {
+                                JTy::Array(t) => *t,
+                                // skip the array length
+                                JTy::I32 => break,
+                                _ => unreachable!(),
+                            };
+                            let x = JTerm::Index(
+                                Box::new(x),
+                                Box::new(JTerm::Var(ix_var, JTy::I32)),
+                                t.clone(),
+                            );
+                            let var = cxt.fresh_var(cxt.bindings.public(*s));
+                            cxt.tys.insert(var, t.clone());
+                            cxt.block.push(JStmt::Let(s.raw(), t, var, Some(x)));
+                            vars.push(var);
+                        }
+                        cxt.vars.push((*s, JVars::Tuple(vars)));
+                        for i in block {
+                            i.lower(cxt);
+                        }
+                        let block = cxt.pop_block();
+
+                        cxt.block
+                            .push(JStmt::RangeFor(k, s.raw(), ix_var, start, len, block));
+                    }
+                }
+            }
             Statement::InlineJava(s) => {
                 cxt.block.push(JStmt::InlineJava(*s));
             }

@@ -40,7 +40,7 @@
 		"keywords": {
 			"patterns": [{
 				"name": "keyword.control.bytec",
-				"match": "\\b(if|else|while|for|loop|try|catch|match|break|continue|return)\\b"
+				"match": "\\b(if|else|while|for|loop|try|catch|match|break|continue|return|in)\\b"
 			},
 			{
 				"name": "keyword.other.bytec",
