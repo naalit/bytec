@@ -85,6 +85,20 @@ enum Tok<'a> {
     WideArrow,
     // ::
     DoubleColon,
+    // &
+    BitAnd,
+    // |
+    BitOr,
+    // ^
+    BitXor,
+    // >>
+    BitShr,
+    // <<
+    BitShl,
+    // &&
+    And,
+    // ||
+    Or,
 
     // (
     OpenParen,
@@ -299,11 +313,19 @@ impl<'a> Iterator for Lexer<'a> {
             '!' if self.peekn(1) == Some('=') => self.single_n(Tok::Neq, 2),
             '>' if self.peekn(1) == Some('=') => self.single_n(Tok::Geq, 2),
             '<' if self.peekn(1) == Some('=') => self.single_n(Tok::Leq, 2),
-            '>' => self.single(Tok::Gt),
-            '<' => self.single(Tok::Lt),
             '=' if self.peekn(1) == Some('>') => self.single_n(Tok::WideArrow, 2),
             ':' if self.peekn(1) == Some(':') => self.single_n(Tok::DoubleColon, 2),
             '.' if self.peekn(1) == Some('.') => self.single_n(Tok::DotDot, 2),
+            '&' if self.peekn(1) == Some('&') => self.single_n(Tok::And, 2),
+            '|' if self.peekn(1) == Some('|') => self.single_n(Tok::Or, 2),
+            '>' if self.peekn(1) == Some('>') => self.single_n(Tok::BitShr, 2),
+            '<' if self.peekn(1) == Some('<') => self.single_n(Tok::BitShl, 2),
+
+            '>' => self.single(Tok::Gt),
+            '<' => self.single(Tok::Lt),
+            '&' => self.single(Tok::BitAnd),
+            '|' => self.single(Tok::BitOr),
+            '^' => self.single(Tok::BitXor),
 
             '(' => self.single(Tok::OpenParen),
             ')' => self.single(Tok::CloseParen),
@@ -456,7 +478,53 @@ impl<'a> Parser<'a> {
     }
 
     fn term(&mut self) -> Result<Option<SPre>, Error> {
-        let t = match self.arith()? {
+        let t = match self.logic()? {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        if self.peek().as_deref() == Some(&Tok::Equals) {
+            self.next();
+            let rhs = self.logic()?.ok_or(self.err("expected expression"))?;
+            let span = Span(t.span.0, rhs.span.1);
+            return Ok(Some(Box::new(Spanned::new(Pre::Set(t, None, rhs), span))));
+        }
+
+        Ok(Some(t))
+    }
+
+    fn logic(&mut self) -> Result<Option<SPre>, Error> {
+        let mut t = match self.comparison()? {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        loop {
+            let op = match self.peek().as_deref() {
+                Some(Tok::And) => BinOp::And,
+                Some(Tok::Or) => BinOp::Or,
+                _ => break,
+            };
+            self.next();
+
+            if self.peek().as_deref() == Some(&Tok::Equals) {
+                self.next();
+                let rhs = self.term()?.ok_or(self.err("expected expression"))?;
+                let span = Span(t.span.0, rhs.span.1);
+                t = Box::new(Spanned::new(Pre::Set(t, Some(op), rhs), span));
+                break;
+            }
+
+            let rhs = self.comparison()?.ok_or(self.err("expected expression"))?;
+            let span = Span(t.span.0, rhs.span.1);
+            t = Box::new(Spanned::new(Pre::BinOp(op, t, rhs), span));
+        }
+
+        Ok(Some(t))
+    }
+
+    fn comparison(&mut self) -> Result<Option<SPre>, Error> {
+        let t = match self.bitwise()? {
             Some(t) => t,
             None => return Ok(None),
         };
@@ -468,21 +536,48 @@ impl<'a> Parser<'a> {
             Some(Tok::Neq) => BinOp::Neq,
             Some(Tok::Geq) => BinOp::Geq,
             Some(Tok::Leq) => BinOp::Leq,
-            Some(Tok::Equals) => {
-                self.next();
-                let rhs = self.term()?.ok_or(self.err("expected expression"))?;
-                let span = Span(t.span.0, rhs.span.1);
-                return Ok(Some(Box::new(Spanned::new(Pre::Set(t, None, rhs), span))));
-            }
             _ => return Ok(Some(t)),
         };
 
         self.next();
 
-        let rhs = self.arith()?.ok_or(self.err("expected expression"))?;
+        let rhs = self.bitwise()?.ok_or(self.err("expected expression"))?;
         let span = Span(t.span.0, rhs.span.1);
 
         Ok(Some(Box::new(Spanned::new(Pre::BinOp(op, t, rhs), span))))
+    }
+
+    fn bitwise(&mut self) -> Result<Option<SPre>, Error> {
+        let mut t = match self.arith()? {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        loop {
+            let op = match self.peek().as_deref() {
+                Some(Tok::BitAnd) => BinOp::BitAnd,
+                Some(Tok::BitOr) => BinOp::BitOr,
+                Some(Tok::BitXor) => BinOp::BitXor,
+                Some(Tok::BitShr) => BinOp::BitShr,
+                Some(Tok::BitShl) => BinOp::BitShl,
+                _ => break,
+            };
+            self.next();
+
+            if self.peek().as_deref() == Some(&Tok::Equals) {
+                self.next();
+                let rhs = self.term()?.ok_or(self.err("expected expression"))?;
+                let span = Span(t.span.0, rhs.span.1);
+                t = Box::new(Spanned::new(Pre::Set(t, Some(op), rhs), span));
+                break;
+            }
+
+            let rhs = self.arith()?.ok_or(self.err("expected expression"))?;
+            let span = Span(t.span.0, rhs.span.1);
+            t = Box::new(Spanned::new(Pre::BinOp(op, t, rhs), span));
+        }
+
+        Ok(Some(t))
     }
 
     fn arith(&mut self) -> Result<Option<SPre>, Error> {

@@ -39,6 +39,13 @@ pub enum BinOp {
     Neq,
     Geq,
     Leq,
+    BitAnd,
+    BitOr,
+    BitXor,
+    BitShr,
+    BitShl,
+    And,
+    Or,
 }
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum BinOpType {
@@ -49,10 +56,19 @@ pub enum BinOpType {
 impl BinOp {
     pub fn ty(self) -> BinOpType {
         match self {
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => BinOpType::Arith,
+            BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::BitShr
+            | BinOp::BitShl => BinOpType::Arith,
             BinOp::Gt | BinOp::Lt | BinOp::Eq | BinOp::Neq | BinOp::Geq | BinOp::Leq => {
                 BinOpType::Comp
             }
+            BinOp::And | BinOp::Or => BinOpType::Logic,
         }
     }
 }
@@ -483,6 +499,15 @@ impl BinOp {
             BinOp::Neq => "!=",
             BinOp::Geq => ">=",
             BinOp::Leq => "<=",
+
+            BinOp::BitAnd => "&",
+            BinOp::BitOr => "|",
+            BinOp::BitXor => "^",
+            BinOp::BitShr => ">>",
+            BinOp::BitShl => "<<",
+
+            BinOp::And => "&&",
+            BinOp::Or => "||",
         }
     }
 }

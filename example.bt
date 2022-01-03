@@ -109,8 +109,10 @@ fn pretty_arr(arr: [i32]) {
         counter += 1;
     }
     for i in arr {
-        // This only affects i, not the array, so nothing happens
-        i += 1;
+        if i > 10 && (i & 1) == 1 {
+            // This only affects i, not the array, so nothing happens
+            i += 1;
+        }
     }
 }
 
