@@ -158,10 +158,13 @@ impl<'b> Cxt<'b> {
         s
     }
 
-    fn create_fn(&mut self, k: RawSym, ty: FnType) -> FnId {
-        let s = self.bindings.add_fn(k);
-        self.fns.add(k, s, ty);
-        s
+    fn create_fn(&mut self, k: Spanned<RawSym>, ty: FnType) -> Result<FnId, TypeError> {
+        if self.fun(*k).is_some() {
+            return Err(TypeError::Duplicate(k.span, *k));
+        }
+        let s = self.bindings.add_fn(*k);
+        self.fns.add(*k, s, ty);
+        Ok(s)
     }
 
     fn create_class(&mut self, k: RawSym, info: ClassInfo) -> TypeId {
@@ -179,6 +182,7 @@ enum TypeError {
     NoMethods(Span, Type),
     NoVariants(Span, Type),
     MissingPattern(Span, Vec<RawSym>),
+    Duplicate(Span, RawSym),
 }
 impl TypeError {
     fn to_error(self, bindings: &Bindings) -> Error {
@@ -222,6 +226,12 @@ impl TypeError {
                 )),
                 span,
             ),
+            TypeError::Duplicate(span, name) => Spanned::new(
+                Doc::start("Duplicate definition of item named '")
+                    .add(bindings.resolve_raw(name))
+                    .add("'"),
+                span,
+            ),
         }
     }
 }
@@ -257,7 +267,7 @@ impl<'b> Cxt<'b> {
                     args.push(t);
                 }
                 let rty = self.elab_type(&f.ret_ty)?;
-                self.create_fn(*f.name, FnType(args, rty));
+                self.create_fn(f.name, FnType(args, rty))?;
                 Ok(())
             }
             PreItem::ExternFn(f) => {
@@ -267,7 +277,7 @@ impl<'b> Cxt<'b> {
                     args.push(t);
                 }
                 let rty = self.elab_type(&f.ret_ty)?;
-                self.create_fn(*f.name, FnType(args, rty));
+                self.create_fn(f.name, FnType(args, rty))?;
                 Ok(())
             }
             PreItem::ExternClass(name, methods) => {
@@ -517,6 +527,20 @@ impl<'b> Cxt<'b> {
                 };
                 let idx = self.check(idx, Type::I32)?;
                 Ok((Term::ArrayIdx(Box::new(arr), Box::new(idx)), ty))
+            }
+            Pre::Set(l, op, x) => {
+                let (l, t) = self.infer(l)?;
+                let l = match l {
+                    Term::Var(s) => LValue::Var(s),
+                    Term::ArrayIdx(b, i) if matches!(&*b, Term::Var(_)) => match *b {
+                        Term::Var(s) => LValue::Idx(s, i),
+                        _ => unreachable!(),
+                    },
+                    _ => todo!("error: not an lvalue"),
+                };
+                let x = self.check(x, t)?;
+
+                Ok((Term::Set(l, *op, Box::new(x)), Type::Unit))
             }
             Pre::Call(f, a) => {
                 let (fid, FnType(atys, rty)) =

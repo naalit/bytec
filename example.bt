@@ -73,6 +73,26 @@ fn test_methods(x: [i32]): i32 {
     a + b
 }
 
+fn fib_mut(n: i32): i32 {
+    let i = 1;
+    let a = 1;
+    let b = 1;
+    while i < n {
+        i += 1;
+        let t = a + b;
+        a = b;
+        b = t;
+    }
+    a
+}
+fn map_plus_one(a: [i32]) {
+    let i = 0;
+    while i < a.len() {
+        a[i] += 1;
+        i += 1;
+    }
+}
+
 fn looper(r: Random) {
     while rand(r) > 2 {
         println("Looping!");

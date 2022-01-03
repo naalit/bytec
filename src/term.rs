@@ -154,6 +154,13 @@ pub enum ArrayMethod {
     Push(Box<Term>),
 }
 
+pub enum LValue {
+    // v = x
+    Var(Sym),
+    // arr[i] = x
+    Idx(Sym, Box<Term>),
+}
+
 pub enum Term {
     Var(Sym),
     Lit(Literal, Type),
@@ -170,6 +177,7 @@ pub enum Term {
     Array(Vec<Term>),
     ArrayIdx(Box<Term>, Box<Term>),
     ArrayMethod(Box<Term>, ArrayMethod),
+    Set(LValue, Option<BinOp>, Box<Term>),
     Match(Box<Term>, Vec<(Option<RawSym>, Term)>),
 }
 pub enum Statement {
@@ -248,6 +256,8 @@ pub enum Pre {
     Array(Vec<SPre>),
     // x[i]
     ArrayIdx(SPre, SPre),
+    // v op= x
+    Set(SPre, Option<BinOp>, SPre),
     // match x { s => t, else => u }
     Match(SPre, Vec<(Spanned<Option<RawSym>>, SPre)>),
 }
@@ -304,21 +314,9 @@ pub enum PreType {
 impl Pre {
     pub fn needs_semicolon(&self) -> bool {
         match self {
-            Pre::Var(_)
-            | Pre::Lit(_, _)
-            | Pre::Call(_, _)
-            | Pre::Method(_, _, _)
-            | Pre::Variant(_, _)
-            | Pre::Break
-            | Pre::Continue
-            | Pre::Return(_)
-            | Pre::Tuple(_)
-            | Pre::TupleIdx(_, _)
-            | Pre::Array(_)
-            | Pre::ArrayIdx(_, _)
-            | Pre::BinOp(_, _, _) => true,
             // These don't need semicolons since they end in a closing brace
             Pre::Block(_, _) | Pre::If(_, _, _) | Pre::Match(_, _) => false,
+            _ => true,
         }
     }
 }
@@ -410,6 +408,7 @@ impl Term {
                 let branches = branches.iter().map(|(s, t)| (*s, t.cloned_(cln))).collect();
                 Term::Match(Box::new(x.cloned_(cln)), branches)
             }
+            Term::Set(l, op, x) => Term::Set(l.cloned_(cln), *op, Box::new(x.cloned_(cln))),
             Term::Break => Term::Break,
             Term::Continue => Term::Continue,
             Term::Return(x) => Term::Return(x.as_ref().map(|x| Box::new(x.cloned_(cln)))),
@@ -434,6 +433,14 @@ impl ArrayMethod {
             ArrayMethod::Len => ArrayMethod::Len,
             ArrayMethod::Pop => ArrayMethod::Pop,
             ArrayMethod::Push(x) => ArrayMethod::Push(Box::new(x.cloned_(cln))),
+        }
+    }
+}
+impl LValue {
+    fn cloned_(&self, cln: &mut Cloner) -> LValue {
+        match self {
+            LValue::Var(x) => LValue::Var(*x),
+            LValue::Idx(a, b) => LValue::Idx(*a, Box::new(b.cloned_(cln))),
         }
     }
 }
@@ -561,6 +568,13 @@ impl Term {
                 .indent()
                 .line()
                 .add('}'),
+            Term::Set(v, op, x) => v
+                .pretty(cxt)
+                .space()
+                .add(op.map_or("", |x| x.repr()))
+                .add("=")
+                .space()
+                .chain(x.pretty(cxt)),
             Term::Break => Doc::keyword("break"),
             Term::Continue => Doc::keyword("continue"),
             Term::Return(None) => Doc::keyword("return"),
@@ -712,6 +726,17 @@ impl Type {
                 ))
                 .add(')'),
             Type::Array(t) => Doc::start('[').chain(t.pretty(cxt)).add(']'),
+        }
+    }
+}
+impl LValue {
+    pub fn pretty(&self, cxt: &Bindings) -> Doc {
+        match self {
+            LValue::Var(x) => Doc::start(cxt.resolve(*x)),
+            LValue::Idx(arr, i) => Doc::start(cxt.resolve(*arr))
+                .add('[')
+                .chain(i.pretty(cxt))
+                .add(']'),
         }
     }
 }

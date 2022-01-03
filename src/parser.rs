@@ -456,6 +456,12 @@ impl<'a> Parser<'a> {
             Some(Tok::Neq) => BinOp::Neq,
             Some(Tok::Geq) => BinOp::Geq,
             Some(Tok::Leq) => BinOp::Leq,
+            Some(Tok::Equals) => {
+                self.next();
+                let rhs = self.term()?.ok_or(self.err("expected expression"))?;
+                let span = Span(t.span.0, rhs.span.1);
+                return Ok(Some(Box::new(Spanned::new(Pre::Set(t, None, rhs), span))));
+            }
             _ => return Ok(Some(t)),
         };
 
@@ -479,8 +485,15 @@ impl<'a> Parser<'a> {
                 Some(Tok::Sub) => BinOp::Sub,
                 _ => break,
             };
-
             self.next();
+
+            if self.peek().as_deref() == Some(&Tok::Equals) {
+                self.next();
+                let rhs = self.term()?.ok_or(self.err("expected expression"))?;
+                let span = Span(t.span.0, rhs.span.1);
+                t = Box::new(Spanned::new(Pre::Set(t, Some(op), rhs), span));
+                break;
+            }
 
             let rhs = self.factor()?.ok_or(self.err("expected expression"))?;
             let span = Span(t.span.0, rhs.span.1);
@@ -502,8 +515,15 @@ impl<'a> Parser<'a> {
                 Some(Tok::Div) => BinOp::Div,
                 _ => break,
             };
-
             self.next();
+
+            if self.peek().as_deref() == Some(&Tok::Equals) {
+                self.next();
+                let rhs = self.term()?.ok_or(self.err("expected expression"))?;
+                let span = Span(t.span.0, rhs.span.1);
+                t = Box::new(Spanned::new(Pre::Set(t, Some(op), rhs), span));
+                break;
+            }
 
             let rhs = self.method()?.ok_or(self.err("expected expression"))?;
             let span = Span(t.span.0, rhs.span.1);

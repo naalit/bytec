@@ -128,9 +128,8 @@ enum JTerm {
 #[derive(Clone, Debug, PartialEq)]
 enum JStmt {
     Let(RawSym, JTy, JVar, Option<JTerm>),
-    Set(JVar, JTerm),
-    IdxSet(JVar, JTerm, JTerm),
-    OpSet(JVar, BinOp, JTerm),
+    Set(JVar, Option<BinOp>, JTerm),
+    IdxSet(JVar, JTerm, Option<BinOp>, JTerm),
     Term(JTerm),
     If(JTerm, Vec<JStmt>, Vec<JStmt>),
     Switch(JBlock, JTerm, Vec<(RawSym, Vec<JStmt>)>, Vec<JStmt>),
@@ -420,14 +419,22 @@ impl JStmt {
                 cxt.names.insert(v.0, (*n, !v.1));
                 format!("{} {} = {};", t.gen(cxt), cxt.name_str(*v), x.gen(cxt))
             }
-            JStmt::Set(v, x) => {
-                format!("{} = {};", cxt.name_str(*v), x.gen(cxt))
+            JStmt::Set(v, op, x) => {
+                format!(
+                    "{} {}= {};",
+                    cxt.name_str(*v),
+                    op.map_or("", |op| op.repr()),
+                    x.gen(cxt)
+                )
             }
-            JStmt::IdxSet(v, idx, x) => {
-                format!("{}[{}] = {};", cxt.name_str(*v), idx.gen(cxt), x.gen(cxt))
-            }
-            JStmt::OpSet(v, op, x) => {
-                format!("{} {}= {};", cxt.name_str(*v), op.repr(), x.gen(cxt))
+            JStmt::IdxSet(v, idx, op, x) => {
+                format!(
+                    "{}[{}] {}= {};",
+                    cxt.name_str(*v),
+                    idx.gen(cxt),
+                    op.map_or("", |op| op.repr()),
+                    x.gen(cxt)
+                )
             }
             JStmt::Term(x) => {
                 let mut s = x.gen(cxt);
@@ -906,6 +913,32 @@ impl Term {
                 let x = x.lower(cxt);
                 x.to_vec().swap_remove(*i)
             }
+            Term::Set(l, op, x) => match l {
+                LValue::Var(v) => {
+                    let v = cxt.var(*v).unwrap();
+                    let x = x.lower(cxt);
+                    for (v, x) in v.into_iter().zip(x) {
+                        cxt.block.push(JStmt::Set(v, *op, x));
+                    }
+                    return JTerms::empty();
+                }
+                LValue::Idx(v, idx) => {
+                    let v = cxt.var(*v).unwrap();
+                    let mut idx = idx.lower(cxt).one();
+                    if !idx.simple() {
+                        // Don't recompute idx every time, store it in a local
+                        let raw = cxt.bindings.raw("$_idx");
+                        let var = cxt.fresh_var(false);
+                        cxt.block.push(JStmt::Let(raw, JTy::I32, var, Some(idx)));
+                        idx = JTerm::Var(var, JTy::I32);
+                    }
+                    let x = x.lower(cxt);
+                    for (v, x) in v.into_iter().zip(x) {
+                        cxt.block.push(JStmt::IdxSet(v, idx.clone(), *op, x));
+                    }
+                    return JTerms::empty();
+                }
+            },
             Term::Array(v) => {
                 let mut v2 = Vec::new();
                 let mut len = 0;
@@ -965,9 +998,9 @@ impl Term {
                         match len {
                             JTerm::Var(v, _) => {
                                 // `a -= 1` is as fast as `a--`, but `a = a - 1` is slower
-                                cxt.block.push(JStmt::OpSet(
+                                cxt.block.push(JStmt::Set(
                                     v,
-                                    BinOp::Sub,
+                                    Some(BinOp::Sub),
                                     JTerm::Lit(JLit::Int(1)),
                                 ));
                                 // return a[len]
@@ -990,8 +1023,11 @@ impl Term {
                     }
                     ArrayMethod::Push(x) => match &len {
                         JTerm::Var(v, _) => {
-                            cxt.block
-                                .push(JStmt::OpSet(*v, BinOp::Add, JTerm::Lit(JLit::Int(1))));
+                            cxt.block.push(JStmt::Set(
+                                *v,
+                                Some(BinOp::Add),
+                                JTerm::Lit(JLit::Int(1)),
+                            ));
                             let x = x.lower(cxt);
                             assert_eq!(x.len(), arrs.len() - 1);
                             // Check if the array needs expanding
@@ -1026,7 +1062,7 @@ impl Term {
                                                 vec![arr.clone(), new_cap],
                                                 arr.ty(),
                                             );
-                                            block.push(JStmt::Set(*var, new));
+                                            block.push(JStmt::Set(*var, None, new));
 
                                             // arr[len-1] = x;
                                             let idx = JTerm::BinOp(
@@ -1034,7 +1070,7 @@ impl Term {
                                                 Box::new(len.clone()),
                                                 Box::new(JTerm::Lit(JLit::Int(1))),
                                             );
-                                            block2.push(JStmt::IdxSet(*var, idx, x));
+                                            block2.push(JStmt::IdxSet(*var, idx, None, x));
                                         }
                                         _ => unreachable!(),
                                     }
@@ -1115,7 +1151,7 @@ impl Term {
                     .collect();
                 for ((var, _, ty), a) in vars.iter().zip(a) {
                     cxt.tys.insert(*var, ty.clone());
-                    cxt.block.push(JStmt::Set(*var, a));
+                    cxt.block.push(JStmt::Set(*var, None, a));
                 }
                 let a = cxt.pop_block();
 
@@ -1123,7 +1159,7 @@ impl Term {
                     cxt.push_block();
                     let b = b.lower(cxt);
                     for ((var, _, _), b) in vars.iter().zip(b) {
-                        cxt.block.push(JStmt::Set(*var, b));
+                        cxt.block.push(JStmt::Set(*var, None, b));
                     }
                     cxt.pop_block()
                 } else {
@@ -1168,7 +1204,7 @@ impl Term {
                         }
                     }
                     for ((var, _, _), t) in vars.as_ref().unwrap().iter().zip(t) {
-                        cxt.block.push(JStmt::Set(*var, t));
+                        cxt.block.push(JStmt::Set(*var, None, t));
                     }
                     let block = cxt.pop_block();
 
