@@ -44,14 +44,10 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
     let mut mappings = Vec::new();
     let mut java = Vec::new();
 
-    let predefined = vec![(
-        Predef::ArrayCopy,
-        "java.util.Arrays.copyOf",
-        JTy::Array(Box::new(JTy::I32)),
-    )];
+    let predefined = vec![(Predef::ArrayCopy, "System.arraycopy", JTys::empty())];
     for (d, s, t) in predefined {
         let fn_id = cxt.fresh_fn();
-        cxt.fn_ret_tys.insert(fn_id, JTys::One(t));
+        cxt.fn_ret_tys.insert(fn_id, t);
         let raw = cxt.bindings.raw(s);
         mappings.push((fn_id.0, lpath(Spanned::new(raw, Span(0, 0))), false));
         cxt.predefs.push((d, fn_id));
@@ -172,6 +168,7 @@ enum JTerm {
     BinOp(BinOp, Box<JTerm>, Box<JTerm>),
     Variant(JClass, RawSym),
     Array(Vec<JTerm>, JTy),
+    ArrayNew(Box<JTerm>, JTy),
     Index(Box<JTerm>, Box<JTerm>, JTy),
     InlineJava(RawSym, JTy),
 }
@@ -461,6 +458,13 @@ impl JTerm {
                 }
                 buf.push('}');
                 buf
+            }
+            JTerm::ArrayNew(len, t) => {
+                let t = match t {
+                    JTy::Array(t) => &**t,
+                    _ => unreachable!(),
+                };
+                format!("new {}[{}]", t.gen(cxt), len.gen(cxt))
             }
             JTerm::Index(arr, i, _) => {
                 format!("{}[{}]", arr.gen(cxt), i.gen(cxt))
@@ -913,6 +917,7 @@ impl JTerm {
             | JTerm::Index(_, _, _)
             | JTerm::Prop(_, _, _)
             | JTerm::InlineJava(_, _)
+            | JTerm::ArrayNew(_, _)
             | JTerm::Array(_, _) => false,
         }
     }
@@ -930,6 +935,7 @@ impl JTerm {
             JTerm::Prop(_, _, t) => t.clone(),
             JTerm::InlineJava(_, t) => t.clone(),
             JTerm::Array(_, t) => t.clone(),
+            JTerm::ArrayNew(_, t) => t.clone(),
             JTerm::Index(_, _, t) => t.clone(),
             JTerm::BinOp(op, a, _) => match op.ty() {
                 BinOpType::Comp => JTy::Bool,
@@ -1123,25 +1129,50 @@ impl Term {
                                 for (arr, x) in arrs.clone().into_iter().zip(x) {
                                     match &arr {
                                         JTerm::Var(var, _) => {
-                                            // arr = Arrays.copyOf(arr, arr.length * 2);
-                                            let copy_fn = cxt.predef(Predef::ArrayCopy);
+                                            // let old = arr;
+                                            // arr = new T[old.length * 2];
+                                            // System.arraycopy(old, 0, arr, 0, old.length);
+
+                                            let old = cxt.fresh_var(false);
+                                            let raw = cxt.bindings.raw("$_old_array");
+                                            // cxt.vars.push((cxt.bindings.create(lpath(Spanned::hack(raw)), false), JVars::One(old)));
+                                            block.push(JStmt::Let(
+                                                raw,
+                                                arr.ty(),
+                                                old,
+                                                Some(arr.clone()),
+                                            ));
+
                                             let cap = JTerm::Prop(
-                                                Box::new(arr.clone()),
+                                                Box::new(JTerm::Var(old, arr.ty())),
                                                 cxt.bindings.raw("length"),
                                                 JTy::I32,
                                             );
                                             let new_cap = JTerm::BinOp(
                                                 BinOp::Mul,
-                                                Box::new(cap),
+                                                Box::new(cap.clone()),
                                                 Box::new(JTerm::Lit(JLit::Int(2))),
                                             );
-                                            let new = JTerm::Call(
+                                            block.push(JStmt::Set(
+                                                *var,
+                                                None,
+                                                JTerm::ArrayNew(Box::new(new_cap), arr.ty()),
+                                            ));
+
+                                            let copy_fn = cxt.predef(Predef::ArrayCopy);
+                                            let call = JStmt::MultiCall(
                                                 None,
                                                 copy_fn,
-                                                vec![arr.clone(), new_cap],
-                                                arr.ty(),
+                                                vec![
+                                                    JTerm::Var(old, arr.ty()),
+                                                    JTerm::Lit(JLit::Int(0)),
+                                                    arr.clone(),
+                                                    JTerm::Lit(JLit::Int(0)),
+                                                    cap,
+                                                ],
+                                                Vec::new(),
                                             );
-                                            block.push(JStmt::Set(*var, None, new));
+                                            block.push(call);
 
                                             // arr[len-1] = x;
                                             let idx = JTerm::BinOp(
