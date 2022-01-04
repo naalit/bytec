@@ -21,6 +21,7 @@ pub fn declare_mod_p1(
         vars,
         fns,
         classes,
+        local_classes,
         extra_items,
         ..
     } = cxt;
@@ -30,6 +31,7 @@ pub fn declare_mod_p1(
             vars: vars.symbols,
             fns: fns.symbols,
             classes,
+            local_classes,
         },
         extra_items,
     ))
@@ -63,6 +65,7 @@ pub fn declare_mod_p2(
         vars,
         fns,
         classes,
+        local_classes,
         extra_items,
         ..
     } = cxt;
@@ -72,6 +75,51 @@ pub fn declare_mod_p2(
             vars: vars.symbols,
             fns: fns.symbols,
             classes,
+            local_classes,
+        },
+        extra_items,
+    ))
+}
+
+pub fn declare_mod_p3(
+    m: &[PreItem],
+    t: ModType,
+    mods: &[(RawSym, ModType)],
+    extra_items: Vec<Item>,
+    bindings: &mut Bindings,
+    file_id: FileId,
+) -> Result<(ModType, Vec<Item>), Error> {
+    let mut cxt = Cxt::from_type(
+        t,
+        mods.into_iter().cloned().collect(),
+        extra_items,
+        bindings,
+        file_id,
+    );
+
+    // Declare
+    for i in m {
+        match cxt.declare_item_p3(i) {
+            Ok(()) => (),
+            Err(e) => return Err(e.to_error(bindings)),
+        }
+    }
+
+    let Cxt {
+        vars,
+        fns,
+        classes,
+        local_classes,
+        extra_items,
+        ..
+    } = cxt;
+
+    Ok((
+        ModType {
+            vars: vars.symbols,
+            fns: fns.symbols,
+            classes,
+            local_classes,
         },
         extra_items,
     ))
@@ -98,7 +146,9 @@ pub fn elab_mod(
     for i in m {
         match cxt.check_item(i) {
             Ok(x) => {
-                v.push(x);
+                for x in x {
+                    v.push(x);
+                }
             }
             Err(e) => return Err(e.to_error(bindings)),
         }
@@ -158,6 +208,7 @@ impl<S: Copy, T> Env<S, T> {
 struct Cxt<'b> {
     vars: Env<Sym, Type>,
     fns: Env<FnId, FnType>,
+    local_classes: HashMap<RawSym, TypeId>,
     classes: HashMap<RawPath, (TypeId, ClassInfo)>,
     ret_tys: Vec<Option<Type>>,
     bindings: &'b mut Bindings,
@@ -170,6 +221,7 @@ impl<'b> Cxt<'b> {
         Cxt {
             vars: Env::new(),
             fns: Env::new(),
+            local_classes: HashMap::new(),
             classes: HashMap::new(),
             ret_tys: Vec::new(),
             bindings,
@@ -180,7 +232,12 @@ impl<'b> Cxt<'b> {
     }
 
     fn from_type(
-        ModType { vars, fns, classes }: ModType,
+        ModType {
+            vars,
+            fns,
+            local_classes,
+            classes,
+        }: ModType,
         mods: HashMap<RawSym, ModType>,
         extra_items: Vec<Item>,
         bindings: &'b mut Bindings,
@@ -189,6 +246,7 @@ impl<'b> Cxt<'b> {
         Cxt {
             vars: Env::from_vec(vars),
             fns: Env::from_vec(fns),
+            local_classes,
             classes,
             ret_tys: Vec::new(),
             bindings,
@@ -229,6 +287,9 @@ impl<'b> Cxt<'b> {
     fn class(&self, s: &RawPath) -> Option<TypeId> {
         let mut s = s.clone();
         if s.len() == 1 {
+            if let Some(t) = self.local_classes.get(&*s.stem()) {
+                return Some(*t);
+            }
             s = self.path(s.1);
         }
         if let Some(x) = self.classes.get(&s).map(|(x, _)| x) {
@@ -462,6 +523,24 @@ impl<'b> Cxt<'b> {
                 self.create_class(name.clone(), ClassInfo::new_enum(variants.clone()));
                 Ok(())
             }
+            PreItem::Use(path, wildcard) => {
+                // Only add types
+                if !*wildcard {
+                    if let Some(s) = self.class(path) {
+                        self.local_classes.insert(*path.stem(), s);
+                    }
+                } else {
+                    if path.len() == 1 {
+                        if let Some(m) = self.module(*path.stem()).cloned() {
+                            for (s, (t, _)) in m.classes {
+                                self.local_classes.insert(*s.stem(), t);
+                            }
+                        }
+                    }
+                }
+
+                Ok(())
+            }
         }
     }
 
@@ -499,14 +578,87 @@ impl<'b> Cxt<'b> {
                 self.create(*name, ty, *public);
                 Ok(())
             }
-            PreItem::ExternClass(name, methods) => Ok(()),
-            PreItem::Enum(name, variants, _ext) => Ok(()),
+            PreItem::ExternClass(_, _) => Ok(()),
+            PreItem::Enum(_, _, _) => Ok(()),
+            PreItem::Use(path, wildcard) => {
+                // Add remaining types
+                if !*wildcard {
+                    if let Some(t) = self.class(path) {
+                        // probably done in p1, but might not due to declaration order
+                        if !self.local_classes.contains_key(&*path.stem()) {
+                            self.local_classes.insert(*path.stem(), t);
+                        }
+                    }
+                } else {
+                    if path.len() == 1 {
+                        if let Some(m) = self.module(*path.stem()).cloned() {
+                            for (s, (t, _)) in m.classes {
+                                if !self.local_classes.contains_key(&*s.stem()) {
+                                    self.local_classes.insert(*s.stem(), t);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Ok(())
+            }
         }
     }
 
-    fn check_item(&mut self, item: &PreItem) -> Result<Item, TypeError> {
+    fn declare_item_p3(&mut self, item: &PreItem) -> Result<(), TypeError> {
         match item {
-            PreItem::InlineJava(s) => Ok(Item::InlineJava(*s)),
+            PreItem::Use(path, wildcard) => {
+                // Add everything but types
+                if !*wildcard {
+                    if let Some((s, t)) = self.var(path) {
+                        let t = t.clone();
+                        self.vars.add(*path.stem(), s, t);
+                    } else if let Some((s, t)) = self.fun(path) {
+                        let t = t.clone();
+                        self.fns.add(*path.stem(), s, t);
+                    } else if let Some(_) = self.class(path) {
+                        // done in p1 and p2
+                    } else {
+                        return Err(TypeError::NotFound(path.clone()));
+                    }
+                } else {
+                    if path.len() == 1 {
+                        if let Some(m) = self.module(*path.stem()).cloned() {
+                            for (r, s, t) in m.vars {
+                                self.vars.add(r, s, t);
+                            }
+                            for (r, s, t) in m.fns {
+                                self.fns.add(r, s, t);
+                            }
+                            // classes done in p1 and p2
+                            return Ok(());
+                        }
+                    }
+                    if let Some(c) = self.class(path) {
+                        let info = self.class_info(c);
+                        if let Some(v) = info.variants.clone() {
+                            let ty = Type::Class(c);
+                            for i in v {
+                                self.create(Spanned::new(i, path.span()), ty.clone(), false);
+                            }
+                        } else {
+                            return Err(TypeError::NoVariants(path.span(), Type::Class(c)));
+                        }
+                    } else {
+                        return Err(TypeError::NotFound(path.clone()));
+                    }
+                }
+
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn check_item(&mut self, item: &PreItem) -> Result<Vec<Item>, TypeError> {
+        match item {
+            PreItem::InlineJava(s) => Ok(vec![Item::InlineJava(*s)]),
             PreItem::Fn(f) => {
                 let PreFn {
                     name,
@@ -527,13 +679,13 @@ impl<'b> Cxt<'b> {
                 let body = self.check(body, rty.clone())?;
                 self.pop();
 
-                Ok(Item::Fn(Fn {
+                Ok(vec![Item::Fn(Fn {
                     id: fid,
                     ret_ty: rty,
                     args: args2,
                     public: *public,
                     body,
-                }))
+                })])
             }
             PreItem::ExternFn(f) => {
                 let PreEFn {
@@ -554,25 +706,48 @@ impl<'b> Cxt<'b> {
                 // let body = self.check(body, rty.clone())?;
                 self.pop();
 
-                Ok(Item::ExternFn(ExternFn {
+                Ok(vec![Item::ExternFn(ExternFn {
                     id: fid,
                     ret_ty: rty,
                     args: args2,
                     mapping: *mapping,
-                }))
+                })])
             }
             PreItem::Let(name, _, x, _) => {
                 let (s, t) = self.var(&lpath(*name)).unwrap();
                 let t = t.clone();
                 let x = self.check(x, t.clone())?;
-                Ok(Item::Let(s, t, x))
+                Ok(vec![Item::Let(s, t, x)])
             }
-            PreItem::ExternClass(s, _) => Ok(Item::ExternClass(self.class(s).unwrap())),
-            PreItem::Enum(name, variants, ext) => Ok(Item::Enum(
+            PreItem::ExternClass(s, _) => Ok(vec![Item::ExternClass(self.class(s).unwrap())]),
+            PreItem::Enum(name, variants, ext) => Ok(vec![Item::Enum(
                 self.class(name).unwrap(),
                 variants.clone(),
                 *ext,
-            )),
+            )]),
+            PreItem::Use(path, wildcard) => {
+                if *wildcard {
+                    if path.len() == 1 {
+                        if let Some(_) = self.module(*path.stem()).cloned() {
+                            return Ok(Vec::new());
+                        }
+                    }
+                    if let Some(c) = self.class(path) {
+                        let info = self.class_info(c);
+                        if let Some(v) = info.variants.clone() {
+                            let ty = Type::Class(c);
+                            let mut block = Vec::new();
+                            for i in v {
+                                let (v, _) = self.var(&lpath(Spanned::hack(i))).unwrap();
+                                block.push(Item::Let(v, ty.clone(), Term::Variant(c, i)));
+                            }
+                            return Ok(block);
+                        }
+                    }
+                }
+
+                Ok(Vec::new())
+            }
         }
     }
 
@@ -584,12 +759,14 @@ impl<'b> Cxt<'b> {
                 (PreItem::Fn(_)
                 | PreItem::ExternFn(_)
                 | PreItem::ExternClass(_, _)
-                | PreItem::Enum(_, _, _)),
+                | PreItem::Enum(_, _, _)
+                | PreItem::Use(_, _)),
             ) => {
                 self.declare_item_p1(item)?;
                 self.declare_item_p2(item)?;
-                let item = self.check_item(item)?;
-                self.extra_items.push(item);
+                for item in self.check_item(item)? {
+                    self.extra_items.push(item);
+                }
                 Ok(None)
             }
             PreStatement::Item(PreItem::InlineJava(s)) => Ok(Some(Statement::InlineJava(*s))),
@@ -847,7 +1024,7 @@ impl<'b> Cxt<'b> {
 
                 let mut v2 = Vec::new();
                 for i in v {
-                    if let Some(x) = self.check_stmt(i)? {
+                    for x in self.check_stmt(i)? {
                         v2.push(x);
                     }
                 }

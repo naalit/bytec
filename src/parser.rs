@@ -60,6 +60,8 @@ enum Tok<'a> {
     For,
     // in
     In,
+    // use
+    Use,
 
     // +
     Add,
@@ -179,6 +181,7 @@ impl<'a> Lexer<'a> {
             "return" => Tok::Return,
             "for" => Tok::For,
             "in" => Tok::In,
+            "use" => Tok::Use,
             _ => Tok::Name(name),
         };
 
@@ -1007,7 +1010,7 @@ impl<'a> Parser<'a> {
                     Ok(Some(PreType::Tuple(v)))
                 }
             }
-            Some(Tok::Name(n)) => {
+            Some(Tok::Name(_)) => {
                 let path = self.path().unwrap();
                 Ok(Some(PreType::Class(path)))
             }
@@ -1230,6 +1233,27 @@ impl<'a> Parser<'a> {
                         public,
                     })))
                 }
+            }
+            Some(Tok::Use) => {
+                self.next();
+                let name = self.ident().ok_or(self.err("expected name"))?;
+                let mut path = vec![name];
+                let mut wild = false;
+                while self.peek().as_deref() == Some(&Tok::DoubleColon) {
+                    self.next();
+                    if let Some(name) = self.ident() {
+                        path.push(name);
+                    } else {
+                        self.expect(Tok::Mul, "'*'")?;
+                        wild = true;
+                        break;
+                    }
+                }
+                self.expect(Tok::Semicolon, "';'")?;
+                let end = path.pop().unwrap();
+                let path = RawPath(path, end);
+
+                Ok(Some(PreItem::Use(path, wild)))
             }
             _ => Ok(None),
         }

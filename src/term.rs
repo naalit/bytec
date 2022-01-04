@@ -201,6 +201,7 @@ pub struct ModType {
     pub vars: Vec<(RawSym, Sym, Type)>,
     pub fns: Vec<(RawSym, FnId, FnType)>,
     pub classes: HashMap<RawPath, (TypeId, ClassInfo)>,
+    pub local_classes: HashMap<RawSym, TypeId>,
 }
 
 #[derive(Debug, Clone)]
@@ -400,6 +401,8 @@ pub enum PreItem {
     ExternClass(RawPath, Vec<PreEFn>),
     Enum(RawPath, Vec<RawSym>, bool),
     Let(Spanned<RawSym>, Option<PreType>, SPre, bool),
+    // use a::b; the bool is true if it's a wildcard a::b::*
+    Use(RawPath, bool),
 }
 
 #[derive(Clone, Debug, PartialEq)]

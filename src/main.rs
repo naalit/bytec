@@ -104,9 +104,23 @@ fn main() {
         mods2.push((file_id.1, t.clone()));
         p2.push((v, t, items, file_id, input_path));
     }
-    let mut elabed = Vec::new();
+    let mut p3 = Vec::new();
+    let mut mods3 = Vec::new();
     for (v, t, items, file_id, input_path) in p2 {
-        let v = match crate::elaborate::elab_mod(&v, t, &mods2, items, &mut bindings, file_id) {
+        let (t, items) =
+            match crate::elaborate::declare_mod_p3(&v, t, &mods2, items, &mut bindings, file_id) {
+                Ok(x) => x,
+                Err(x) => {
+                    x.emit(term::Severity::Error, file_id);
+                    continue;
+                }
+            };
+        mods3.push((file_id.1, t.clone()));
+        p3.push((v, t, items, file_id, input_path));
+    }
+    let mut elabed = Vec::new();
+    for (v, t, items, file_id, input_path) in p3 {
+        let v = match crate::elaborate::elab_mod(&v, t, &mods3, items, &mut bindings, file_id) {
             Ok(v) => v,
             Err(x) => {
                 x.emit(term::Severity::Error, file_id);

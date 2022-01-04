@@ -7,15 +7,18 @@ extern {
 
 extern fn println(s: str) = "out.println";
 
+use Lib::Bool;
+use Bool::*;
+
 // enum Bool {
 //     True,
 //     False,
 // }
-fn not(b: Lib::Bool): Lib::Bool = match b {
-    True => Lib::Bool::False,
-    False => Lib::Bool::True,
+fn not(b: Bool): Bool = match b {
+    True => False,
+    False => True,
 };
-fn to_bool(b: Lib::Bool): bool = match b {
+fn to_bool(b: Bool): bool = match b {
     True => true,
     False => false,
 };
@@ -116,9 +119,10 @@ fn pretty_arr(arr: [i32]) {
     }
 }
 
+use Lib::*;
 fn stuff() {
-    Lib::add_arr(3);
-    for i in Lib::arr {
+    add_arr(3);
+    for i in arr {
         println("entry");
     }
 }
