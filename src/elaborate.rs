@@ -446,7 +446,7 @@ enum TypeError {
     MissingPattern(Span, Vec<RawSym>),
     Duplicate(Span, RawSym),
     NotArray(Span, Type),
-    NotTuple(Span, Type),
+    NoMembers(Span, Type),
     TupleOutOfBounds(Span, Type, usize),
     NotLValue(Span, Term),
 }
@@ -502,8 +502,10 @@ impl TypeError {
                 Doc::start("Expected an array, got value of type ").chain(t.pretty(bindings)),
                 span,
             ),
-            TypeError::NotTuple(span, t) => Spanned::new(
-                Doc::start("Expected a tuple, got value of type ").chain(t.pretty(bindings)),
+            TypeError::NoMembers(span, t) => Spanned::new(
+                Doc::start("Value of type ")
+                    .chain(t.pretty(bindings))
+                    .add(" doesn't have members"),
                 span,
             ),
             TypeError::TupleOutOfBounds(span, t, i) => Spanned::new(
@@ -1035,7 +1037,7 @@ impl<'b> Cxt<'b> {
                             return Err(TypeError::TupleOutOfBounds(pre.span, Type::Tuple(v), *i));
                         }
                     }
-                    t => return Err(TypeError::NotTuple(px.span, t)),
+                    t => return Err(TypeError::NoMembers(px.span, t)),
                 };
                 Ok((Term::TupleIdx(Box::new(x), *i), t))
             }
@@ -1079,7 +1081,7 @@ impl<'b> Cxt<'b> {
                             Err(TypeError::NotFound(lpath(*m)))
                         }
                     }
-                    t => Err(TypeError::NotTuple(px.span, t)),
+                    t => Err(TypeError::NoMembers(px.span, t)),
                 }
             }
             Pre::Set(pl, op, x) => {

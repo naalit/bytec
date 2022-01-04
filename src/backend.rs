@@ -1468,6 +1468,7 @@ impl Statement {
 
                         let v = cxt.fresh_var(cxt.bindings.public(*s));
                         cxt.tys.insert(v, JTy::I32);
+                        cxt.vars.push((*s, JVars::One(v)));
 
                         let k = cxt.fresh_block();
                         cxt.push_loop(k);
