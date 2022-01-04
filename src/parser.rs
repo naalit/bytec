@@ -506,14 +506,6 @@ impl<'a> Parser<'a> {
     }
 
     fn term(&mut self) -> Result<Option<SPre>, Error> {
-        let not = if self.peek().as_deref() == Some(&Tok::Not) {
-            let start = self.lexer.pos;
-            self.next();
-            Some(start)
-        } else {
-            None
-        };
-
         let t = match self.logic()? {
             Some(t) => t,
             None => return Ok(None),
@@ -526,14 +518,7 @@ impl<'a> Parser<'a> {
             return Ok(Some(Box::new(Spanned::new(Pre::Set(t, None, rhs), span))));
         }
 
-        if let Some(start) = not {
-            Ok(Some(Box::new(Spanned::new(
-                Pre::Not(t),
-                Span(start, self.lexer.pos),
-            ))))
-        } else {
-            Ok(Some(t))
-        }
+        Ok(Some(t))
     }
 
     fn logic(&mut self) -> Result<Option<SPre>, Error> {
@@ -684,6 +669,14 @@ impl<'a> Parser<'a> {
     }
 
     fn method(&mut self) -> Result<Option<SPre>, Error> {
+        let not = if self.peek().as_deref() == Some(&Tok::Not) {
+            let start = self.lexer.pos;
+            self.next();
+            Some(start)
+        } else {
+            None
+        };
+
         let mut t = match self.atom()? {
             Some(t) => t,
             None => return Ok(None),
@@ -721,7 +714,14 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(Some(t))
+        if let Some(start) = not {
+            Ok(Some(Box::new(Spanned::new(
+                Pre::Not(t),
+                Span(start, self.lexer.pos),
+            ))))
+        } else {
+            Ok(Some(t))
+        }
     }
 
     fn call_args(&mut self) -> Result<Vec<SPre>, Error> {
