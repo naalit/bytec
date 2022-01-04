@@ -489,7 +489,14 @@ impl<'b> Cxt<'b> {
             PreItem::Fn(_) => Ok(()),
             PreItem::ExternFn(_) => Ok(()),
             PreItem::Let(_, _, _, _) => Ok(()),
-            PreItem::ExternClass(name, methods, members, constructor) => {
+            PreItem::Class {
+                path,
+                methods,
+                members,
+                constructor,
+                variants,
+                ext,
+            } => {
                 let methods = methods
                     .iter()
                     .map(|f| {
@@ -528,13 +535,14 @@ impl<'b> Cxt<'b> {
                     .map(|x| x.iter().map(|x| self.elab_type(x)).collect())
                     .transpose()?;
                 self.create_class(
-                    name.clone(),
-                    ClassInfo::new_class(methods, members, constructor),
+                    path.clone(),
+                    ClassInfo {
+                        methods,
+                        members,
+                        constructor,
+                        variants: variants.clone(),
+                    },
                 );
-                Ok(())
-            }
-            PreItem::Enum(name, variants, _ext) => {
-                self.create_class(name.clone(), ClassInfo::new_enum(variants.clone()));
                 Ok(())
             }
             PreItem::Use(path, wildcard) => {
@@ -592,8 +600,7 @@ impl<'b> Cxt<'b> {
                 self.create(*name, ty, *public);
                 Ok(())
             }
-            PreItem::ExternClass(_, _, _, _) => Ok(()),
-            PreItem::Enum(_, _, _) => Ok(()),
+            PreItem::Class { .. } => Ok(()),
             PreItem::Use(path, wildcard) => {
                 // Add remaining types
                 if !*wildcard {
@@ -733,9 +740,18 @@ impl<'b> Cxt<'b> {
                 let x = self.check(x, t.clone())?;
                 Ok(vec![Item::Let(s, t, x)])
             }
-            PreItem::ExternClass(s, _, _, _) => Ok(vec![Item::ExternClass(self.class(s).unwrap())]),
-            PreItem::Enum(name, variants, ext) => Ok(vec![Item::Enum(
-                self.class(name).unwrap(),
+            PreItem::Class {
+                path,
+                variants: None,
+                ..
+            } => Ok(vec![Item::ExternClass(self.class(path).unwrap())]),
+            PreItem::Class {
+                path,
+                variants: Some(variants),
+                ext,
+                ..
+            } => Ok(vec![Item::Enum(
+                self.class(path).unwrap(),
                 variants.clone(),
                 *ext,
             )]),
@@ -772,8 +788,7 @@ impl<'b> Cxt<'b> {
                 @
                 (PreItem::Fn(_)
                 | PreItem::ExternFn(_)
-                | PreItem::ExternClass(_, _, _, _)
-                | PreItem::Enum(_, _, _)
+                | PreItem::Class { .. }
                 | PreItem::Use(_, _)),
             ) => {
                 self.declare_item_p1(item)?;

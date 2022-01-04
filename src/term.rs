@@ -414,13 +414,14 @@ pub enum PreItem {
     Fn(PreFn),
     ExternFn(PreEFn),
     InlineJava(RawSym),
-    ExternClass(
-        RawPath,
-        Vec<PreEFn>,
-        Vec<(RawSym, PreType)>,
-        Option<Vec<PreType>>,
-    ),
-    Enum(RawPath, Vec<RawSym>, bool),
+    Class {
+        ext: bool,
+        path: RawPath,
+        variants: Option<Vec<RawSym>>,
+        methods: Vec<PreEFn>,
+        members: Vec<(RawSym, PreType)>,
+        constructor: Option<Vec<PreType>>,
+    },
     Let(Spanned<RawSym>, Option<PreType>, SPre, bool),
     // use a::b; the bool is true if it's a wildcard a::b::*
     Use(RawPath, bool),

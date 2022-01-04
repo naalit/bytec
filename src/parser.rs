@@ -1093,112 +1093,136 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
+        let mut methods = Vec::new();
+        let mut members = Vec::new();
+        if self.peek().as_deref() == Some(&Tok::Semicolon) {
+            self.next();
+            if ext {
+                let (methods2, members2, cons) = self.class_members()?;
+                if cons.is_some() {
+                    return Err(self.err("enum cannot have a constructor"));
+                }
+                methods = methods2;
+                members = members2;
+            }
+        }
         self.expect(Tok::CloseBrace, "closing '}'")?;
 
-        Ok(PreItem::Enum(name, v, ext))
+        Ok(PreItem::Class {
+            path: name,
+            methods,
+            members,
+            variants: Some(v),
+            ext,
+            constructor: None,
+        })
     }
 
-    fn class(&mut self) -> Result<Option<PreItem>, Error> {
-            let name = self.path().ok_or(self.err("expected class name"))?;
+    fn class_members(
+        &mut self,
+    ) -> Result<(Vec<PreEFn>, Vec<(RawSym, PreType)>, Option<Vec<PreType>>), Error> {
+        let mut methods = Vec::new();
+        let mut members = Vec::new();
+        let mut constructor = None;
+
+        while *self.peek().ok_or(self.err("expected closing '}'"))? != Tok::CloseBrace {
             match self.peek().as_deref() {
-                Some(Tok::Semicolon) => {
-                    self.next();
-                    Ok(Some(PreItem::ExternClass(
-                        name,
-                        Vec::new(),
-                        Vec::new(),
-                        None,
-                    )))
-                }
-                Some(Tok::OpenBrace) => {
-                    self.next();
-                    let mut methods = Vec::new();
-                    let mut members = Vec::new();
-                    let mut constructor = None;
-
-                    while *self.peek().ok_or(self.err("expected closing '}'"))?
-                        != Tok::CloseBrace
-                    {
-                        match self.peek().as_deref() {
-                            Some(Tok::Constructor) => {
-                                if constructor.is_some() {
-                                    return Err(self.err("duplicate constructor declaration"));
-                                }
-                                self.next();
-
-                                self.expect(Tok::OpenParen, "'('")?;
-                                let mut args = Vec::new();
-                                while self.peek().as_deref() != Some(&Tok::CloseParen) {
-                                    let _name = self
-                                        .ident()
-                                        .ok_or(self.err("expected argument name or ')'"))?;
-                                    self.expect(Tok::Colon, "':'")?;
-
-                                    let t =
-                                        self.ty()?.ok_or(self.err("expected argument type"))?;
-                                    args.push(t);
-                                    match self.peek().as_deref() {
-                                        Some(Tok::Comma) => {
-                                            self.next();
-                                        }
-                                        Some(Tok::CloseParen) => (),
-                                        _ => return Err(self.err("expected ',' or ')'")),
-                                    }
-                                }
-                                self.expect(Tok::CloseParen, "closing ')'")?;
-                                self.expect(Tok::Semicolon, "';'")?;
-                                constructor = Some(args);
-                            }
-                            Some(Tok::Let) => {
-                                self.next();
-                                let name = self.ident().ok_or(self.err("expected name"))?;
-                                self.expect(Tok::Colon, "':'")?;
-                                let ty = self.ty()?.ok_or(self.err("expected type"))?;
-                                self.expect(Tok::Semicolon, "';'")?;
-                                members.push((*name, ty));
-                            }
-                            Some(Tok::Fn) => {
-                                self.next();
-                                let (name, args, ret_ty) = self.prototype()?;
-                                let mapping =
-                                    if *self.peek().ok_or(self.err("expected closing '}'"))?
-                                        == Tok::Equals
-                                    {
-                                        self.next();
-                                        if let Some(Tok::LitS(s)) = self.peek().as_deref() {
-                                            self.next();
-                                            self.bindings.raw(s)
-                                        } else {
-                                            return Err(self.err(
-                                                "expected Java method name as string literal",
-                                            ));
-                                        }
-                                    } else {
-                                        *name
-                                    };
-                                self.expect(Tok::Semicolon, "';'")?;
-                                let f = PreEFn {
-                                    name,
-                                    ret_ty,
-                                    args,
-                                    mapping,
-                                };
-                                methods.push(f);
-                            }
-                            _ => return Err(self.err("expected item or closing '}'")),
-                        }
+                Some(Tok::Constructor) => {
+                    if constructor.is_some() {
+                        return Err(self.err("duplicate constructor declaration"));
                     }
                     self.next();
 
-                    Ok(Some(PreItem::ExternClass(
-                        name,
-                        methods,
-                        members,
-                        constructor,
-                    )))
+                    self.expect(Tok::OpenParen, "'('")?;
+                    let mut args = Vec::new();
+                    while self.peek().as_deref() != Some(&Tok::CloseParen) {
+                        let _name = self
+                            .ident()
+                            .ok_or(self.err("expected argument name or ')'"))?;
+                        self.expect(Tok::Colon, "':'")?;
+
+                        let t = self.ty()?.ok_or(self.err("expected argument type"))?;
+                        args.push(t);
+                        match self.peek().as_deref() {
+                            Some(Tok::Comma) => {
+                                self.next();
+                            }
+                            Some(Tok::CloseParen) => (),
+                            _ => return Err(self.err("expected ',' or ')'")),
+                        }
+                    }
+                    self.expect(Tok::CloseParen, "closing ')'")?;
+                    self.expect(Tok::Semicolon, "';'")?;
+                    constructor = Some(args);
                 }
-                _ => return Err(self.err("expected ';' or '{'")),
+                Some(Tok::Let) => {
+                    self.next();
+                    let name = self.ident().ok_or(self.err("expected name"))?;
+                    self.expect(Tok::Colon, "':'")?;
+                    let ty = self.ty()?.ok_or(self.err("expected type"))?;
+                    self.expect(Tok::Semicolon, "';'")?;
+                    members.push((*name, ty));
+                }
+                Some(Tok::Fn) => {
+                    self.next();
+                    let (name, args, ret_ty) = self.prototype()?;
+                    let mapping =
+                        if *self.peek().ok_or(self.err("expected closing '}'"))? == Tok::Equals {
+                            self.next();
+                            if let Some(Tok::LitS(s)) = self.peek().as_deref() {
+                                self.next();
+                                self.bindings.raw(s)
+                            } else {
+                                return Err(self.err("expected Java method name as string literal"));
+                            }
+                        } else {
+                            *name
+                        };
+                    self.expect(Tok::Semicolon, "';'")?;
+                    let f = PreEFn {
+                        name,
+                        ret_ty,
+                        args,
+                        mapping,
+                    };
+                    methods.push(f);
+                }
+                _ => return Err(self.err("expected item or closing '}'")),
             }
+        }
+        Ok((methods, members, constructor))
+    }
+
+    fn class(&mut self) -> Result<Option<PreItem>, Error> {
+        let path = self.path().ok_or(self.err("expected class name"))?;
+        match self.peek().as_deref() {
+            Some(Tok::Semicolon) => {
+                self.next();
+                Ok(Some(PreItem::Class {
+                    ext: true,
+                    path,
+                    variants: None,
+                    methods: Vec::new(),
+                    members: Vec::new(),
+                    constructor: None,
+                }))
+            }
+            Some(Tok::OpenBrace) => {
+                self.next();
+                let (methods, members, constructor) = self.class_members()?;
+                self.expect(Tok::CloseBrace, "'}'")?;
+
+                Ok(Some(PreItem::Class {
+                    path,
+                    methods,
+                    members,
+                    constructor,
+                    ext: true,
+                    variants: None,
+                }))
+            }
+            _ => return Err(self.err("expected ';' or '{'")),
+        }
     }
 
     fn item(&mut self) -> Result<Option<PreItem>, Error> {

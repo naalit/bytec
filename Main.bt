@@ -128,14 +128,14 @@ fn stuff() {
     }
 }
 
-// class Test {
-//     constructor(x: i32);
+// extern enum Test {
+//     One, Two;
 //     let field: str;
 //     fn getField(): str;
 // }
 
 fn looper(r: Lib::Random) {
-    // let t = Test(12);
+    // let t = Test::One;
     // println(t.field + t.getField());
     while rand(r) > 2 {
         println("Looping!");
