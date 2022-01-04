@@ -236,7 +236,7 @@ struct JFn {
 enum JItem {
     Fn(JFn),
     Enum(JClass, Vec<RawSym>),
-    Let(JVar, JTy, JTerm),
+    Let(JVar, JTy, Option<JTerm>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -833,7 +833,15 @@ impl JItem {
                 buf.push_str(cxt.indent());
                 buf
             }
-            JItem::Let(var, ty, x) => {
+            JItem::Let(var, ty, None) => {
+                format!(
+                    "public static {} {};\n{}",
+                    ty.gen(cxt),
+                    cxt.name_str(*var),
+                    cxt.indent()
+                )
+            }
+            JItem::Let(var, ty, Some(x)) => {
                 format!(
                     "public static {} {} = {};\n{}",
                     ty.gen(cxt),
@@ -1587,14 +1595,22 @@ impl Item {
             }
             Item::ExternFn(_) => (),
             Item::ExternClass(_) => (),
-            Item::Let(name, ty, x) => {
+            Item::Let(name, ty, None) => {
+                let var = cxt.var(*name).unwrap();
+                let ty = ty.lower(cxt);
+                assert_eq!(var.len(), ty.len());
+                for (var, ty) in var.into_iter().zip(ty) {
+                    cxt.items.push(JItem::Let(var, ty, None));
+                }
+            }
+            Item::Let(name, ty, Some(x)) => {
                 let var = cxt.var(*name).unwrap();
                 let ty = ty.lower(cxt);
                 let x = x.lower(cxt);
                 assert_eq!(var.len(), ty.len());
                 assert_eq!(ty.len(), x.len());
                 for ((var, ty), x) in var.into_iter().zip(ty).zip(x) {
-                    cxt.items.push(JItem::Let(var, ty, x));
+                    cxt.items.push(JItem::Let(var, ty, Some(x)));
                 }
             }
         }

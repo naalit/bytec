@@ -274,7 +274,7 @@ pub enum Item {
     InlineJava(RawSym),
     /// If the bool is true, it's extern and shouldn't be generated
     Enum(TypeId, Vec<RawSym>, bool),
-    Let(Sym, Type, Term),
+    Let(Sym, Type, Option<Term>),
 }
 pub struct Fn {
     pub id: FnId,
@@ -401,7 +401,7 @@ pub enum PreItem {
         members: Vec<(RawSym, PreType)>,
         constructor: Option<Vec<PreType>>,
     },
-    Let(Spanned<RawSym>, Option<PreType>, SPre, bool),
+    Let(Spanned<RawSym>, Option<PreType>, Option<SPre>, bool),
     // use a::b; the bool is true if it's a wildcard a::b::*
     Use(RawPath, bool),
 }
@@ -831,10 +831,11 @@ impl Item {
                 .add(":")
                 .space()
                 .chain(t.pretty(cxt))
-                .space()
-                .add("=")
-                .space()
-                .chain(x.pretty(cxt))
+                .chain(if let Some(x) = x {
+                    Doc::none().space().add("=").space().chain(x.pretty(cxt))
+                } else {
+                    Doc::none()
+                })
                 .add(";"),
         }
     }

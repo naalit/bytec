@@ -693,7 +693,10 @@ impl<'b> Cxt<'b> {
                 }
                 let ty = match ty {
                     Some(ty) => self.elab_type(ty)?,
-                    None => self.infer(x)?.1,
+                    None => {
+                        self.infer(x.as_ref().expect("can't infer type of nothing"))?
+                            .1
+                    }
                 };
                 self.create(*name, ty, *public);
                 Ok(())
@@ -837,7 +840,7 @@ impl<'b> Cxt<'b> {
             PreItem::Let(name, _, x, _) => {
                 let (s, t) = self.var(&lpath(*name)).unwrap();
                 let t = t.clone();
-                let x = self.check(x, t.clone())?;
+                let x = x.as_ref().map(|x| self.check(x, t.clone())).transpose()?;
                 Ok(vec![Item::Let(s, t, x)])
             }
             PreItem::Class {
@@ -869,7 +872,7 @@ impl<'b> Cxt<'b> {
                             let mut block = Vec::new();
                             for i in v {
                                 let (v, _) = self.var(&lpath(Spanned::hack(i))).unwrap();
-                                block.push(Item::Let(v, ty.clone(), Term::Variant(c, i)));
+                                block.push(Item::Let(v, ty.clone(), Some(Term::Variant(c, i))));
                             }
                             return Ok(block);
                         }
@@ -902,6 +905,7 @@ impl<'b> Cxt<'b> {
             }
             PreStatement::Item(PreItem::InlineJava(s)) => Ok(Some(Statement::InlineJava(*s))),
             PreStatement::Item(PreItem::Let(name, ty, value, public)) => {
+                let value = value.as_ref().expect("statement let must have a value");
                 let (x, t) = match ty {
                     Some(t) => {
                         let t = self.elab_type(t)?;

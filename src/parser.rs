@@ -1253,9 +1253,11 @@ impl<'a> Parser<'a> {
                     None
                 };
 
-                self.expect(Tok::Equals, "'='")?;
-
-                let value = self.term()?.ok_or(self.err("expected expression"))?;
+                let mut value = None;
+                if self.peek().as_deref() == Some(&Tok::Equals) {
+                    self.next();
+                    value = Some(self.term()?.ok_or(self.err("expected expression"))?);
+                }
 
                 self.expect(Tok::Semicolon, "';'")?;
 
