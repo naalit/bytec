@@ -305,6 +305,7 @@ pub struct Fn {
     pub ret_ty: Type,
     pub args: Vec<(Sym, Type)>,
     pub body: Term,
+    pub throws: Vec<RawSym>,
 }
 pub struct ExternFn {
     pub id: FnId,
@@ -400,6 +401,7 @@ pub struct PreFn {
     pub ret_ty: PreType,
     pub args: Vec<(Spanned<RawSym>, PreType, bool)>,
     pub body: SPre,
+    pub throws: Vec<RawSym>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreEFn {

@@ -64,6 +64,8 @@ enum Tok<'a> {
     Use,
     // constructor
     Constructor,
+    // throws
+    Throws,
 
     // +
     Add,
@@ -185,6 +187,7 @@ impl<'a> Lexer<'a> {
             "in" => Tok::In,
             "use" => Tok::Use,
             "constructor" => Tok::Constructor,
+            "throws" => Tok::Throws,
             _ => Tok::Name(name),
         };
 
@@ -1299,6 +1302,14 @@ impl<'a> Parser<'a> {
                         mapping,
                     })))
                 } else {
+                    let mut throws = Vec::new();
+                    if self.peek().as_deref() == Some(&Tok::Throws) {
+                        self.next();
+                        while let Some(n) = self.ident() {
+                            throws.push(*n);
+                        }
+                    }
+
                     let body = match self.peek().as_deref() {
                         Some(Tok::Equals) => {
                             self.next();
@@ -1318,6 +1329,7 @@ impl<'a> Parser<'a> {
                         args,
                         body,
                         public,
+                        throws,
                     })))
                 }
             }

@@ -227,6 +227,7 @@ struct JFn {
     args: Vec<(RawSym, JVar, JTy)>,
     body: Vec<JStmt>,
     public: bool,
+    throws: Vec<RawSym>,
 }
 
 /// This only includes the items that actually need to appear in the Java code
@@ -777,7 +778,19 @@ impl JFn {
             cxt.names.insert(v.0, (lpath(Spanned::hack(*n)), !v.1));
             write!(buf, "{} {}", t.gen(cxt), cxt.name_str(*v),).unwrap();
         }
-        buf.push_str(") {");
+        buf.push(')');
+        if !self.throws.is_empty() {
+            buf.push_str(" throws ");
+            let mut first = true;
+            for i in &self.throws {
+                if !first {
+                    buf.push_str(", ");
+                }
+                first = false;
+                buf.push_str(cxt.bindings.resolve_raw(*i));
+            }
+        }
+        buf.push_str(" {");
 
         cxt.push();
 
@@ -1562,6 +1575,7 @@ impl Item {
                     args,
                     body: block,
                     public: f.public,
+                    throws: f.throws.clone(),
                 }));
             }
             Item::Enum(tid, variants, ext) => {

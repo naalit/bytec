@@ -44,7 +44,7 @@
 			},
 			{
 				"name": "keyword.other.bytec",
-				"match": "\\b(fn|pub|let|extern|class|enum|i32|i64|str|bool|true|false|use|constructor)\\b"
+				"match": "\\b(fn|pub|let|extern|class|enum|i32|i64|str|bool|true|false|use|constructor|throws)\\b"
 			}]
 		},
 		"symbols": {

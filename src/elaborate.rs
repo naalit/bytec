@@ -687,6 +687,7 @@ impl<'b> Cxt<'b> {
                     args,
                     body,
                     public,
+                    throws,
                 } = f;
                 let (fid, fty) = self.fun(&lpath(*name)).unwrap();
                 let FnType(atys, rty) = fty.clone();
@@ -706,6 +707,7 @@ impl<'b> Cxt<'b> {
                     args: args2,
                     public: *public,
                     body,
+                    throws: throws.clone(),
                 })])
             }
             PreItem::ExternFn(f) => {
