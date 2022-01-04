@@ -54,18 +54,22 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
     }
 
     for i in &code {
-        let (name, ret, m, public) = match i {
-            Item::Fn(f) => (f.id, &f.ret_ty, cxt.bindings.fn_name(f.id), f.public),
-            Item::ExternFn(f) => (f.id, &f.ret_ty, lpath(Spanned::hack(f.mapping)), true),
+        let (name, ret, m, public, ext) = match i {
+            Item::Fn(f) => (f.id, &f.ret_ty, cxt.bindings.fn_name(f.id), f.public, false),
+            Item::ExternFn(f) => (f.id, &f.ret_ty, lpath(Spanned::hack(f.mapping)), true, true),
             Item::ExternClass(c) => {
                 let class = cxt.class(*c).unwrap();
                 mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
 
                 continue;
             }
-            Item::Enum(c, _, _) => {
+            Item::Enum(c, _, ext) => {
                 let class = cxt.class(*c).unwrap();
-                mappings.push((class.0, cxt.bindings.type_name(*c), false));
+                if *ext {
+                    mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
+                } else {
+                    mappings.push((class.0, cxt.bindings.type_name(*c), false));
+                }
 
                 continue;
             }
@@ -89,7 +93,24 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
         let item = cxt.fresh_fn();
         cxt.fn_ids.push((name, item));
 
-        let ret = ret.lower(&cxt);
+        let mut ret = ret.lower(&cxt);
+        if ext {
+            if ret.len() > 1 {
+                let mut fixed = false;
+                if ret.len() == 2 {
+                    let mut v = ret.to_vec();
+                    if let JTy::Array(_) = &v[0] {
+                        ret = JTys::One(v.swap_remove(0));
+                        fixed = true;
+                    } else {
+                        ret = JTys::Tuple(v);
+                    }
+                }
+                if !fixed {
+                    panic!("Extern function can't return tuple");
+                }
+            }
+        }
         cxt.fn_ret_tys.insert(item, ret);
         mappings.push((item.0, m, !public));
     }
@@ -558,12 +579,14 @@ impl JStmt {
                 cxt.names.insert(var.0, (lpath(Spanned::hack(*n)), !var.1));
                 let i = cxt.name_str(*var);
                 let mut s = format!(
-                    "b${}: for (int {} = {}, $end = {}; {} < $end; {}++) {{",
+                    "b${}: for (int {} = {}, $end_{} = {}; {} < $end_{}; {}++) {{",
                     k.0,
                     i,
                     a.gen(cxt),
+                    k.0,
                     b.gen(cxt),
                     i,
+                    k.0,
                     i
                 );
 
@@ -1277,6 +1300,24 @@ impl Term {
                 let args = a.iter().flat_map(|x| x.lower(cxt)).collect();
                 let rtys = cxt.fn_ret_tys.get(&fn_id).unwrap().clone();
                 match rtys {
+                    MaybeList::One(t @ JTy::Array(_)) => {
+                        let arr = cxt.fresh_var(false);
+                        let raw = cxt.bindings.raw("$_java_array");
+                        cxt.block.push(JStmt::Let(
+                            raw,
+                            t.clone(),
+                            arr,
+                            Some(JTerm::Call(o, fn_id, args, t.clone())),
+                        ));
+
+                        let len = JTerm::Prop(
+                            Box::new(JTerm::Var(arr, t.clone())),
+                            cxt.bindings.raw("length"),
+                            JTy::I32,
+                        );
+
+                        return JTerms::Tuple(vec![JTerm::Var(arr, t), len]);
+                    }
                     MaybeList::One(rty) => JTerm::Call(o, fn_id, args, rty),
                     MaybeList::Tuple(v) => {
                         // MultiCall time
