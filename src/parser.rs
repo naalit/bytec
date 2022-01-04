@@ -313,6 +313,8 @@ impl<'a> Iterator for Lexer<'a> {
                 self.next()
             }
 
+            '-' if self.peekn(1).map_or(false, |x| x.is_ascii_digit()) => Some(self.lex_number()),
+
             '+' => self.single(Tok::Add),
             '-' => self.single(Tok::Sub),
             '*' => self.single(Tok::Mul),
