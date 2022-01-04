@@ -803,7 +803,7 @@ impl<'a> Parser<'a> {
 
                 let b = if self.peek().as_deref() == Some(&Tok::Else) {
                     self.next();
-                    if self.peek().as_deref() != Some(&Tok::OpenBrace) {
+                    if !matches!(self.peek().as_deref(), Some(Tok::If | Tok::OpenBrace)) {
                         return Err(self.err("expected '{' after 'else'"));
                     }
                     Some(self.term()?.unwrap())
