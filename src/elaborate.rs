@@ -956,6 +956,10 @@ impl<'b> Cxt<'b> {
 
     fn infer(&mut self, pre: &SPre) -> Result<(Term, Type), TypeError> {
         match &***pre {
+            Pre::Not(x) => {
+                let x = self.check(x, Type::Bool)?;
+                Ok((Term::Not(Box::new(x)), Type::Bool))
+            }
             Pre::Var(raw) => self
                 .var(raw)
                 .map(|(s, t)| (Term::Var(s), t.clone()))

@@ -258,6 +258,7 @@ pub enum Term {
     Constructor(TypeId, Vec<Term>),
     Set(LValue, Option<BinOp>, Box<Term>),
     Match(Box<Term>, Vec<(Option<RawSym>, Term)>),
+    Not(Box<Term>),
 }
 pub enum Statement {
     Term(Term),
@@ -369,6 +370,8 @@ pub enum Pre {
     Set(SPre, Option<BinOp>, SPre),
     // match x { s => t, else => u }
     Match(SPre, Vec<(Spanned<Option<RawSym>>, SPre)>),
+    // !x
+    Not(SPre),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -531,6 +534,7 @@ impl Term {
             Term::Constructor(f, a) => {
                 Term::Constructor(*f, a.iter().map(|x| x.cloned_(cln)).collect())
             }
+            Term::Not(x) => Term::Not(Box::new(x.cloned_(cln))),
         }
     }
 }
@@ -737,6 +741,7 @@ impl Term {
                     Doc::start(",").space(),
                 ))
                 .add(")"),
+            Term::Not(x) => Doc::start("!").chain(x.pretty(cxt).nest(Prec::Atom)),
         }
     }
 }

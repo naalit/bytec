@@ -105,6 +105,8 @@ enum Tok<'a> {
     And,
     // ||
     Or,
+    // !
+    Not,
 
     // (
     OpenParen,
@@ -349,6 +351,7 @@ impl<'a> Iterator for Lexer<'a> {
             '=' => self.single(Tok::Equals),
             ',' => self.single(Tok::Comma),
             '.' => self.single(Tok::Dot),
+            '!' => self.single(Tok::Not),
 
             '"' => {
                 let start = self.pos;
@@ -503,6 +506,14 @@ impl<'a> Parser<'a> {
     }
 
     fn term(&mut self) -> Result<Option<SPre>, Error> {
+        let not = if self.peek().as_deref() == Some(&Tok::Not) {
+            let start = self.lexer.pos;
+            self.next();
+            Some(start)
+        } else {
+            None
+        };
+
         let t = match self.logic()? {
             Some(t) => t,
             None => return Ok(None),
@@ -515,7 +526,14 @@ impl<'a> Parser<'a> {
             return Ok(Some(Box::new(Spanned::new(Pre::Set(t, None, rhs), span))));
         }
 
-        Ok(Some(t))
+        if let Some(start) = not {
+            Ok(Some(Box::new(Spanned::new(
+                Pre::Not(t),
+                Span(start, self.lexer.pos),
+            ))))
+        } else {
+            Ok(Some(t))
+        }
     }
 
     fn logic(&mut self) -> Result<Option<SPre>, Error> {

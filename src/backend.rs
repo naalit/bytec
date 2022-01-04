@@ -171,6 +171,7 @@ enum JTerm {
     ArrayNew(Box<JTerm>, JTy),
     ClassNew(JClass, Vec<JTerm>),
     Index(Box<JTerm>, Box<JTerm>, JTy),
+    Not(Box<JTerm>),
     InlineJava(RawSym, JTy),
 }
 
@@ -376,6 +377,7 @@ impl<'a> Gen<'a> {
 impl JTerm {
     fn gen(&self, cxt: &Gen) -> String {
         match self {
+            JTerm::Not(x) => format!("!({})", x.gen(cxt)),
             JTerm::Var(v, _) => cxt.name_str(*v),
             JTerm::Lit(l) => match l {
                 JLit::Int(i) => i.to_string(),
@@ -969,6 +971,7 @@ impl JTerm {
             | JTerm::InlineJava(_, _)
             | JTerm::ArrayNew(_, _)
             | JTerm::ClassNew(_, _)
+            | JTerm::Not(_)
             | JTerm::Array(_, _) => false,
         }
     }
@@ -982,6 +985,7 @@ impl JTerm {
                 JLit::Str(_) => JTy::String,
                 JLit::Bool(_) => JTy::Bool,
             },
+            JTerm::Not(_) => JTy::Bool,
             JTerm::Call(_, _, _, t) => t.clone(),
             JTerm::Prop(_, _, t) => t.clone(),
             JTerm::InlineJava(_, t) => t.clone(),
@@ -1006,6 +1010,7 @@ impl Term {
                 let var = cxt.var(*s).unwrap();
                 return var.map(|var| JTerm::Var(var, cxt.tys.get(&var).unwrap().clone()));
             }
+            Term::Not(x) => JTerm::Not(Box::new(x.lower(cxt).one())),
             Term::Lit(l, t) => match l {
                 Literal::Int(i) => match t {
                     Type::I32 => JTerm::Lit(JLit::Int(*i as i32)),
