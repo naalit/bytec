@@ -211,12 +211,20 @@ pub struct FnType(pub Vec<Type>, pub Type);
 pub struct ClassInfo {
     pub methods: Vec<(RawSym, FnId, FnType)>,
     pub variants: Option<Vec<RawSym>>,
+    pub members: Vec<(RawSym, Type)>,
+    pub constructor: Option<Vec<Type>>,
 }
 impl ClassInfo {
-    pub fn new_class(methods: Vec<(RawSym, FnId, FnType)>) -> Self {
+    pub fn new_class(
+        methods: Vec<(RawSym, FnId, FnType)>,
+        members: Vec<(RawSym, Type)>,
+        constructor: Option<Vec<Type>>,
+    ) -> Self {
         ClassInfo {
             methods,
             variants: None,
+            members,
+            constructor,
         }
     }
 
@@ -224,6 +232,8 @@ impl ClassInfo {
         ClassInfo {
             methods: Vec::new(),
             variants: Some(variants),
+            members: Vec::new(),
+            constructor: None,
         }
     }
 }
@@ -239,6 +249,8 @@ pub enum LValue {
     Var(Sym),
     // arr[i] = x
     Idx(Sym, Box<Term>),
+    // a.b = x
+    Member(Box<Term>, RawSym),
 }
 
 pub enum ForIter {
@@ -265,6 +277,8 @@ pub enum Term {
     Array(Vec<Term>, Type),
     ArrayIdx(Box<Term>, Box<Term>),
     ArrayMethod(Box<Term>, ArrayMethod),
+    Member(Box<Term>, RawSym),
+    Constructor(TypeId, Vec<Term>),
     Set(LValue, Option<BinOp>, Box<Term>),
     Match(Box<Term>, Vec<(Option<RawSym>, Term)>),
 }
@@ -371,6 +385,8 @@ pub enum Pre {
     Array(Vec<SPre>),
     // x[i]
     ArrayIdx(SPre, SPre),
+    // x.m
+    Member(SPre, Spanned<RawSym>),
     // v op= x
     Set(SPre, Option<BinOp>, SPre),
     // match x { s => t, else => u }
@@ -398,7 +414,12 @@ pub enum PreItem {
     Fn(PreFn),
     ExternFn(PreEFn),
     InlineJava(RawSym),
-    ExternClass(RawPath, Vec<PreEFn>),
+    ExternClass(
+        RawPath,
+        Vec<PreEFn>,
+        Vec<(RawSym, PreType)>,
+        Option<Vec<PreType>>,
+    ),
     Enum(RawPath, Vec<RawSym>, bool),
     Let(Spanned<RawSym>, Option<PreType>, SPre, bool),
     // use a::b; the bool is true if it's a wildcard a::b::*
@@ -526,6 +547,10 @@ impl Term {
             Term::Break => Term::Break,
             Term::Continue => Term::Continue,
             Term::Return(x) => Term::Return(x.as_ref().map(|x| Box::new(x.cloned_(cln)))),
+            Term::Member(a, b) => Term::Member(Box::new(a.cloned_(cln)), *b),
+            Term::Constructor(f, a) => {
+                Term::Constructor(*f, a.iter().map(|x| x.cloned_(cln)).collect())
+            }
         }
     }
 }
@@ -560,6 +585,7 @@ impl LValue {
         match self {
             LValue::Var(x) => LValue::Var(*x),
             LValue::Idx(a, b) => LValue::Idx(*a, Box::new(b.cloned_(cln))),
+            LValue::Member(a, b) => LValue::Member(Box::new(a.cloned_(cln)), *b),
         }
     }
 }
@@ -721,6 +747,16 @@ impl Term {
             Term::Continue => Doc::keyword("continue"),
             Term::Return(None) => Doc::keyword("return"),
             Term::Return(Some(x)) => Doc::keyword("return").space().chain(x.pretty(cxt)),
+            Term::Member(x, m) => x.pretty(cxt).add('.').add(cxt.resolve_raw(*m)),
+            Term::Constructor(f, a) => cxt
+                .type_name(*f)
+                .pretty(cxt)
+                .add("(")
+                .chain(Doc::intersperse(
+                    a.iter().map(|x| x.pretty(cxt)),
+                    Doc::start(",").space(),
+                ))
+                .add(")"),
         }
     }
 }
@@ -907,6 +943,7 @@ impl LValue {
                 .add('[')
                 .chain(i.pretty(cxt))
                 .add(']'),
+            LValue::Member(x, m) => x.pretty(cxt).add('.').add(cxt.resolve_raw(*m)),
         }
     }
 }

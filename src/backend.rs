@@ -169,6 +169,7 @@ enum JTerm {
     Variant(JClass, RawSym),
     Array(Vec<JTerm>, JTy),
     ArrayNew(Box<JTerm>, JTy),
+    ClassNew(JClass, Vec<JTerm>),
     Index(Box<JTerm>, Box<JTerm>, JTy),
     InlineJava(RawSym, JTy),
 }
@@ -178,6 +179,7 @@ enum JStmt {
     Let(RawSym, JTy, JVar, Option<JTerm>),
     Set(JVar, Option<BinOp>, JTerm),
     IdxSet(JVar, JTerm, Option<BinOp>, JTerm),
+    PropSet(JTerm, RawSym, Option<BinOp>, JTerm),
     Term(JTerm),
     If(JTerm, Vec<JStmt>, Vec<JStmt>),
     Switch(JBlock, JTerm, Vec<(RawSym, Vec<JStmt>)>, Vec<JStmt>),
@@ -466,6 +468,24 @@ impl JTerm {
                 };
                 format!("new {}[{}]", t.gen(cxt), len.gen(cxt))
             }
+            JTerm::ClassNew(class, a) => {
+                let mut buf = "new ".to_string();
+                buf.push_str(&cxt.class_str(*class));
+                buf.push('(');
+
+                let mut first = true;
+                for i in a {
+                    if !first {
+                        buf.push_str(", ");
+                    }
+                    first = false;
+
+                    buf.push_str(&i.gen(cxt));
+                }
+                buf.push(')');
+
+                buf
+            }
             JTerm::Index(arr, i, _) => {
                 format!("{}[{}]", arr.gen(cxt), i.gen(cxt))
             }
@@ -497,6 +517,15 @@ impl JStmt {
                     "{}[{}] {}= {};",
                     cxt.name_str(*v),
                     idx.gen(cxt),
+                    op.map_or("", |op| op.repr()),
+                    x.gen(cxt)
+                )
+            }
+            JStmt::PropSet(v, m, op, x) => {
+                format!(
+                    "{}.{} {}= {};",
+                    v.gen(cxt),
+                    cxt.bindings.resolve_raw(*m),
                     op.map_or("", |op| op.repr()),
                     x.gen(cxt)
                 )
@@ -918,6 +947,7 @@ impl JTerm {
             | JTerm::Prop(_, _, _)
             | JTerm::InlineJava(_, _)
             | JTerm::ArrayNew(_, _)
+            | JTerm::ClassNew(_, _)
             | JTerm::Array(_, _) => false,
         }
     }
@@ -936,6 +966,7 @@ impl JTerm {
             JTerm::InlineJava(_, t) => t.clone(),
             JTerm::Array(_, t) => t.clone(),
             JTerm::ArrayNew(_, t) => t.clone(),
+            JTerm::ClassNew(c, _) => JTy::Class(*c),
             JTerm::Index(_, _, t) => t.clone(),
             JTerm::BinOp(op, a, _) => match op.ty() {
                 BinOpType::Comp => JTy::Bool,
@@ -989,6 +1020,19 @@ impl Term {
                 let x = x.lower(cxt);
                 x.to_vec().swap_remove(*i)
             }
+            Term::Member(x, m) => {
+                let x = x.lower(cxt).one();
+                // TODO get actual type somehow
+                JTerm::Prop(Box::new(x), *m, JTy::I32)
+            }
+            Term::Constructor(t, args) => {
+                let t = cxt.class(*t).unwrap();
+                let mut a = Vec::new();
+                for i in args {
+                    a.extend(i.lower(cxt));
+                }
+                JTerm::ClassNew(t, a)
+            }
             Term::Set(l, op, x) => match l {
                 LValue::Var(v) => {
                     let v = cxt.var(*v).unwrap();
@@ -1012,6 +1056,12 @@ impl Term {
                     for (v, x) in v.into_iter().zip(x) {
                         cxt.block.push(JStmt::IdxSet(v, idx.clone(), *op, x));
                     }
+                    return JTerms::empty();
+                }
+                LValue::Member(v, m) => {
+                    let v = v.lower(cxt).one();
+                    let x = x.lower(cxt).one();
+                    cxt.block.push(JStmt::PropSet(v, *m, *op, x));
                     return JTerms::empty();
                 }
             },

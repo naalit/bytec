@@ -26,6 +26,7 @@ fn to_bool(b: Bool): bool = match b {
 // class Random {
 //     fn next_int(max: i32): i32 = "nextInt";
 // }
+let random = Lib::Random();
 fn rand(r: Lib::Random): i32 = r.next_int(10);
 
 fn triple(pub x: i32): i32 {
@@ -127,7 +128,15 @@ fn stuff() {
     }
 }
 
+// class Test {
+//     constructor(x: i32);
+//     let field: str;
+//     fn getField(): str;
+// }
+
 fn looper(r: Lib::Random) {
+    // let t = Test(12);
+    // println(t.field + t.getField());
     while rand(r) > 2 {
         println("Looping!");
     }

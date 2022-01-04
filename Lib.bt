@@ -9,7 +9,8 @@ enum Bool {
     False,
 }
 
-class Random {
+extern class Random {
+    constructor();
     fn next_int(max: i32): i32 = "nextInt";
 }
 

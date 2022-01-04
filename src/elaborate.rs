@@ -489,7 +489,7 @@ impl<'b> Cxt<'b> {
             PreItem::Fn(_) => Ok(()),
             PreItem::ExternFn(_) => Ok(()),
             PreItem::Let(_, _, _, _) => Ok(()),
-            PreItem::ExternClass(name, methods) => {
+            PreItem::ExternClass(name, methods, members, constructor) => {
                 let methods = methods
                     .iter()
                     .map(|f| {
@@ -516,7 +516,21 @@ impl<'b> Cxt<'b> {
                         Ok((*f.name, id, ty))
                     })
                     .collect::<Result<_, _>>()?;
-                self.create_class(name.clone(), ClassInfo::new_class(methods));
+                let members = members
+                    .iter()
+                    .map(|(s, t)| {
+                        let t = self.elab_type(t)?;
+                        Ok((*s, t))
+                    })
+                    .collect::<Result<_, _>>()?;
+                let constructor = constructor
+                    .as_ref()
+                    .map(|x| x.iter().map(|x| self.elab_type(x)).collect())
+                    .transpose()?;
+                self.create_class(
+                    name.clone(),
+                    ClassInfo::new_class(methods, members, constructor),
+                );
                 Ok(())
             }
             PreItem::Enum(name, variants, _ext) => {
@@ -578,7 +592,7 @@ impl<'b> Cxt<'b> {
                 self.create(*name, ty, *public);
                 Ok(())
             }
-            PreItem::ExternClass(_, _) => Ok(()),
+            PreItem::ExternClass(_, _, _, _) => Ok(()),
             PreItem::Enum(_, _, _) => Ok(()),
             PreItem::Use(path, wildcard) => {
                 // Add remaining types
@@ -719,7 +733,7 @@ impl<'b> Cxt<'b> {
                 let x = self.check(x, t.clone())?;
                 Ok(vec![Item::Let(s, t, x)])
             }
-            PreItem::ExternClass(s, _) => Ok(vec![Item::ExternClass(self.class(s).unwrap())]),
+            PreItem::ExternClass(s, _, _, _) => Ok(vec![Item::ExternClass(self.class(s).unwrap())]),
             PreItem::Enum(name, variants, ext) => Ok(vec![Item::Enum(
                 self.class(name).unwrap(),
                 variants.clone(),
@@ -758,7 +772,7 @@ impl<'b> Cxt<'b> {
                 @
                 (PreItem::Fn(_)
                 | PreItem::ExternFn(_)
-                | PreItem::ExternClass(_, _)
+                | PreItem::ExternClass(_, _, _, _)
                 | PreItem::Enum(_, _, _)
                 | PreItem::Use(_, _)),
             ) => {
@@ -929,6 +943,20 @@ impl<'b> Cxt<'b> {
                 let idx = self.check(idx, Type::I32)?;
                 Ok((Term::ArrayIdx(Box::new(arr), Box::new(idx)), ty))
             }
+            Pre::Member(px, m) => {
+                let (x, t) = self.infer(px)?;
+                match t {
+                    Type::Class(t) => {
+                        let info = self.class_info(t);
+                        if let Some((_, t)) = info.members.iter().find(|(s, _)| *s == **m) {
+                            Ok((Term::Member(Box::new(x), **m), t.clone()))
+                        } else {
+                            Err(TypeError::NotFound(lpath(*m)))
+                        }
+                    }
+                    t => Err(TypeError::NotTuple(px.span, t)),
+                }
+            }
             Pre::Set(pl, op, x) => {
                 let (l, t) = self.infer(pl)?;
                 let l = match l {
@@ -944,16 +972,33 @@ impl<'b> Cxt<'b> {
                 Ok((Term::Set(l, *op, Box::new(x)), Type::Unit))
             }
             Pre::Call(f, a) => {
-                let (fid, FnType(atys, rty)) = self.fun(f).ok_or(TypeError::NotFound(f.clone()))?;
-                let rty = rty.clone();
-                if a.len() != atys.len() {
-                    return Err(TypeError::WrongArity(pre.span, a.len(), atys.len()));
+                if let Some((fid, FnType(atys, rty))) = self.fun(f) {
+                    let rty = rty.clone();
+                    if a.len() != atys.len() {
+                        return Err(TypeError::WrongArity(pre.span, a.len(), atys.len()));
+                    }
+                    let mut a2 = Vec::new();
+                    for (a, t) in a.iter().zip(atys.clone()) {
+                        a2.push(self.check(a, t)?);
+                    }
+                    Ok((Term::Call(None, fid, a2), rty))
+                } else if let Some(t) = self.class(f) {
+                    let info = self.class_info(t);
+                    if let Some(atys) = &info.constructor {
+                        if a.len() != atys.len() {
+                            return Err(TypeError::WrongArity(pre.span, a.len(), atys.len()));
+                        }
+                        let mut a2 = Vec::new();
+                        for (a, t) in a.iter().zip(atys.clone()) {
+                            a2.push(self.check(a, t)?);
+                        }
+                        Ok((Term::Constructor(t, a2), Type::Class(t)))
+                    } else {
+                        Err(TypeError::NotFound(f.clone()))
+                    }
+                } else {
+                    Err(TypeError::NotFound(f.clone()))
                 }
-                let mut a2 = Vec::new();
-                for (a, t) in a.iter().zip(atys.clone()) {
-                    a2.push(self.check(a, t)?);
-                }
-                Ok((Term::Call(None, fid, a2), rty))
             }
             Pre::Method(o_, f, a) => {
                 let (o, t) = self.infer(o_)?;

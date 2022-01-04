@@ -62,6 +62,8 @@ enum Tok<'a> {
     In,
     // use
     Use,
+    // constructor
+    Constructor,
 
     // +
     Add,
@@ -182,6 +184,7 @@ impl<'a> Lexer<'a> {
             "for" => Tok::For,
             "in" => Tok::In,
             "use" => Tok::Use,
+            "constructor" => Tok::Constructor,
             _ => Tok::Name(name),
         };
 
@@ -674,9 +677,14 @@ impl<'a> Parser<'a> {
                         t = Box::new(Spanned::new(Pre::TupleIdx(t, *i as usize), span));
                     } else {
                         let name = self.ident().ok_or(self.err("expected method name"))?;
-                        let args = self.call_args()?;
-                        let span = Span(t.span.0, self.lexer.pos);
-                        t = Box::new(Spanned::new(Pre::Method(t, name, args), span));
+                        if self.peek().as_deref() == Some(&Tok::OpenParen) {
+                            let args = self.call_args()?;
+                            let span = Span(t.span.0, self.lexer.pos);
+                            t = Box::new(Spanned::new(Pre::Method(t, name, args), span));
+                        } else {
+                            let span = Span(t.span.0, self.lexer.pos);
+                            t = Box::new(Spanned::new(Pre::Member(t, name), span));
+                        }
                     }
                 }
                 Some(Tok::OpenBracket) => {
@@ -1090,6 +1098,109 @@ impl<'a> Parser<'a> {
         Ok(PreItem::Enum(name, v, ext))
     }
 
+    fn class(&mut self) -> Result<Option<PreItem>, Error> {
+            let name = self.path().ok_or(self.err("expected class name"))?;
+            match self.peek().as_deref() {
+                Some(Tok::Semicolon) => {
+                    self.next();
+                    Ok(Some(PreItem::ExternClass(
+                        name,
+                        Vec::new(),
+                        Vec::new(),
+                        None,
+                    )))
+                }
+                Some(Tok::OpenBrace) => {
+                    self.next();
+                    let mut methods = Vec::new();
+                    let mut members = Vec::new();
+                    let mut constructor = None;
+
+                    while *self.peek().ok_or(self.err("expected closing '}'"))?
+                        != Tok::CloseBrace
+                    {
+                        match self.peek().as_deref() {
+                            Some(Tok::Constructor) => {
+                                if constructor.is_some() {
+                                    return Err(self.err("duplicate constructor declaration"));
+                                }
+                                self.next();
+
+                                self.expect(Tok::OpenParen, "'('")?;
+                                let mut args = Vec::new();
+                                while self.peek().as_deref() != Some(&Tok::CloseParen) {
+                                    let _name = self
+                                        .ident()
+                                        .ok_or(self.err("expected argument name or ')'"))?;
+                                    self.expect(Tok::Colon, "':'")?;
+
+                                    let t =
+                                        self.ty()?.ok_or(self.err("expected argument type"))?;
+                                    args.push(t);
+                                    match self.peek().as_deref() {
+                                        Some(Tok::Comma) => {
+                                            self.next();
+                                        }
+                                        Some(Tok::CloseParen) => (),
+                                        _ => return Err(self.err("expected ',' or ')'")),
+                                    }
+                                }
+                                self.expect(Tok::CloseParen, "closing ')'")?;
+                                self.expect(Tok::Semicolon, "';'")?;
+                                constructor = Some(args);
+                            }
+                            Some(Tok::Let) => {
+                                self.next();
+                                let name = self.ident().ok_or(self.err("expected name"))?;
+                                self.expect(Tok::Colon, "':'")?;
+                                let ty = self.ty()?.ok_or(self.err("expected type"))?;
+                                self.expect(Tok::Semicolon, "';'")?;
+                                members.push((*name, ty));
+                            }
+                            Some(Tok::Fn) => {
+                                self.next();
+                                let (name, args, ret_ty) = self.prototype()?;
+                                let mapping =
+                                    if *self.peek().ok_or(self.err("expected closing '}'"))?
+                                        == Tok::Equals
+                                    {
+                                        self.next();
+                                        if let Some(Tok::LitS(s)) = self.peek().as_deref() {
+                                            self.next();
+                                            self.bindings.raw(s)
+                                        } else {
+                                            return Err(self.err(
+                                                "expected Java method name as string literal",
+                                            ));
+                                        }
+                                    } else {
+                                        *name
+                                    };
+                                self.expect(Tok::Semicolon, "';'")?;
+                                let f = PreEFn {
+                                    name,
+                                    ret_ty,
+                                    args,
+                                    mapping,
+                                };
+                                methods.push(f);
+                            }
+                            _ => return Err(self.err("expected item or closing '}'")),
+                        }
+                    }
+                    self.next();
+
+                    Ok(Some(PreItem::ExternClass(
+                        name,
+                        methods,
+                        members,
+                        constructor,
+                    )))
+                }
+                _ => return Err(self.err("expected ';' or '{'")),
+            }
+    }
+
     fn item(&mut self) -> Result<Option<PreItem>, Error> {
         match self.peek().as_deref() {
             None => Ok(None),
@@ -1123,55 +1234,6 @@ impl<'a> Parser<'a> {
 
                 Ok(Some(PreItem::Let(name, ty, value, public)))
             }
-            Some(Tok::Class) => {
-                // `class` always means an external class, because you can't define them in bytec (for now)
-                self.next();
-                let name = self.path().ok_or(self.err("expected class name"))?;
-                match self.peek().as_deref() {
-                    Some(Tok::Semicolon) => {
-                        self.next();
-                        Ok(Some(PreItem::ExternClass(name, Vec::new())))
-                    }
-                    Some(Tok::OpenBrace) => {
-                        self.next();
-                        let mut methods = Vec::new();
-
-                        while *self.peek().ok_or(self.err("expected closing '}'"))?
-                            != Tok::CloseBrace
-                        {
-                            self.expect(Tok::Fn, "'fn' or closing '}'")?;
-                            let (name, args, ret_ty) = self.prototype()?;
-                            let mapping = if *self.peek().ok_or(self.err("expected closing '}'"))?
-                                == Tok::Equals
-                            {
-                                self.next();
-                                if let Some(Tok::LitS(s)) = self.peek().as_deref() {
-                                    self.next();
-                                    self.bindings.raw(s)
-                                } else {
-                                    return Err(
-                                        self.err("expected Java method name as string literal")
-                                    );
-                                }
-                            } else {
-                                *name
-                            };
-                            self.expect(Tok::Semicolon, "';'")?;
-                            let f = PreEFn {
-                                name,
-                                ret_ty,
-                                args,
-                                mapping,
-                            };
-                            methods.push(f);
-                        }
-                        self.next();
-
-                        Ok(Some(PreItem::ExternClass(name, methods)))
-                    }
-                    _ => return Err(self.err("expected ';' or '{'")),
-                }
-            }
             Some(Tok::Extern | Tok::Fn | Tok::Enum) => {
                 // fn f(x: T, y: T): Z = x
                 let (public, ext) = match &*self.next().unwrap() {
@@ -1190,6 +1252,7 @@ impl<'a> Parser<'a> {
                             self.expect(Tok::Semicolon, "';'")?;
                             return Ok(Some(PreItem::InlineJava(self.bindings.raw(s))));
                         }
+                        Some(Tok::Class) => return self.class(),
                         _ => return Err(self.err("expected 'fn', 'enum', or inline Java string")),
                     },
                     _ => unreachable!(),

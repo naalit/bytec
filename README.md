@@ -53,13 +53,11 @@ let directions = [
     Direction::EAST,
     Direction::SOUTH,
 ];
-class Random {
+extern class Random {
+    // A constructor with no arguments
+    constructor();
     fn nextInt(max: i32): i32;
 }
-
-// Note that this is the only way to declare constructors currently.
-// It works fine, though, because bytec outputs "new Random(args)".
-extern fn newRandom(): Random = "new Random";
 
 // Now we write the run() function.
 // Bytec code is organized in 'modules', which are created for each file and are really classes with static members.
@@ -70,7 +68,7 @@ fn pub run(rc: RobotController) {
     // Luckily, it's a dynamic array and can be added to whenever we want.
     directions.push(Direction::WEST);
 
-    let rand = newRandom();
+    let rand = Random();
 
     // `loop {}` is the same thing as `while true {}`, like Rust
     loop {
