@@ -125,6 +125,50 @@ pub fn declare_mod_p3(
     ))
 }
 
+pub fn declare_mod_p4(
+    m: &[PreItem],
+    t: ModType,
+    mods: &[(RawSym, ModType)],
+    extra_items: Vec<Item>,
+    bindings: &mut Bindings,
+    file_id: FileId,
+) -> Result<(ModType, Vec<Item>), Error> {
+    let mut cxt = Cxt::from_type(
+        t,
+        mods.into_iter().cloned().collect(),
+        extra_items,
+        bindings,
+        file_id,
+    );
+
+    // Declare
+    for i in m {
+        match cxt.declare_item_p4(i) {
+            Ok(()) => (),
+            Err(e) => return Err(e.to_error(bindings)),
+        }
+    }
+
+    let Cxt {
+        vars,
+        fns,
+        classes,
+        local_classes,
+        extra_items,
+        ..
+    } = cxt;
+
+    Ok((
+        ModType {
+            vars: vars.symbols,
+            fns: fns.symbols,
+            classes,
+            local_classes,
+        },
+        extra_items,
+    ))
+}
+
 pub fn elab_mod(
     m: &[PreItem],
     t: ModType,
@@ -305,14 +349,30 @@ impl<'b> Cxt<'b> {
         self.mods.get(&s)
     }
     fn class_info(&self, class: TypeId) -> &ClassInfo {
-        &self
-            .classes
+        self.classes
             .values()
             .find(|(x, _)| *x == class)
             .map(|(_, i)| i)
             .or_else(|| {
                 for (_, m) in &self.mods {
                     for (_, (tid, info)) in &m.classes {
+                        if *tid == class {
+                            return Some(info);
+                        }
+                    }
+                }
+                None
+            })
+            .unwrap()
+    }
+    fn class_info_mut(&mut self, class: TypeId) -> &mut ClassInfo {
+        self.classes
+            .values_mut()
+            .find(|(x, _)| *x == class)
+            .map(|(_, i)| i)
+            .or_else(|| {
+                for (_, m) in &mut self.mods {
+                    for (_, (tid, info)) in &mut m.classes {
                         if *tid == class {
                             return Some(info);
                         }
@@ -489,13 +549,46 @@ impl<'b> Cxt<'b> {
             PreItem::Fn(_) => Ok(()),
             PreItem::ExternFn(_) => Ok(()),
             PreItem::Let(_, _, _, _) => Ok(()),
+            PreItem::Class { path, variants, .. } => {
+                self.create_class(
+                    path.clone(),
+                    ClassInfo {
+                        variants: variants.clone(),
+                        ..ClassInfo::default()
+                    },
+                );
+                Ok(())
+            }
+            PreItem::Use(path, wildcard) => {
+                // Only add types
+                if !*wildcard {
+                    if let Some(s) = self.class(path) {
+                        self.local_classes.insert(*path.stem(), s);
+                    }
+                } else {
+                    if path.len() == 1 {
+                        if let Some(m) = self.module(*path.stem()).cloned() {
+                            for (s, (t, _)) in m.classes {
+                                self.local_classes.insert(*s.stem(), t);
+                            }
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+        }
+    }
+
+    fn declare_item_p2(&mut self, item: &PreItem) -> Result<(), TypeError> {
+        match item {
             PreItem::Class {
                 path,
                 methods,
                 members,
                 constructor,
                 variants,
-                ext,
+                ext: _,
             } => {
                 let methods = methods
                     .iter()
@@ -534,28 +627,32 @@ impl<'b> Cxt<'b> {
                     .as_ref()
                     .map(|x| x.iter().map(|x| self.elab_type(x)).collect())
                     .transpose()?;
-                self.create_class(
-                    path.clone(),
-                    ClassInfo {
-                        methods,
-                        members,
-                        constructor,
-                        variants: variants.clone(),
-                    },
-                );
+                let id = self.class(path).unwrap();
+                let info = self.class_info_mut(id);
+                *info = ClassInfo {
+                    methods,
+                    members,
+                    constructor,
+                    variants: variants.clone(),
+                };
                 Ok(())
             }
             PreItem::Use(path, wildcard) => {
-                // Only add types
+                // Add remaining types
                 if !*wildcard {
-                    if let Some(s) = self.class(path) {
-                        self.local_classes.insert(*path.stem(), s);
+                    if let Some(t) = self.class(path) {
+                        // probably done in p1, but might not due to declaration order
+                        if !self.local_classes.contains_key(&*path.stem()) {
+                            self.local_classes.insert(*path.stem(), t);
+                        }
                     }
                 } else {
                     if path.len() == 1 {
                         if let Some(m) = self.module(*path.stem()).cloned() {
                             for (s, (t, _)) in m.classes {
-                                self.local_classes.insert(*s.stem(), t);
+                                if !self.local_classes.contains_key(&*s.stem()) {
+                                    self.local_classes.insert(*s.stem(), t);
+                                }
                             }
                         }
                     }
@@ -563,10 +660,11 @@ impl<'b> Cxt<'b> {
 
                 Ok(())
             }
+            _ => Ok(()),
         }
     }
 
-    fn declare_item_p2(&mut self, item: &PreItem) -> Result<(), TypeError> {
+    fn declare_item_p3(&mut self, item: &PreItem) -> Result<(), TypeError> {
         match item {
             PreItem::InlineJava(_) => Ok(()),
             PreItem::Fn(f) => {
@@ -627,7 +725,7 @@ impl<'b> Cxt<'b> {
         }
     }
 
-    fn declare_item_p3(&mut self, item: &PreItem) -> Result<(), TypeError> {
+    fn declare_item_p4(&mut self, item: &PreItem) -> Result<(), TypeError> {
         match item {
             PreItem::Use(path, wildcard) => {
                 // Add everything but types
@@ -795,6 +893,8 @@ impl<'b> Cxt<'b> {
             ) => {
                 self.declare_item_p1(item)?;
                 self.declare_item_p2(item)?;
+                self.declare_item_p3(item)?;
+                self.declare_item_p4(item)?;
                 for item in self.check_item(item)? {
                     self.extra_items.push(item);
                 }

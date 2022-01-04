@@ -207,35 +207,12 @@ pub struct ModType {
 #[derive(Debug, Clone)]
 pub struct FnType(pub Vec<Type>, pub Type);
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ClassInfo {
     pub methods: Vec<(RawSym, FnId, FnType)>,
     pub variants: Option<Vec<RawSym>>,
     pub members: Vec<(RawSym, Type)>,
     pub constructor: Option<Vec<Type>>,
-}
-impl ClassInfo {
-    pub fn new_class(
-        methods: Vec<(RawSym, FnId, FnType)>,
-        members: Vec<(RawSym, Type)>,
-        constructor: Option<Vec<Type>>,
-    ) -> Self {
-        ClassInfo {
-            methods,
-            variants: None,
-            members,
-            constructor,
-        }
-    }
-
-    pub fn new_enum(variants: Vec<RawSym>) -> Self {
-        ClassInfo {
-            methods: Vec::new(),
-            variants: Some(variants),
-            members: Vec::new(),
-            constructor: None,
-        }
-    }
 }
 
 pub enum ArrayMethod {
