@@ -1,16 +1,98 @@
+use std::collections::HashMap;
+
 use crate::term::*;
 
-pub fn elab_mod(m: &[PreItem], bindings: &mut Bindings) -> Result<Vec<Item>, Error> {
-    let mut cxt = Cxt::new(bindings);
-    let mut v = Vec::new();
+pub fn declare_mod_p1(
+    m: &[PreItem],
+    bindings: &mut Bindings,
+    file_id: FileId,
+) -> Result<(ModType, Vec<Item>), Error> {
+    let mut cxt = Cxt::new(bindings, file_id);
 
     // Declare
     for i in m {
-        match cxt.declare_item(i) {
+        match cxt.declare_item_p1(i) {
             Ok(()) => (),
             Err(e) => return Err(e.to_error(bindings)),
         }
     }
+
+    let Cxt {
+        vars,
+        fns,
+        classes,
+        extra_items,
+        ..
+    } = cxt;
+
+    Ok((
+        ModType {
+            vars: vars.symbols,
+            fns: fns.symbols,
+            classes,
+        },
+        extra_items,
+    ))
+}
+
+pub fn declare_mod_p2(
+    m: &[PreItem],
+    t: ModType,
+    mods: &[(RawSym, ModType)],
+    extra_items: Vec<Item>,
+    bindings: &mut Bindings,
+    file_id: FileId,
+) -> Result<(ModType, Vec<Item>), Error> {
+    let mut cxt = Cxt::from_type(
+        t,
+        mods.into_iter().cloned().collect(),
+        extra_items,
+        bindings,
+        file_id,
+    );
+
+    // Declare
+    for i in m {
+        match cxt.declare_item_p2(i) {
+            Ok(()) => (),
+            Err(e) => return Err(e.to_error(bindings)),
+        }
+    }
+
+    let Cxt {
+        vars,
+        fns,
+        classes,
+        extra_items,
+        ..
+    } = cxt;
+
+    Ok((
+        ModType {
+            vars: vars.symbols,
+            fns: fns.symbols,
+            classes,
+        },
+        extra_items,
+    ))
+}
+
+pub fn elab_mod(
+    m: &[PreItem],
+    t: ModType,
+    mods: &[(RawSym, ModType)],
+    extra_items: Vec<Item>,
+    bindings: &mut Bindings,
+    file_id: FileId,
+) -> Result<Vec<Item>, Error> {
+    let mut cxt = Cxt::from_type(
+        t,
+        mods.into_iter().cloned().collect(),
+        extra_items,
+        bindings,
+        file_id,
+    );
+    let mut v = Vec::new();
 
     // Define
     for i in m {
@@ -27,9 +109,6 @@ pub fn elab_mod(m: &[PreItem], bindings: &mut Bindings) -> Result<Vec<Item>, Err
     Ok(v)
 }
 
-#[derive(Debug, Clone)]
-struct FnType(Vec<Type>, Type);
-
 /// Implements scoping with a Vec instead of a HashMap. We search from the back, so we can use it like a stack.
 struct Env<S, T> {
     symbols: Vec<(RawSym, S, T)>,
@@ -41,6 +120,13 @@ impl<S: Copy, T> Env<S, T> {
     fn new() -> Self {
         Env {
             symbols: Vec::new(),
+            scopes: Vec::new(),
+        }
+    }
+
+    fn from_vec(symbols: Vec<(RawSym, S, T)>) -> Self {
+        Env {
+            symbols,
             scopes: Vec::new(),
         }
     }
@@ -69,63 +155,111 @@ impl<S: Copy, T> Env<S, T> {
     }
 }
 
-struct ClassInfo {
-    methods: Vec<(RawSym, FnId, FnType)>,
-    variants: Option<Vec<RawSym>>,
-}
-impl ClassInfo {
-    fn new_class(methods: Vec<(RawSym, FnId, FnType)>) -> Self {
-        ClassInfo {
-            methods,
-            variants: None,
-        }
-    }
-
-    fn new_enum(variants: Vec<RawSym>) -> Self {
-        ClassInfo {
-            methods: Vec::new(),
-            variants: Some(variants),
-        }
-    }
-}
-
 struct Cxt<'b> {
     vars: Env<Sym, Type>,
     fns: Env<FnId, FnType>,
-    classes: Env<TypeId, ClassInfo>,
+    classes: HashMap<RawPath, (TypeId, ClassInfo)>,
     ret_tys: Vec<Option<Type>>,
     bindings: &'b mut Bindings,
+    mods: HashMap<RawSym, ModType>,
     extra_items: Vec<Item>,
+    file_id: FileId,
 }
 impl<'b> Cxt<'b> {
-    fn new(bindings: &'b mut Bindings) -> Self {
+    fn new(bindings: &'b mut Bindings, file_id: FileId) -> Self {
         Cxt {
             vars: Env::new(),
             fns: Env::new(),
-            classes: Env::new(),
+            classes: HashMap::new(),
             ret_tys: Vec::new(),
             bindings,
+            mods: HashMap::new(),
             extra_items: Vec::new(),
+            file_id,
         }
     }
 
-    fn var(&self, s: RawSym) -> Option<(Sym, &Type)> {
-        self.vars.get(s)
+    fn from_type(
+        ModType { vars, fns, classes }: ModType,
+        mods: HashMap<RawSym, ModType>,
+        extra_items: Vec<Item>,
+        bindings: &'b mut Bindings,
+        file_id: FileId,
+    ) -> Self {
+        Cxt {
+            vars: Env::from_vec(vars),
+            fns: Env::from_vec(fns),
+            classes,
+            ret_tys: Vec::new(),
+            bindings,
+            mods,
+            extra_items,
+            file_id,
+        }
     }
-    fn fun(&self, s: RawSym) -> Option<(FnId, &FnType)> {
-        self.fns.get(s)
+
+    fn var(&self, s: &RawPath) -> Option<(Sym, &Type)> {
+        if s.len() == 1 {
+            self.vars.get(*s.stem())
+        } else if s.len() == 2 {
+            let module = self.module(**s.0.first().unwrap())?;
+            module
+                .vars
+                .iter()
+                .rfind(|(x, _, _)| *x == *s.stem())
+                .map(|(_, s, t)| (*s, t))
+        } else {
+            None
+        }
     }
-    fn class(&self, s: RawSym) -> Option<TypeId> {
-        self.classes.get(s).map(|(x, _)| x)
+    fn fun(&self, s: &RawPath) -> Option<(FnId, &FnType)> {
+        if s.len() == 1 {
+            self.fns.get(*s.stem())
+        } else if s.len() == 2 {
+            let module = self.module(**s.0.first().unwrap())?;
+            module
+                .fns
+                .iter()
+                .rfind(|(x, _, _)| *x == *s.stem())
+                .map(|(_, s, t)| (*s, t))
+        } else {
+            None
+        }
+    }
+    fn class(&self, s: &RawPath) -> Option<TypeId> {
+        let mut s = s.clone();
+        if s.len() == 1 {
+            s = self.path(s.1);
+        }
+        if let Some(x) = self.classes.get(&s).map(|(x, _)| x) {
+            Some(*x)
+        } else if s.len() == 2 {
+            let module = self.module(**s.0.first().unwrap())?;
+            module.classes.get(&s).map(|(s, _)| *s)
+        } else {
+            None
+        }
+    }
+    fn module(&self, s: RawSym) -> Option<&ModType> {
+        self.mods.get(&s)
     }
     fn class_info(&self, class: TypeId) -> &ClassInfo {
         &self
             .classes
-            .symbols
-            .iter()
-            .find(|(_, x, _)| *x == class)
+            .values()
+            .find(|(x, _)| *x == class)
+            .map(|(_, i)| i)
+            .or_else(|| {
+                for (_, m) in &self.mods {
+                    for (_, (tid, info)) in &m.classes {
+                        if *tid == class {
+                            return Some(info);
+                        }
+                    }
+                }
+                None
+            })
             .unwrap()
-            .2
     }
 
     /// Returns the return type of the innermost function
@@ -151,31 +285,38 @@ impl<'b> Cxt<'b> {
         self.ret_tys.pop();
     }
 
+    fn path(&self, n: Spanned<RawSym>) -> RawPath {
+        RawPath(vec![Spanned::new(self.file_id.1, Span(0, 0))], n)
+    }
+
     /// Creates a new binding with a name
-    fn create(&mut self, k: RawSym, ty: Type, public: bool) -> Sym {
-        let s = self.bindings.create(k, public);
-        self.vars.add(k, s, ty);
+    fn create(&mut self, k: Spanned<RawSym>, ty: Type, public: bool) -> Sym {
+        let s = self.bindings.create(self.path(k), public);
+        self.vars.add(*k, s, ty);
         s
     }
 
     fn create_fn(&mut self, k: Spanned<RawSym>, ty: FnType) -> Result<FnId, TypeError> {
-        if self.fun(*k).is_some() {
+        if self.fun(&lpath(k)).is_some() {
             return Err(TypeError::Duplicate(k.span, *k));
         }
-        let s = self.bindings.add_fn(*k);
+        let s = self.bindings.add_fn(self.path(k));
         self.fns.add(*k, s, ty);
         Ok(s)
     }
 
-    fn create_class(&mut self, k: RawSym, info: ClassInfo) -> TypeId {
-        let s = self.bindings.add_type(k);
-        self.classes.add(k, s, info);
+    fn create_class(&mut self, mut k: RawPath, info: ClassInfo) -> TypeId {
+        if k.len() == 1 {
+            k = self.path(k.1);
+        }
+        let s = self.bindings.add_type(k.clone());
+        self.classes.insert(k, (s, info));
         s
     }
 }
 
 enum TypeError {
-    NotFound(Span, RawSym),
+    NotFound(RawPath),
     /// Unify(span, found, expected)
     Unify(Span, Type, Type),
     WrongArity(Span, usize, usize),
@@ -191,9 +332,9 @@ enum TypeError {
 impl TypeError {
     fn to_error(self, bindings: &Bindings) -> Error {
         match self {
-            TypeError::NotFound(span, raw) => Spanned::new(
-                Doc::start("Name not found: ").add(bindings.resolve_raw(raw)),
-                span,
+            TypeError::NotFound(path) => Spanned::new(
+                Doc::start("Name not found: ").chain(path.pretty(bindings)),
+                path.span(),
             ),
             TypeError::Unify(span, ity, ety) => Spanned::new(
                 Doc::start("Type mismatch: expected ").chain(
@@ -269,9 +410,9 @@ impl<'b> Cxt<'b> {
             PreType::Str => Ok(Type::Str),
             PreType::Tuple(v) if v.is_empty() => Ok(Type::Unit),
             PreType::Class(name) => self
-                .class(**name)
+                .class(name)
                 .map(Type::Class)
-                .ok_or(TypeError::NotFound(name.span, **name)),
+                .ok_or(TypeError::NotFound(name.clone())),
             PreType::Tuple(v) => v
                 .iter()
                 .map(|x| self.elab_type(x))
@@ -281,7 +422,50 @@ impl<'b> Cxt<'b> {
         }
     }
 
-    fn declare_item(&mut self, item: &PreItem) -> Result<(), TypeError> {
+    fn declare_item_p1(&mut self, item: &PreItem) -> Result<(), TypeError> {
+        match item {
+            PreItem::InlineJava(_) => Ok(()),
+            PreItem::Fn(_) => Ok(()),
+            PreItem::ExternFn(_) => Ok(()),
+            PreItem::Let(_, _, _, _) => Ok(()),
+            PreItem::ExternClass(name, methods) => {
+                let methods = methods
+                    .iter()
+                    .map(|f| {
+                        let mut args = Vec::new();
+                        let mut args2 = Vec::new();
+                        for (s, t, _) in &f.args {
+                            let t = self.elab_type(t)?;
+                            args.push(t.clone());
+                            args2.push((self.bindings.create(lpath(*s), true), t));
+                        }
+                        let rty = self.elab_type(&f.ret_ty)?;
+                        let ty = FnType(args, rty.clone());
+                        let id = self.bindings.add_fn(lpath(f.name));
+                        // Make sure the mapping gets through to the backend.
+                        // This technically has the wrong type since it doesn't include the object,
+                        // but it doesn't matter because the function is only accessible as a method.
+                        self.extra_items.push(Item::ExternFn(ExternFn {
+                            id,
+                            ret_ty: rty,
+                            args: args2,
+                            mapping: f.mapping,
+                        }));
+
+                        Ok((*f.name, id, ty))
+                    })
+                    .collect::<Result<_, _>>()?;
+                self.create_class(name.clone(), ClassInfo::new_class(methods));
+                Ok(())
+            }
+            PreItem::Enum(name, variants, _ext) => {
+                self.create_class(name.clone(), ClassInfo::new_enum(variants.clone()));
+                Ok(())
+            }
+        }
+    }
+
+    fn declare_item_p2(&mut self, item: &PreItem) -> Result<(), TypeError> {
         match item {
             PreItem::InlineJava(_) => Ok(()),
             PreItem::Fn(f) => {
@@ -305,50 +489,18 @@ impl<'b> Cxt<'b> {
                 Ok(())
             }
             PreItem::Let(name, ty, x, public) => {
-                if self.var(**name).is_some() {
+                if self.var(&lpath(*name)).is_some() {
                     return Err(TypeError::Duplicate(name.span, **name));
                 }
                 let ty = match ty {
                     Some(ty) => self.elab_type(ty)?,
                     None => self.infer(x)?.1,
                 };
-                self.create(**name, ty, *public);
+                self.create(*name, ty, *public);
                 Ok(())
             }
-            PreItem::ExternClass(name, methods) => {
-                let methods = methods
-                    .iter()
-                    .map(|f| {
-                        let mut args = Vec::new();
-                        let mut args2 = Vec::new();
-                        for (s, t, _) in &f.args {
-                            let t = self.elab_type(t)?;
-                            args.push(t.clone());
-                            args2.push((self.bindings.create(*s, true), t));
-                        }
-                        let rty = self.elab_type(&f.ret_ty)?;
-                        let ty = FnType(args, rty.clone());
-                        let id = self.bindings.add_fn(*f.name);
-                        // Make sure the mapping gets through to the backend.
-                        // This technically has the wrong type since it doesn't include the object,
-                        // but it doesn't matter because the function is only accessible as a method.
-                        self.extra_items.push(Item::ExternFn(ExternFn {
-                            id,
-                            ret_ty: rty,
-                            args: args2,
-                            mapping: f.mapping,
-                        }));
-
-                        Ok((*f.name, id, ty))
-                    })
-                    .collect::<Result<_, _>>()?;
-                self.create_class(*name, ClassInfo::new_class(methods));
-                Ok(())
-            }
-            PreItem::Enum(name, variants, _ext) => {
-                self.create_class(*name, ClassInfo::new_enum(variants.clone()));
-                Ok(())
-            }
+            PreItem::ExternClass(name, methods) => Ok(()),
+            PreItem::Enum(name, variants, _ext) => Ok(()),
         }
     }
 
@@ -363,7 +515,7 @@ impl<'b> Cxt<'b> {
                     body,
                     public,
                 } = f;
-                let (fid, fty) = self.fun(**name).unwrap();
+                let (fid, fty) = self.fun(&lpath(*name)).unwrap();
                 let FnType(atys, rty) = fty.clone();
 
                 self.push(Some(rty.clone()));
@@ -390,7 +542,7 @@ impl<'b> Cxt<'b> {
                     args,
                     mapping,
                 } = f;
-                let (fid, fty) = self.fun(**name).unwrap();
+                let (fid, fty) = self.fun(&lpath(*name)).unwrap();
                 let FnType(atys, rty) = fty.clone();
 
                 self.push(Some(rty.clone()));
@@ -410,14 +562,14 @@ impl<'b> Cxt<'b> {
                 }))
             }
             PreItem::Let(name, _, x, _) => {
-                let (s, t) = self.var(**name).unwrap();
+                let (s, t) = self.var(&lpath(*name)).unwrap();
                 let t = t.clone();
                 let x = self.check(x, t.clone())?;
                 Ok(Item::Let(s, t, x))
             }
-            PreItem::ExternClass(s, _) => Ok(Item::ExternClass(self.class(*s).unwrap())),
+            PreItem::ExternClass(s, _) => Ok(Item::ExternClass(self.class(s).unwrap())),
             PreItem::Enum(name, variants, ext) => Ok(Item::Enum(
-                self.class(*name).unwrap(),
+                self.class(name).unwrap(),
                 variants.clone(),
                 *ext,
             )),
@@ -434,7 +586,8 @@ impl<'b> Cxt<'b> {
                 | PreItem::ExternClass(_, _)
                 | PreItem::Enum(_, _, _)),
             ) => {
-                self.declare_item(item)?;
+                self.declare_item_p1(item)?;
+                self.declare_item_p2(item)?;
                 let item = self.check_item(item)?;
                 self.extra_items.push(item);
                 Ok(None)
@@ -449,7 +602,7 @@ impl<'b> Cxt<'b> {
                     }
                     None => self.infer(value)?,
                 };
-                let n = self.create(**name, t.clone(), *public);
+                let n = self.create(*name, t.clone(), *public);
                 Ok(Some(Statement::Let(n, t, x)))
             }
             PreStatement::Term(t) => self.infer(t).map(|(x, _)| Some(Statement::Term(x))),
@@ -492,9 +645,33 @@ impl<'b> Cxt<'b> {
     fn infer(&mut self, pre: &SPre) -> Result<(Term, Type), TypeError> {
         match &***pre {
             Pre::Var(raw) => self
-                .var(*raw)
+                .var(raw)
                 .map(|(s, t)| (Term::Var(s), t.clone()))
-                .ok_or(TypeError::NotFound(pre.span, *raw)),
+                .ok_or(TypeError::NotFound(raw.clone()))
+                .or_else(|e| {
+                    if raw.len() > 1 {
+                        let mut v = raw.0.clone();
+                        let last = v.pop().unwrap();
+                        let a = RawPath(v, last);
+                        let b = raw.1;
+                        if let Some(class) = self.class(&a) {
+                            let variants = self.class_info(class).variants.as_ref();
+                            if variants.map_or(true, |v| v.iter().all(|x| *x != *b)) {
+                                return Err(TypeError::NotFound(lpath(b)));
+                            }
+
+                            return Ok((Term::Variant(class, *b), Type::Class(class)));
+                        } else if let Some(ty) = self.module(*a.stem()) {
+                            let (_, s, t) = ty
+                                .vars
+                                .iter()
+                                .rfind(|(s, _, _)| *s == *b)
+                                .ok_or(TypeError::NotFound(lpath(b)))?;
+                            return Ok((Term::Var(*s), t.clone()));
+                        }
+                    }
+                    Err(e)
+                }),
             Pre::Lit(l, t) => match l {
                 Literal::Int(_) => match t {
                     Some(t) => {
@@ -521,17 +698,6 @@ impl<'b> Cxt<'b> {
                     .transpose()?
                     .map(Box::new);
                 Ok((Term::Return(x), Type::Unit))
-            }
-            Pre::Variant(a, b) => {
-                let class = self
-                    .class(**a)
-                    .ok_or(TypeError::NotFound(a.span, a.inner))?;
-                let variants = self.class_info(class).variants.as_ref();
-                if variants.map_or(true, |v| v.iter().all(|x| *x != **b)) {
-                    return Err(TypeError::NotFound(b.span, b.inner));
-                }
-
-                Ok((Term::Variant(class, **b), Type::Class(class)))
             }
             Pre::Tuple(v) => {
                 let mut terms = Vec::new();
@@ -601,8 +767,7 @@ impl<'b> Cxt<'b> {
                 Ok((Term::Set(l, *op, Box::new(x)), Type::Unit))
             }
             Pre::Call(f, a) => {
-                let (fid, FnType(atys, rty)) =
-                    self.fun(**f).ok_or(TypeError::NotFound(f.span, **f))?;
+                let (fid, FnType(atys, rty)) = self.fun(f).ok_or(TypeError::NotFound(f.clone()))?;
                 let rty = rty.clone();
                 if a.len() != atys.len() {
                     return Err(TypeError::WrongArity(pre.span, a.len(), atys.len()));
@@ -621,7 +786,7 @@ impl<'b> Cxt<'b> {
                         let (_, fid, FnType(atys, rty)) = methods
                             .iter()
                             .find(|(s, _, _)| *s == **f)
-                            .ok_or(TypeError::NotFound(f.span, f.inner))?;
+                            .ok_or(TypeError::NotFound(lpath(*f)))?;
                         let fid = *fid;
 
                         let rty = rty.clone();
@@ -657,7 +822,7 @@ impl<'b> Cxt<'b> {
                                 Type::Unit,
                             ))
                         }
-                        _ => return Err(TypeError::NotFound(f.span, f.inner)),
+                        _ => return Err(TypeError::NotFound(lpath(*f))),
                     },
                     t => return Err(TypeError::NoMethods(o_.span, t)),
                 }
@@ -740,14 +905,14 @@ impl<'b> Cxt<'b> {
                         let (_, b) = covered
                             .iter_mut()
                             .find(|(x, _)| *x == s2)
-                            .ok_or(TypeError::NotFound(s.span, s2))?;
+                            .ok_or(TypeError::NotFound(lpath(Spanned::new(s2, s.span))))?;
                         if *b {
                             Spanned::new(
                                 Doc::start("Duplicate branch for pattern ")
                                     .add(self.bindings.resolve_raw(s2)),
                                 s.span,
                             )
-                            .emit(Severity::Warning);
+                            .emit(Severity::Warning, self.file_id);
                         } else {
                             *b = true;
                         }
@@ -755,7 +920,7 @@ impl<'b> Cxt<'b> {
                         if had_default {
                             Spanned::new(Doc::start("Duplicate default branch in pattern match, this one is unreachable"),
                                 s.span,
-                            ).emit(Severity::Warning);
+                            ).emit(Severity::Warning, self.file_id);
                             continue;
                         } else {
                             had_default = true;

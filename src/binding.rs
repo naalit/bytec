@@ -3,6 +3,8 @@ use std::{
     num::NonZeroU32,
 };
 
+use crate::term::RawPath;
+
 /// Represents an interned string directly
 ///
 /// Same size properties as Sym
@@ -24,30 +26,30 @@ impl RawSym {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
 pub struct Sym(NonZeroU32);
 impl Sym {
-    fn from_parts(raw: RawSym, num: u32) -> Self {
-        let idx = raw.idx();
-        if idx >= 1 << 18 {
-            panic!("Too many unique identifiers!");
-        }
-        if num >= 1 << 14 {
-            panic!("Too many instances of identifier {}!", idx);
-        }
-        Sym(NonZeroU32::new((num << 18) | idx as u32 + 1).expect("unreachable"))
-    }
-    fn with_num(self, num: u32) -> Self {
-        Sym::from_parts(self.raw(), num)
-    }
+    // fn from_parts(raw: RawSym, num: u32) -> Self {
+    //     let idx = raw.idx();
+    //     if idx >= 1 << 18 {
+    //         panic!("Too many unique identifiers!");
+    //     }
+    //     if num >= 1 << 14 {
+    //         panic!("Too many instances of identifier {}!", idx);
+    //     }
+    //     Sym(NonZeroU32::new((num << 18) | idx as u32 + 1).expect("unreachable"))
+    // }
+    // fn with_num(self, num: u32) -> Self {
+    //     Sym::from_parts(self.raw(), num)
+    // }
 
-    /// Gets the number corresponding to this symbol, so we can show the user that two symbols with the same name are distinct
-    pub fn num(self) -> u32 {
-        (self.0.get() - 1) >> 18
-    }
+    // /// Gets the number corresponding to this symbol, so we can show the user that two symbols with the same name are distinct
+    // pub fn num(self) -> u32 {
+    //     (self.0.get() - 1) >> 18
+    // }
 
-    /// Gets the raw symbol corresponding to this symbol
-    /// This can be used for comparing identifiers directly, as in record labels
-    pub fn raw(self) -> RawSym {
-        RawSym(NonZeroU32::new(((self.0.get() - 1) & ((1 << 18) - 1)) + 1).expect("unreachable"))
-    }
+    // /// Gets the raw symbol corresponding to this symbol
+    // /// This can be used for comparing identifiers directly, as in record labels
+    // pub fn raw(self) -> RawSym {
+    //     RawSym(NonZeroU32::new(((self.0.get() - 1) & ((1 << 18) - 1)) + 1).expect("unreachable"))
+    // }
 }
 
 /// Like a Sym, but it identifies a type
@@ -77,8 +79,9 @@ pub struct Bindings {
     string_pool: Vec<String>,
     nums: HashMap<RawSym, u32>,
     pubs: HashSet<Sym>,
-    types: Vec<RawSym>,
-    fns: Vec<RawSym>,
+    types: Vec<RawPath>,
+    fns: Vec<RawPath>,
+    syms: Vec<RawPath>,
 }
 impl Bindings {
     /// Don't do this if you're holding symbols somewhere!
@@ -95,20 +98,20 @@ impl Bindings {
         self.string_pool = string_pool;
     }
 
-    pub fn type_name(&self, t: TypeId) -> RawSym {
-        self.types[(t.0.get() - 1) as usize]
+    pub fn type_name(&self, t: TypeId) -> RawPath {
+        self.types[(t.0.get() - 1) as usize].clone()
     }
 
-    pub fn add_type<'a>(&mut self, raw: RawSym) -> TypeId {
+    pub fn add_type(&mut self, raw: RawPath) -> TypeId {
         self.types.push(raw);
         TypeId(NonZeroU32::new(self.types.len() as u32).unwrap())
     }
 
-    pub fn fn_name(&self, t: FnId) -> RawSym {
-        self.fns[(t.0.get() - 1) as usize]
+    pub fn fn_name(&self, t: FnId) -> RawPath {
+        self.fns[(t.0.get() - 1) as usize].clone()
     }
 
-    pub fn add_fn<'a>(&mut self, raw: RawSym) -> FnId {
+    pub fn add_fn(&mut self, raw: RawPath) -> FnId {
         self.fns.push(raw);
         FnId(NonZeroU32::new(self.fns.len() as u32).unwrap())
     }
@@ -126,9 +129,9 @@ impl Bindings {
 
     /// Creates a new symbol with the same name as `s`, but a fresh value
     pub fn fresh(&mut self, s: Sym) -> Sym {
-        let u = self.nums.entry(s.raw()).or_insert(0);
-        *u += 1;
-        let s2 = s.with_num(*u - 1);
+        let raw = self.syms[s.0.get() as usize - 1].clone();
+        self.syms.push(raw);
+        let s2 = Sym(NonZeroU32::new(self.syms.len() as u32).unwrap());
         if self.public(s) {
             self.pubs.insert(s2);
         }
@@ -140,22 +143,45 @@ impl Bindings {
     }
 
     /// Create a new symbol. It's guaranteed to be unique to all other symbols created with create()
-    pub fn create(&mut self, raw: RawSym, public: bool) -> Sym {
-        let u = self.nums.entry(raw).or_insert(0);
-        *u += 1;
-        let s = Sym::from_parts(raw, *u - 1);
+    pub fn create(&mut self, raw: RawPath, public: bool) -> Sym {
+        self.syms.push(raw);
+        let s = Sym(NonZeroU32::new(self.syms.len() as u32).unwrap());
         if public {
             self.pubs.insert(s);
         }
         s
     }
 
+    pub fn sym_path(&self, s: Sym) -> RawPath {
+        self.syms[s.0.get() as usize - 1].clone()
+    }
+
     /// This doesn't return an Option, because only the Bindings can create symbols, and it adds them to `self.bindings`
     /// Therefore, if you pass a symbol created by another Bindings instance, this may panic
-    pub fn resolve(&self, s: Sym) -> &str {
-        self.string_pool
-            .get(s.raw().idx())
-            .expect("String referred to by symbol not in Bindings interned string table!")
+    pub fn resolve_spath(&self, s: Sym) -> String {
+        let mut raw = &self.syms[s.0.get() as usize - 1];
+        let mut s = String::new();
+        for i in &raw.0 {
+            s.push_str(self.resolve_raw(**i));
+            s.push('.');
+        }
+        s.push_str(self.resolve_raw(*raw.1));
+        s
+    }
+
+    pub fn resolve_path(&self, raw: &RawPath) -> String {
+        let mut s = String::new();
+        for i in &raw.0 {
+            s.push_str(self.resolve_raw(**i));
+            s.push('.');
+        }
+        s.push_str(self.resolve_raw(*raw.1));
+        s
+    }
+
+    pub fn resolve_local(&self, s: Sym) -> &str {
+        let mut raw = &self.syms[s.0.get() as usize - 1];
+        self.resolve_raw(*raw.1)
     }
 
     pub fn resolve_raw(&self, s: RawSym) -> &str {

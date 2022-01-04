@@ -1,0 +1,19 @@
+extern {
+    package bytecoder;
+
+    import java.util.Random;
+}
+
+enum Bool {
+    True,
+    False,
+}
+
+class Random {
+    fn next_int(max: i32): i32 = "nextInt";
+}
+
+let arr: [i32] = [];
+fn add_arr(i: i32) {
+    arr.push(i);
+}

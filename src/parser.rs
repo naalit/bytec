@@ -411,12 +411,12 @@ pub struct Parser<'a> {
     bindings: Bindings,
 }
 impl<'a> Parser<'a> {
-    pub fn new(input: &'a str) -> Self {
+    pub fn new(input: &'a str, bindings: Bindings) -> Self {
         Parser {
             lexer: Lexer { input, pos: 0 },
             next: None,
             next_err: None,
-            bindings: Default::default(),
+            bindings,
         }
     }
 
@@ -470,7 +470,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn name(&mut self) -> Option<Spanned<RawSym>> {
+    fn ident(&mut self) -> Option<Spanned<RawSym>> {
         match *self.peek()? {
             Tok::Name(x) => {
                 let t = self.next()?;
@@ -478,6 +478,17 @@ impl<'a> Parser<'a> {
             }
             _ => None,
         }
+    }
+
+    fn path(&mut self) -> Option<RawPath> {
+        let mut name = self.ident()?;
+        let mut v = Vec::new();
+        while self.peek().as_deref() == Some(&Tok::DoubleColon) {
+            self.next();
+            v.push(name);
+            name = self.ident().unwrap();
+        }
+        Some(RawPath(v, name))
     }
 
     fn term(&mut self) -> Result<Option<SPre>, Error> {
@@ -659,7 +670,7 @@ impl<'a> Parser<'a> {
                         let span = Span(t.span.0, self.lexer.pos);
                         t = Box::new(Spanned::new(Pre::TupleIdx(t, *i as usize), span));
                     } else {
-                        let name = self.name().ok_or(self.err("expected method name"))?;
+                        let name = self.ident().ok_or(self.err("expected method name"))?;
                         let args = self.call_args()?;
                         let span = Span(t.span.0, self.lexer.pos);
                         t = Box::new(Spanned::new(Pre::Method(t, name, args), span));
@@ -784,7 +795,7 @@ impl<'a> Parser<'a> {
                 loop {
                     let needs_semicolon = match self.peek().as_deref() {
                         Some(Tok::Name(_)) => {
-                            let name = self.name().unwrap();
+                            let name = self.ident().unwrap();
                             self.expect(Tok::WideArrow, "'=>'")?;
                             let term = self.term()?.ok_or(self.err("expected expression"))?;
                             let n = term.needs_semicolon();
@@ -826,21 +837,13 @@ impl<'a> Parser<'a> {
             }
             // variable or function or method call
             Some(Tok::Name(_)) => {
-                let name = self.name().unwrap();
-                let var = Box::new(Spanned::new(Pre::Var(name.inner), name.span));
+                let name = self.path().unwrap();
+                let var = Box::new(Spanned::new(Pre::Var(name.clone()), name.span()));
                 match self.peek().as_deref() {
                     Some(Tok::OpenParen) => {
                         let args = self.call_args()?;
                         Ok(Some(Box::new(Spanned::new(
                             Pre::Call(name, args),
-                            Span(var.span.0, self.lexer.pos),
-                        ))))
-                    }
-                    Some(Tok::DoubleColon) => {
-                        self.next();
-                        let m = self.name().ok_or(self.err("expected name"))?;
-                        Ok(Some(Box::new(Spanned::new(
-                            Pre::Variant(name, m),
                             Span(var.span.0, self.lexer.pos),
                         ))))
                     }
@@ -1005,12 +1008,8 @@ impl<'a> Parser<'a> {
                 }
             }
             Some(Tok::Name(n)) => {
-                let span = self.span();
-                self.next();
-                Ok(Some(PreType::Class(Spanned::new(
-                    self.bindings.raw(*n),
-                    span,
-                ))))
+                let path = self.path().unwrap();
+                Ok(Some(PreType::Class(path)))
             }
             _ => Ok(None),
         }
@@ -1020,8 +1019,15 @@ impl<'a> Parser<'a> {
     /// For example, `add(pub x: i32, y: i32): i32`
     fn prototype(
         &mut self,
-    ) -> Result<(Spanned<RawSym>, Vec<(RawSym, PreType, bool)>, PreType), Error> {
-        let name = self.name().ok_or(self.err("expected function name"))?;
+    ) -> Result<
+        (
+            Spanned<RawSym>,
+            Vec<(Spanned<RawSym>, PreType, bool)>,
+            PreType,
+        ),
+        Error,
+    > {
+        let name = self.ident().ok_or(self.err("expected function name"))?;
         self.expect(Tok::OpenParen, "'('")?;
         let mut args = Vec::new();
         while self.peek().as_deref() != Some(&Tok::CloseParen) {
@@ -1033,12 +1039,12 @@ impl<'a> Parser<'a> {
             };
 
             let n = self
-                .name()
+                .ident()
                 .ok_or(self.err("expected argument name or ')'"))?;
             self.expect(Tok::Colon, "':'")?;
 
             let t = self.ty()?.ok_or(self.err("expected argument type"))?;
-            args.push((n.inner, t, public));
+            args.push((n, t, public));
             match self.peek().as_deref() {
                 Some(Tok::Comma) => {
                     self.next();
@@ -1059,12 +1065,12 @@ impl<'a> Parser<'a> {
 
     /// Parses an enum declaration, starting right after the `enum` keyword
     fn enum_dec(&mut self, ext: bool) -> Result<PreItem, Error> {
-        let name = self.name().ok_or(self.err("expected enum name"))?;
+        let name = self.path().ok_or(self.err("expected enum name"))?;
         self.expect(Tok::OpenBrace, "'{'")?;
 
         let mut v = Vec::new();
         loop {
-            if let Some(name) = self.name() {
+            if let Some(name) = self.ident() {
                 v.push(*name);
                 if self.peek().as_deref() == Some(&Tok::Comma) {
                     self.next();
@@ -1078,7 +1084,7 @@ impl<'a> Parser<'a> {
         }
         self.expect(Tok::CloseBrace, "closing '}'")?;
 
-        Ok(PreItem::Enum(*name, v, ext))
+        Ok(PreItem::Enum(name, v, ext))
     }
 
     fn item(&mut self) -> Result<Option<PreItem>, Error> {
@@ -1098,7 +1104,7 @@ impl<'a> Parser<'a> {
                     false
                 };
 
-                let name = self.name().ok_or(self.err("expected name"))?;
+                let name = self.ident().ok_or(self.err("expected name"))?;
                 let ty = if self.peek().as_deref() == Some(&Tok::Colon) {
                     self.next();
                     Some(self.ty()?.ok_or(self.err("expected type"))?)
@@ -1117,11 +1123,11 @@ impl<'a> Parser<'a> {
             Some(Tok::Class) => {
                 // `class` always means an external class, because you can't define them in bytec (for now)
                 self.next();
-                let name = self.name().ok_or(self.err("expected class name"))?;
+                let name = self.path().ok_or(self.err("expected class name"))?;
                 match self.peek().as_deref() {
                     Some(Tok::Semicolon) => {
                         self.next();
-                        Ok(Some(PreItem::ExternClass(*name, Vec::new())))
+                        Ok(Some(PreItem::ExternClass(name, Vec::new())))
                     }
                     Some(Tok::OpenBrace) => {
                         self.next();
@@ -1158,7 +1164,7 @@ impl<'a> Parser<'a> {
                         }
                         self.next();
 
-                        Ok(Some(PreItem::ExternClass(*name, methods)))
+                        Ok(Some(PreItem::ExternClass(name, methods)))
                     }
                     _ => return Err(self.err("expected ';' or '{'")),
                 }
@@ -1269,7 +1275,7 @@ impl<'a> Parser<'a> {
                 } else {
                     false
                 };
-                let var = self.name().ok_or(self.err("expected name"))?;
+                let var = self.ident().ok_or(self.err("expected name"))?;
 
                 self.expect(Tok::In, "'in'")?;
 
@@ -1296,7 +1302,7 @@ impl<'a> Parser<'a> {
                     block.push(stmt);
                 }
 
-                Ok(Some(PreStatement::For(*var, public, a, b, block)))
+                Ok(Some(PreStatement::For(var, public, a, b, block)))
             }
             _ => Ok(self.term()?.map(PreStatement::Term)),
         }

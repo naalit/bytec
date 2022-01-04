@@ -7,23 +7,23 @@ extern {
 
 extern fn println(s: str) = "out.println";
 
-enum Bool {
-    True,
-    False,
-}
-fn not(b: Bool): Bool = match b {
-    True => Bool::False,
-    False => Bool::True,
+// enum Bool {
+//     True,
+//     False,
+// }
+fn not(b: Lib::Bool): Lib::Bool = match b {
+    True => Lib::Bool::False,
+    False => Lib::Bool::True,
 };
-fn to_bool(b: Bool): bool = match b {
+fn to_bool(b: Lib::Bool): bool = match b {
     True => true,
     False => false,
 };
 
-class Random {
-    fn next_int(max: i32): i32 = "nextInt";
-}
-fn rand(r: Random): i32 = r.next_int(10);
+// class Random {
+//     fn next_int(max: i32): i32 = "nextInt";
+// }
+fn rand(r: Lib::Random): i32 = r.next_int(10);
 
 fn triple(pub x: i32): i32 {
     fn add(x: i32, y: i32): i32 = x + y;
@@ -116,7 +116,14 @@ fn pretty_arr(arr: [i32]) {
     }
 }
 
-fn looper(r: Random) {
+fn stuff() {
+    Lib::add_arr(3);
+    for i in Lib::arr {
+        println("entry");
+    }
+}
+
+fn looper(r: Lib::Random) {
     while rand(r) > 2 {
         println("Looping!");
     }

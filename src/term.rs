@@ -7,9 +7,12 @@ use crate::pretty::{Prec, Style};
 // Common types
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct FileId(pub usize, pub RawSym);
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Span(pub usize, pub usize);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub struct Spanned<T> {
     pub inner: T,
     pub span: Span,
@@ -18,11 +21,28 @@ impl<T> Spanned<T> {
     pub fn new(inner: T, span: Span) -> Self {
         Spanned { inner, span }
     }
+    pub fn hack(inner: T) -> Self {
+        Spanned {
+            inner,
+            span: Span(0, 0),
+        }
+    }
 }
 impl<T> std::ops::Deref for Spanned<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.inner
+    }
+}
+impl<T: PartialEq> PartialEq for Spanned<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+impl<T: Eq> Eq for Spanned<T> {}
+impl<T: std::hash::Hash> std::hash::Hash for Spanned<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
     }
 }
 pub type Error = Spanned<Doc>;
@@ -82,8 +102,8 @@ pub enum Literal {
 }
 
 lazy_static::lazy_static! {
-    pub static ref INPUT_PATH: RwLock<PathBuf> = RwLock::new(PathBuf::new());
-    pub static ref INPUT_SOURCE: RwLock<String> = RwLock::new(String::new());
+    pub static ref INPUT_PATH: RwLock<HashMap<FileId, PathBuf>> = RwLock::new(Default::default());
+    pub static ref INPUT_SOURCE: RwLock<HashMap<FileId, String>> = RwLock::new(Default::default());
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -107,10 +127,11 @@ impl Severity {
 }
 
 impl Error {
-    pub fn emit(self, severity: Severity) {
+    pub fn emit(self, severity: Severity, file: FileId) {
         // An extremely simple copy of Rust's error message design
         // TODO show multiline spans, show secondary message
         let source = INPUT_SOURCE.read().unwrap();
+        let source = source.get(&file).unwrap();
         let (mut line, mut col) = (1, self.span.0);
         let mut line_str = None;
         for l in source.lines() {
@@ -140,6 +161,8 @@ impl Error {
                     .add(
                         INPUT_PATH
                             .read()
+                            .unwrap()
+                            .get(&file)
                             .unwrap()
                             .file_name()
                             .unwrap()
@@ -172,6 +195,37 @@ impl Error {
 }
 
 // Syntax
+
+#[derive(Clone)]
+pub struct ModType {
+    pub vars: Vec<(RawSym, Sym, Type)>,
+    pub fns: Vec<(RawSym, FnId, FnType)>,
+    pub classes: HashMap<RawPath, (TypeId, ClassInfo)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FnType(pub Vec<Type>, pub Type);
+
+#[derive(Clone)]
+pub struct ClassInfo {
+    pub methods: Vec<(RawSym, FnId, FnType)>,
+    pub variants: Option<Vec<RawSym>>,
+}
+impl ClassInfo {
+    pub fn new_class(methods: Vec<(RawSym, FnId, FnType)>) -> Self {
+        ClassInfo {
+            methods,
+            variants: None,
+        }
+    }
+
+    pub fn new_enum(variants: Vec<RawSym>) -> Self {
+        ClassInfo {
+            methods: Vec::new(),
+            variants: Some(variants),
+        }
+    }
+}
 
 pub enum ArrayMethod {
     Len,
@@ -258,15 +312,42 @@ pub enum Type {
 
 // Presyntax
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RawPath(pub Vec<Spanned<RawSym>>, pub Spanned<RawSym>);
+impl RawPath {
+    pub fn len(&self) -> usize {
+        self.0.len() + 1
+    }
+    pub fn stem(&self) -> Spanned<RawSym> {
+        self.1
+    }
+    pub fn span(&self) -> Span {
+        Span(
+            self.0.first().map_or(self.1.span, |x| x.span).0,
+            self.1.span.1,
+        )
+    }
+    pub fn pretty(&self, cxt: &Bindings) -> Doc {
+        let mut doc = Doc::start(cxt.resolve_raw(*self.1));
+        for i in self.0.iter().rev() {
+            doc = Doc::start(cxt.resolve_raw(**i)).add("::").chain(doc);
+        }
+        doc
+    }
+}
+pub fn lpath(x: Spanned<RawSym>) -> RawPath {
+    RawPath(Vec::new(), x)
+}
+
 pub type SPre = Box<Spanned<Pre>>;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pre {
     // a
-    Var(RawSym),
+    Var(RawPath),
     // 2
     Lit(Literal, Option<PreType>),
     // f(a, b, c)
-    Call(Spanned<RawSym>, Vec<SPre>),
+    Call(RawPath, Vec<SPre>),
     // o.f(a, b, c)
     Method(SPre, Spanned<RawSym>, Vec<SPre>),
     // a + b
@@ -281,8 +362,6 @@ pub enum Pre {
     Continue,
     // return x
     Return(Option<SPre>),
-    // Direction::North
-    Variant(Spanned<RawSym>, Spanned<RawSym>),
     // (a, b)
     Tuple(Vec<SPre>),
     // x.0
@@ -302,14 +381,14 @@ pub struct PreFn {
     pub name: Spanned<RawSym>,
     pub public: bool,
     pub ret_ty: PreType,
-    pub args: Vec<(RawSym, PreType, bool)>,
+    pub args: Vec<(Spanned<RawSym>, PreType, bool)>,
     pub body: SPre,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreEFn {
     pub name: Spanned<RawSym>,
     pub ret_ty: PreType,
-    pub args: Vec<(RawSym, PreType, bool)>,
+    pub args: Vec<(Spanned<RawSym>, PreType, bool)>,
     pub mapping: RawSym,
 }
 
@@ -318,8 +397,8 @@ pub enum PreItem {
     Fn(PreFn),
     ExternFn(PreEFn),
     InlineJava(RawSym),
-    ExternClass(RawSym, Vec<PreEFn>),
-    Enum(RawSym, Vec<RawSym>, bool),
+    ExternClass(RawPath, Vec<PreEFn>),
+    Enum(RawPath, Vec<RawSym>, bool),
     Let(Spanned<RawSym>, Option<PreType>, SPre, bool),
 }
 
@@ -329,7 +408,7 @@ pub enum PreStatement {
     Term(SPre),
     While(SPre, Vec<PreStatement>),
     // for pub a in b..c
-    For(RawSym, bool, SPre, Option<SPre>, Vec<PreStatement>),
+    For(Spanned<RawSym>, bool, SPre, Option<SPre>, Vec<PreStatement>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -338,7 +417,7 @@ pub enum PreType {
     I64,
     Bool,
     Str,
-    Class(Spanned<RawSym>),
+    Class(RawPath),
     Tuple(Vec<PreType>),
     Array(Box<PreType>),
 }
@@ -523,7 +602,7 @@ impl BinOp {
 impl Term {
     pub fn pretty(&self, cxt: &Bindings) -> Doc {
         match self {
-            Term::Var(x) => Doc::start(cxt.resolve(*x)),
+            Term::Var(x) => Doc::start(cxt.resolve_local(*x)),
             Term::Lit(l, t) => match l {
                 Literal::Int(i) => Doc::start(i).add(match t {
                     Type::I32 => "i32",
@@ -534,7 +613,9 @@ impl Term {
                 Literal::Bool(t) => Doc::start(t),
             }
             .style(Style::Literal),
-            Term::Variant(tid, s) => Doc::start(cxt.resolve_raw(cxt.type_name(*tid)))
+            Term::Variant(tid, s) => cxt
+                .type_name(*tid)
+                .pretty(cxt)
                 .add("::")
                 .add(cxt.resolve_raw(*s)),
             Term::Tuple(v) => Doc::start('(')
@@ -556,7 +637,9 @@ impl Term {
                 ArrayMethod::Pop => Doc::start("pop()"),
                 ArrayMethod::Push(x) => Doc::start("push(").chain(x.pretty(cxt)).add(')'),
             }),
-            Term::Call(None, f, a) => Doc::start(cxt.resolve_raw(cxt.fn_name(*f)))
+            Term::Call(None, f, a) => cxt
+                .fn_name(*f)
+                .pretty(cxt)
                 .add("(")
                 .chain(Doc::intersperse(
                     a.iter().map(|x| x.pretty(cxt)),
@@ -566,7 +649,7 @@ impl Term {
             Term::Call(Some(o), f, a) => o
                 .pretty(cxt)
                 .add('.')
-                .add(cxt.resolve_raw(cxt.fn_name(*f)))
+                .chain(cxt.fn_name(*f).pretty(cxt))
                 .add("(")
                 .chain(Doc::intersperse(
                     a.iter().map(|x| x.pretty(cxt)),
@@ -643,11 +726,11 @@ impl Item {
         match self {
             Item::Fn(f) => Doc::keyword("fn")
                 .space()
-                .add(cxt.resolve_raw(cxt.fn_name(f.id)))
+                .chain(cxt.fn_name(f.id).pretty(cxt))
                 .add("(")
                 .chain(Doc::intersperse(
                     f.args.iter().map(|(name, ty)| {
-                        Doc::start(cxt.resolve(*name))
+                        Doc::start(cxt.resolve_local(*name))
                             .add(":")
                             .space()
                             .chain(ty.pretty(cxt))
@@ -667,11 +750,11 @@ impl Item {
                 .space()
                 .chain(Doc::keyword("fn"))
                 .space()
-                .add(cxt.resolve_raw(cxt.fn_name(f.id)))
+                .chain(cxt.fn_name(f.id).pretty(cxt))
                 .add("(")
                 .chain(Doc::intersperse(
                     f.args.iter().map(|(name, ty)| {
-                        Doc::start(cxt.resolve(*name))
+                        Doc::start(cxt.resolve_local(*name))
                             .add(":")
                             .space()
                             .chain(ty.pretty(cxt))
@@ -699,7 +782,7 @@ impl Item {
                 }
                 doc.chain(Doc::keyword("enum"))
                     .space()
-                    .add(cxt.resolve_raw(cxt.type_name(*id)))
+                    .chain(cxt.type_name(*id).pretty(cxt))
                     .space()
                     .add('{')
                     .line()
@@ -713,7 +796,7 @@ impl Item {
                     .line()
                     .add('}')
             }
-            Item::ExternClass(c) => Doc::start(cxt.resolve_raw(cxt.type_name(*c))),
+            Item::ExternClass(c) => cxt.type_name(*c).pretty(cxt),
             Item::InlineJava(s) => Doc::keyword("extern")
                 .space()
                 .chain(
@@ -725,7 +808,7 @@ impl Item {
                 .add(';'),
             Item::Let(n, t, x) => Doc::keyword("let")
                 .space()
-                .add(cxt.resolve(*n))
+                .add(cxt.resolve_local(*n))
                 .add(":")
                 .space()
                 .chain(t.pretty(cxt))
@@ -743,7 +826,7 @@ impl Statement {
             Statement::Term(x) => x.pretty(cxt).add(";"),
             Statement::Let(n, t, x) => Doc::keyword("let")
                 .space()
-                .add(cxt.resolve(*n))
+                .add(cxt.resolve_local(*n))
                 .add(":")
                 .space()
                 .chain(t.pretty(cxt))
@@ -767,7 +850,7 @@ impl Statement {
                 .add("}"),
             Statement::For(s, iter, block) => Doc::keyword("for")
                 .space()
-                .add(cxt.resolve(*s))
+                .add(cxt.resolve_local(*s))
                 .space()
                 .chain(Doc::keyword("in"))
                 .space()
@@ -802,7 +885,7 @@ impl Type {
             Type::Bool => Doc::keyword("bool"),
             Type::Str => Doc::keyword("str"),
             Type::Unit => Doc::start("()"),
-            Type::Class(c) => Doc::start(cxt.resolve_raw(cxt.type_name(*c))),
+            Type::Class(c) => cxt.type_name(*c).pretty(cxt),
             Type::Tuple(v) => Doc::start('(')
                 .chain(Doc::intersperse(
                     v.iter().map(|x| x.pretty(cxt)),
@@ -816,8 +899,8 @@ impl Type {
 impl LValue {
     pub fn pretty(&self, cxt: &Bindings) -> Doc {
         match self {
-            LValue::Var(x) => Doc::start(cxt.resolve(*x)),
-            LValue::Idx(arr, i) => Doc::start(cxt.resolve(*arr))
+            LValue::Var(x) => Doc::start(cxt.resolve_local(*x)),
+            LValue::Idx(arr, i) => Doc::start(cxt.resolve_local(*arr))
                 .add('[')
                 .chain(i.pretty(cxt))
                 .add(']'),
