@@ -193,6 +193,7 @@ enum JTerm {
     ClassNew(JClass, Vec<JTerm>),
     Index(Box<JTerm>, Box<JTerm>, JTy),
     Not(Box<JTerm>),
+    Null(JTy),
     InlineJava(RawSym, JTy),
 }
 
@@ -285,10 +286,6 @@ impl<T> MaybeList<T> {
             MaybeList::One(t) => vec![t],
             MaybeList::Tuple(v) => v,
         }
-    }
-
-    fn is_none(&self) -> bool {
-        matches!(self, MaybeList::Tuple(v) if v.is_empty())
     }
 
     fn len(&self) -> usize {
@@ -400,6 +397,7 @@ impl JTerm {
         match self {
             JTerm::Not(x) => format!("!({})", x.gen(cxt)),
             JTerm::Var(v, _) => cxt.name_str(*v),
+            JTerm::Null(_) => "null".to_string(),
             JTerm::Lit(l) => match l {
                 JLit::Int(i) => i.to_string(),
                 JLit::Long(i) => format!("{}L", i),
@@ -445,7 +443,11 @@ impl JTerm {
             JTerm::Prop(obj, prop, _) => {
                 format!("{}.{}", obj.gen(cxt), cxt.bindings.resolve_raw(*prop))
             }
-            JTerm::BinOp(op @ (BinOp::Eq | BinOp::Neq), a, b) if !a.ty().primitive() => {
+            JTerm::BinOp(op @ (BinOp::Eq | BinOp::Neq), a, b)
+                if !a.ty().primitive()
+                    && !matches!(&**a, JTerm::Null(_))
+                    && !matches!(&**b, JTerm::Null(_)) =>
+            {
                 let mut buf = String::new();
                 if *op == BinOp::Neq {
                     buf.push('!');
@@ -986,7 +988,7 @@ impl JTerm {
     /// Simple instructions can be duplicated freely.
     fn simple(&self) -> bool {
         match self {
-            JTerm::Var(_, _) | JTerm::Variant(_, _) | JTerm::Lit(_) => true,
+            JTerm::Var(_, _) | JTerm::Variant(_, _) | JTerm::Lit(_) | JTerm::Null(_) => true,
             JTerm::Call(_, _, _, _)
             | JTerm::BinOp(_, _, _)
             | JTerm::Index(_, _, _)
@@ -1002,6 +1004,7 @@ impl JTerm {
     fn ty(&self) -> JTy {
         match self {
             JTerm::Var(_, t) => t.clone(),
+            JTerm::Null(t) => t.clone(),
             JTerm::Lit(l) => match l {
                 JLit::Int(_) => JTy::I32,
                 JLit::Long(_) => JTy::I64,
@@ -1033,6 +1036,7 @@ impl Term {
                 let var = cxt.var(*s).unwrap();
                 return var.map(|var| JTerm::Var(var, cxt.tys.get(&var).unwrap().clone()));
             }
+            Term::Null(t) => JTerm::Null(t.lower(cxt).one()),
             Term::Not(x) => JTerm::Not(Box::new(x.lower(cxt).one())),
             Term::Lit(l, t) => match l {
                 Literal::Int(i) => match t {

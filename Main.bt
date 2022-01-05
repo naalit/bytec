@@ -162,6 +162,10 @@ extern {
 extern fn returnsArray(): [i32] = "Helper.returnsArray";
 
 fn callsArray(): i32 {
+    let x: str = null;
+    if x == null {
+        println("Null string " + 3);
+    }
     let arr = returnsArray();
     arr.push(12);
     let sum = 0;

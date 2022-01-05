@@ -66,6 +66,8 @@ enum Tok<'a> {
     Constructor,
     // throws
     Throws,
+    // null
+    Null,
 
     // +
     Add,
@@ -190,6 +192,7 @@ impl<'a> Lexer<'a> {
             "use" => Tok::Use,
             "constructor" => Tok::Constructor,
             "throws" => Tok::Throws,
+            "null" => Tok::Null,
             _ => Tok::Name(name),
         };
 
@@ -775,6 +778,10 @@ impl<'a> Parser<'a> {
                     Pre::Lit(Literal::Bool(false), None),
                     self.span(),
                 ))))
+            }
+            Some(Tok::Null) => {
+                self.next();
+                Ok(Some(Box::new(Spanned::new(Pre::Null, self.span()))))
             }
             Some(Tok::Break) => {
                 self.next();

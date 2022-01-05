@@ -449,6 +449,7 @@ enum TypeError {
     NoMembers(Span, Type),
     TupleOutOfBounds(Span, Type, usize),
     NotLValue(Span, Term),
+    TypeNeeded(Span),
 }
 impl TypeError {
     fn to_error(self, bindings: &Bindings) -> Error {
@@ -518,6 +519,10 @@ impl TypeError {
             TypeError::NotLValue(span, v) => Spanned::new(
                 Doc::start("Can only assign to variables and array indices, not ")
                     .chain(v.pretty(bindings)),
+                span,
+            ),
+            TypeError::TypeNeeded(span) => Spanned::new(
+                Doc::start("Type of expression could not be inferred, type annotation needed"),
                 span,
             ),
         }
@@ -962,6 +967,7 @@ impl<'b> Cxt<'b> {
                 let x = self.check(x, Type::Bool)?;
                 Ok((Term::Not(Box::new(x)), Type::Bool))
             }
+            Pre::Null => Err(TypeError::TypeNeeded(pre.span)),
             Pre::Var(raw) => self
                 .var(raw)
                 .map(|(s, t)| (Term::Var(s), t.clone()))
@@ -1188,7 +1194,12 @@ impl<'b> Cxt<'b> {
                     }
                     BinOpType::Logic => (self.check(a, Type::Bool)?, Type::Bool, Type::Bool),
                 };
-                let b = self.check(b, bt)?;
+                let b = if rt == Type::Str && op.ty() == BinOpType::Arith {
+                    let (b, _) = self.infer(b)?;
+                    b
+                } else {
+                    self.check(b, bt)?
+                };
                 Ok((Term::BinOp(*op, Box::new(a), Box::new(b)), rt))
             }
             Pre::Block(v, e) => {
@@ -1299,10 +1310,17 @@ impl<'b> Cxt<'b> {
         match (&***pre, &ty) {
             (Pre::BinOp(op, a, b), _) if op.ty() == BinOpType::Arith => {
                 let a = self.check(a, ty.clone())?;
-                let b = self.check(b, ty)?;
+                let b = if ty == Type::Str {
+                    let (b, _) = self.infer(b)?;
+                    b
+                } else {
+                    self.check(b, ty)?
+                };
                 Ok(Term::BinOp(*op, Box::new(a), Box::new(b)))
             }
             (Pre::Lit(l @ Literal::Int(_), None), Type::I32 | Type::I64) => Ok(Term::Lit(*l, ty)),
+
+            (Pre::Null, _) => Ok(Term::Null(ty)),
 
             (Pre::Tuple(a), Type::Tuple(b)) => a
                 .iter()
