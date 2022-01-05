@@ -44,7 +44,7 @@
 			},
 			{
 				"name": "keyword.other.bytec",
-				"match": "\\b(fn|pub|let|extern|class|enum|i32|i64|str|bool|true|false|use|constructor|throws)\\b"
+				"match": "\\b(fn|pub|let|extern|class|enum|i32|i64|str|bool|true|false|use|constructor|throws|null)\\b"
 			}]
 		},
 		"symbols": {
@@ -94,7 +94,7 @@
 				},
 				{
 					"name": "keyword.other.java",
-					"match": "\\b(public|private|protected|static|int|long|boolean|byte|char|void|float|double|import|package|class|enum|interface|extends|implements|throws|true|false)\\b"
+					"match": "\\b(public|private|protected|static|int|long|boolean|byte|char|void|float|double|import|package|class|enum|interface|extends|implements|throws|true|false|null)\\b"
 				},
 				{ "include": "#fns" },
 				{ "include": "#vars" },

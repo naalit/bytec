@@ -53,6 +53,7 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    Mod,
     Gt,
     Lt,
     Eq,
@@ -80,6 +81,7 @@ impl BinOp {
             | BinOp::Sub
             | BinOp::Mul
             | BinOp::Div
+            | BinOp::Mod
             | BinOp::BitAnd
             | BinOp::BitOr
             | BinOp::BitXor
@@ -597,6 +599,7 @@ impl BinOp {
             BinOp::Sub => "-",
             BinOp::Mul => "*",
             BinOp::Div => "/",
+            BinOp::Mod => "%",
 
             BinOp::Gt => ">",
             BinOp::Lt => "<",

@@ -77,6 +77,8 @@ enum Tok<'a> {
     Mul,
     // /
     Div,
+    // %
+    Mod,
     // >
     Gt,
     // <
@@ -324,6 +326,7 @@ impl<'a> Iterator for Lexer<'a> {
             '-' => self.single(Tok::Sub),
             '*' => self.single(Tok::Mul),
             '/' => self.single(Tok::Div),
+            '%' => self.single(Tok::Mod),
 
             '=' if self.peekn(1) == Some('=') => self.single_n(Tok::Eq, 2),
             '!' if self.peekn(1) == Some('=') => self.single_n(Tok::Neq, 2),
@@ -651,6 +654,7 @@ impl<'a> Parser<'a> {
             let op = match self.peek().as_deref() {
                 Some(Tok::Mul) => BinOp::Mul,
                 Some(Tok::Div) => BinOp::Div,
+                Some(Tok::Mod) => BinOp::Mod,
                 _ => break,
             };
             self.next();
