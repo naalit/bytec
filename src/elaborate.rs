@@ -1167,6 +1167,12 @@ impl<'b> Cxt<'b> {
                             }
                             Ok((Term::ArrayMethod(Box::new(o), ArrayMethod::Pop), *t))
                         }
+                        "clear" => {
+                            if a.len() != 0 {
+                                return Err(TypeError::WrongArity(pre.span, a.len(), 0));
+                            }
+                            Ok((Term::ArrayMethod(Box::new(o), ArrayMethod::Clear), *t))
+                        }
                         "push" => {
                             if a.len() != 1 {
                                 return Err(TypeError::WrongArity(pre.span, a.len(), 1));

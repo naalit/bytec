@@ -1182,6 +1182,20 @@ impl Term {
                 let len = arrs.clone().to_vec().pop().unwrap();
                 match m {
                     ArrayMethod::Len => len,
+                    ArrayMethod::Clear => {
+                        match len {
+                            JTerm::Var(v, _) => {
+                                // Just set len to 0
+                                cxt.block.push(JStmt::Set(
+                                    v,
+                                    None,
+                                    JTerm::Lit(JLit::Int(0)),
+                                ));
+                                return JTerms::empty();
+                            }
+                            _ => unreachable!("clear() requires an rvalue"),
+                        }
+                    }
                     ArrayMethod::Pop => {
                         match len {
                             JTerm::Var(v, _) => {

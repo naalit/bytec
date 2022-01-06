@@ -220,6 +220,7 @@ pub struct ClassInfo {
 pub enum ArrayMethod {
     Len,
     Pop,
+    Clear,
     Push(Box<Term>),
 }
 
@@ -566,6 +567,7 @@ impl ArrayMethod {
         match self {
             ArrayMethod::Len => ArrayMethod::Len,
             ArrayMethod::Pop => ArrayMethod::Pop,
+            ArrayMethod::Clear => ArrayMethod::Clear,
             ArrayMethod::Push(x) => ArrayMethod::Push(Box::new(x.cloned_(cln))),
         }
     }
@@ -655,6 +657,7 @@ impl Term {
             Term::ArrayMethod(arr, m) => arr.pretty(cxt).add('.').chain(match m {
                 ArrayMethod::Len => Doc::start("len()"),
                 ArrayMethod::Pop => Doc::start("pop()"),
+                ArrayMethod::Clear => Doc::start("clear()"),
                 ArrayMethod::Push(x) => Doc::start("push(").chain(x.pretty(cxt)).add(')'),
             }),
             Term::Call(None, f, a) => cxt
