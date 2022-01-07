@@ -174,3 +174,22 @@ fn callsArray(): i32 {
     }
     sum
 }
+
+enum Ints {
+    Lots([i32]),
+    One(i32),
+    None,
+}
+let ints = Ints::Lots([1, 2, 3]);
+let nothing = Ints::None;
+fn intsSum(i: Ints): i32 = match i {
+    None => 0,
+    One(x) => x,
+    Lots(v) => {
+        let sum = 0;
+        for i in v {
+            sum += i;
+        }
+        sum
+    }
+};

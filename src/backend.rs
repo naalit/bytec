@@ -258,8 +258,10 @@ struct JFn {
 #[derive(Clone, Debug, PartialEq)]
 enum JItem {
     Fn(JFn),
-    Enum(JClass, Vec<RawSym>),
-    Let(JVar, JTy, Option<JTerm>),
+    Enum(JClass, Vec<(RawSym, Vec<JTy>)>),
+    // Unlike in statement position, a let may end up running statements that are in its value term
+    // So it needs a block, which is realized as a `static { ... }` in Java
+    Let(Vec<(JVar, JTy, Option<JTerm>)>, Vec<JStmt>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -843,14 +845,31 @@ impl JItem {
             JItem::Fn(f) => f.gen(cxt),
             JItem::Enum(tid, variants) => {
                 let mut buf = String::new();
-                write!(buf, "public static enum {} {{", cxt.class_str(*tid),).unwrap();
+                write!(buf, "public static enum {} {{", cxt.class_str(*tid)).unwrap();
                 cxt.push();
 
-                for i in variants {
+                for (i, _tys) in variants {
                     buf.push('\n');
                     buf.push_str(cxt.indent());
                     buf.push_str(cxt.bindings.resolve_raw(*i));
                     buf.push(',');
+                }
+                buf.pop();
+                buf.push(';');
+
+                // Variant members are made into global fields that start out uninitialized
+                for (i, tys) in variants {
+                    for (n, ty) in tys.iter().enumerate() {
+                        write!(
+                            buf,
+                            "\n{}public {} _enum${}${};",
+                            cxt.indent(),
+                            ty.gen(cxt),
+                            cxt.bindings.resolve_raw(*i),
+                            n
+                        )
+                        .unwrap();
+                    }
                 }
 
                 cxt.pop();
@@ -860,22 +879,46 @@ impl JItem {
                 buf.push_str(cxt.indent());
                 buf
             }
-            JItem::Let(var, ty, None) => {
-                format!(
-                    "public static {} {};\n{}",
-                    ty.gen(cxt),
-                    cxt.name_str(*var),
-                    cxt.indent()
-                )
-            }
-            JItem::Let(var, ty, Some(x)) => {
-                format!(
-                    "public static {} {} = {};\n{}",
-                    ty.gen(cxt),
-                    cxt.name_str(*var),
-                    x.gen(cxt),
-                    cxt.indent()
-                )
+            JItem::Let(vars, block) => {
+                let mut buf = String::new();
+                for (var, ty, _term) in vars {
+                    write!(
+                        buf,
+                        "public static {} {};\n{}",
+                        ty.gen(cxt),
+                        cxt.name_str(*var),
+                        cxt.indent()
+                    )
+                    .unwrap();
+                }
+                if !block.is_empty() || vars.iter().any(|(_, _, s)| s.is_some()) {
+                    buf.push_str("static {\n");
+                    cxt.push();
+                    buf.push_str(cxt.indent());
+                    for stmt in block {
+                        buf.push_str(&stmt.gen(cxt));
+                        buf.push_str("\n");
+                        buf.push_str(cxt.indent());
+                    }
+                    for (var, _, value) in vars {
+                        if let Some(value) = value {
+                            write!(
+                                buf,
+                                "{} = {};\n{}",
+                                cxt.name_str(*var),
+                                value.gen(cxt),
+                                cxt.indent(),
+                            )
+                            .unwrap();
+                            buf.push_str("\n");
+                            buf.push_str(cxt.indent());
+                        }
+                    }
+                    buf.push_str("}\n");
+                    cxt.pop();
+                    buf.push_str(cxt.indent());
+                }
+                buf
             }
         }
     }
@@ -1067,7 +1110,28 @@ impl Term {
                 ));
                 return JTerms::empty();
             }
-            Term::Variant(tid, s) => JTerm::Variant(cxt.class(*tid).unwrap(), *s),
+            Term::Variant(tid, s, v) => {
+                let variant = JTerm::Variant(cxt.class(*tid).unwrap(), *s);
+                if v.is_empty() {
+                    variant
+                } else {
+                    let ty = variant.ty();
+                    let var = cxt.fresh_var(false);
+                    let raw = cxt.bindings.raw("$_variant");
+                    cxt.tys.insert(var, ty.clone());
+                    cxt.block
+                        .push(JStmt::Let(raw, ty.clone(), var, Some(variant)));
+                    let v: Vec<_> = v.iter().flat_map(|x| x.lower(cxt)).collect();
+                    let term = JTerm::Var(var, ty);
+                    for (n, val) in v.into_iter().enumerate() {
+                        let prop = format!("_enum${}${}", cxt.bindings.resolve_raw(*s), n);
+                        let prop = cxt.bindings.raw(prop);
+                        cxt.block
+                            .push(JStmt::PropSet(term.clone(), prop, None, val));
+                    }
+                    term
+                }
+            }
             Term::Tuple(v) => return JTerms::Tuple(v.iter().flat_map(|x| x.lower(cxt)).collect()),
             Term::TupleIdx(x, i) => {
                 let x = x.lower(cxt);
@@ -1186,11 +1250,8 @@ impl Term {
                         match len {
                             JTerm::Var(v, _) => {
                                 // Just set len to 0
-                                cxt.block.push(JStmt::Set(
-                                    v,
-                                    None,
-                                    JTerm::Lit(JLit::Int(0)),
-                                ));
+                                cxt.block
+                                    .push(JStmt::Set(v, None, JTerm::Lit(JLit::Int(0))));
                                 return JTerms::empty();
                             }
                             _ => unreachable!("clear() requires an rvalue"),
@@ -1421,16 +1482,56 @@ impl Term {
                 return JTerms::Tuple(ret);
             }
             Term::Match(x, branches) => {
-                let x = x.lower(cxt).one();
+                let mut x = x.lower(cxt).one();
+                let mut cached = false;
 
                 let mut v = Vec::new();
                 let mut default = None;
                 let mut vars: Option<Vec<_>> = None;
-                for (s, t) in branches {
+                for (variant, captures, body) in branches {
+                    if !cached && !captures.is_empty() && !x.simple() {
+                        // Don't recompute x every time, store it in a local
+                        let raw = cxt.bindings.raw("$_scrutinee");
+                        let var = cxt.fresh_var(false);
+                        let ty = x.ty();
+                        cxt.block.push(JStmt::Let(raw, ty.clone(), var, Some(x)));
+                        x = JTerm::Var(var, ty.clone());
+                        cached = true;
+                    }
+
                     cxt.push_block();
-                    let t = t.lower(cxt);
+
+                    if let Some(variant) = variant {
+                        let mut n = 0;
+                        for (s, t) in captures {
+                            let mut vars = Vec::new();
+
+                            let t = t.lower(cxt);
+                            for t in t {
+                                let prop =
+                                    format!("_enum${}${}", cxt.bindings.resolve_raw(*variant), n);
+                                let prop = cxt.bindings.raw(prop);
+                                let x = JTerm::Prop(Box::new(x.clone()), prop, t.clone());
+                                n += 1;
+
+                                let var = cxt.fresh_var(cxt.bindings.public(*s));
+                                cxt.tys.insert(var, t.clone());
+                                cxt.block.push(JStmt::Let(
+                                    *cxt.bindings.sym_path(*s).stem(),
+                                    t,
+                                    var,
+                                    Some(x),
+                                ));
+                                vars.push(var);
+                            }
+
+                            cxt.vars.push((*s, JVars::Tuple(vars)));
+                        }
+                    }
+
+                    let body = body.lower(cxt);
                     if vars.is_none() {
-                        let ty = t.ty();
+                        let ty = body.ty();
                         vars = Some(
                             ty.clone()
                                 .into_iter()
@@ -1448,12 +1549,12 @@ impl Term {
                             cxt.tys.insert(*var, ty.clone());
                         }
                     }
-                    for ((var, _, _), t) in vars.as_ref().unwrap().iter().zip(t) {
+                    for ((var, _, _), t) in vars.as_ref().unwrap().iter().zip(body) {
                         cxt.block.push(JStmt::Set(*var, None, t));
                     }
                     let block = cxt.pop_block();
 
-                    match s {
+                    match variant {
                         Some(s) => v.push((*s, block)),
                         None => {
                             if default.is_none() {
@@ -1654,8 +1755,12 @@ impl Item {
             Item::Enum(tid, variants, ext) => {
                 if !ext {
                     let class = cxt.class(*tid).unwrap();
+                    let variants = variants
+                        .iter()
+                        .map(|(s, t)| (*s, t.iter().flat_map(|x| x.lower(cxt)).collect()))
+                        .collect();
 
-                    cxt.items.push(JItem::Enum(class, variants.clone()));
+                    cxt.items.push(JItem::Enum(class, variants));
                 }
             }
             Item::ExternFn(_) => (),
@@ -1664,19 +1769,27 @@ impl Item {
                 let var = cxt.var(*name).unwrap();
                 let ty = ty.lower(cxt);
                 assert_eq!(var.len(), ty.len());
-                for (var, ty) in var.into_iter().zip(ty) {
-                    cxt.items.push(JItem::Let(var, ty, None));
-                }
+                cxt.items.push(JItem::Let(
+                    var.into_iter().zip(ty).map(|(v, t)| (v, t, None)).collect(),
+                    Vec::new(),
+                ));
             }
             Item::Let(name, ty, Some(x)) => {
+                cxt.push_block();
                 let var = cxt.var(*name).unwrap();
                 let ty = ty.lower(cxt);
                 let x = x.lower(cxt);
                 assert_eq!(var.len(), ty.len());
                 assert_eq!(ty.len(), x.len());
-                for ((var, ty), x) in var.into_iter().zip(ty).zip(x) {
-                    cxt.items.push(JItem::Let(var, ty, Some(x)));
-                }
+                let block = cxt.pop_block();
+                cxt.items.push(JItem::Let(
+                    var.into_iter()
+                        .zip(ty)
+                        .zip(x)
+                        .map(|((v, t), x)| (v, t, Some(x)))
+                        .collect(),
+                    block,
+                ));
             }
         }
     }

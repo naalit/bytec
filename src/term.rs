@@ -212,7 +212,7 @@ pub struct FnType(pub Vec<Type>, pub Type);
 #[derive(Clone, Default)]
 pub struct ClassInfo {
     pub methods: Vec<(RawSym, FnId, FnType)>,
-    pub variants: Option<Vec<RawSym>>,
+    pub variants: Option<Vec<(RawSym, Vec<Type>)>>,
     pub members: Vec<(RawSym, Type)>,
     pub constructor: Option<Vec<Type>>,
 }
@@ -250,7 +250,7 @@ pub enum Term {
     Break,
     Continue,
     Return(Option<Box<Term>>),
-    Variant(TypeId, RawSym),
+    Variant(TypeId, RawSym, Vec<Term>),
     Tuple(Vec<Term>),
     TupleIdx(Box<Term>, usize),
     // (array, inner type (needed for empty arrays in backend))
@@ -260,7 +260,7 @@ pub enum Term {
     Member(Box<Term>, RawSym),
     Constructor(TypeId, Vec<Term>),
     Set(LValue, Option<BinOp>, Box<Term>),
-    Match(Box<Term>, Vec<(Option<RawSym>, Term)>),
+    Match(Box<Term>, Vec<(Option<RawSym>, Vec<(Sym, Type)>, Term)>),
     Not(Box<Term>),
     Null(Type),
 }
@@ -278,7 +278,7 @@ pub enum Item {
     ExternClass(TypeId),
     InlineJava(RawSym),
     /// If the bool is true, it's extern and shouldn't be generated
-    Enum(TypeId, Vec<RawSym>, bool),
+    Enum(TypeId, Vec<(RawSym, Vec<Type>)>, bool),
     Let(Sym, Type, Option<Term>),
 }
 pub struct Fn {
@@ -373,7 +373,10 @@ pub enum Pre {
     // v op= x
     Set(SPre, Option<BinOp>, SPre),
     // match x { s => t, else => u }
-    Match(SPre, Vec<(Spanned<Option<RawSym>>, SPre)>),
+    Match(
+        SPre,
+        Vec<(Spanned<Option<RawSym>>, Vec<(Spanned<RawSym>, bool)>, SPre)>,
+    ),
     // !x
     Not(SPre),
     // null
@@ -405,7 +408,7 @@ pub enum PreItem {
     Class {
         ext: bool,
         path: RawPath,
-        variants: Option<Vec<RawSym>>,
+        variants: Option<Vec<(RawSym, Vec<PreType>)>>,
         methods: Vec<PreEFn>,
         members: Vec<(RawSym, PreType)>,
         constructor: Option<Vec<PreType>>,
@@ -501,7 +504,9 @@ impl Term {
         match self {
             Term::Var(s) => Term::Var(cln.get(*s)),
             Term::Lit(l, t) => Term::Lit(*l, t.clone()),
-            Term::Variant(tid, s) => Term::Variant(*tid, *s),
+            Term::Variant(tid, s, xs) => {
+                Term::Variant(*tid, *s, xs.iter().map(|x| x.cloned_(cln)).collect())
+            }
             Term::Tuple(v) => Term::Tuple(v.iter().map(|x| x.cloned_(cln)).collect()),
             Term::TupleIdx(x, i) => Term::TupleIdx(Box::new(x.cloned_(cln)), *i),
             Term::Array(v, t) => Term::Array(v.iter().map(|x| x.cloned_(cln)).collect(), t.clone()),
@@ -529,7 +534,10 @@ impl Term {
                 c.as_ref().map(|x| Box::new(x.cloned_(cln))),
             ),
             Term::Match(x, branches) => {
-                let branches = branches.iter().map(|(s, t)| (*s, t.cloned_(cln))).collect();
+                let branches = branches
+                    .iter()
+                    .map(|(s, v, t)| (*s, v.clone(), t.cloned_(cln)))
+                    .collect();
                 Term::Match(Box::new(x.cloned_(cln)), branches)
             }
             Term::Set(l, op, x) => Term::Set(l.cloned_(cln), *op, Box::new(x.cloned_(cln))),
@@ -635,7 +643,7 @@ impl Term {
                 Literal::Bool(t) => Doc::start(t),
             }
             .style(Style::Literal),
-            Term::Variant(tid, s) => cxt
+            Term::Variant(tid, s, todo) => cxt
                 .type_name(*tid)
                 .pretty(cxt)
                 .add("::")
@@ -715,7 +723,7 @@ impl Term {
                 .add('{')
                 .line()
                 .chain(Doc::intersperse(
-                    branches.iter().map(|(s, t)| {
+                    branches.iter().map(|(s, todo, t)| {
                         match s {
                             Some(s) => Doc::start(cxt.resolve_raw(*s)),
                             None => Doc::keyword("else"),
@@ -822,9 +830,20 @@ impl Item {
                     .add('{')
                     .line()
                     .chain(Doc::intersperse(
-                        variants
-                            .iter()
-                            .map(|x| Doc::start(cxt.resolve_raw(*x)).add(',')),
+                        variants.iter().map(|(x, v)| {
+                            Doc::start(cxt.resolve_raw(*x))
+                                .chain(if v.is_empty() {
+                                    Doc::none()
+                                } else {
+                                    Doc::start("(")
+                                        .chain(Doc::intersperse(
+                                            v.iter().map(|x| x.pretty(cxt)),
+                                            Doc::start(", "),
+                                        ))
+                                        .add(")")
+                                })
+                                .add(',')
+                        }),
                         Doc::none().line(),
                     ))
                     .indent()

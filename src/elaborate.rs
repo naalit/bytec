@@ -530,7 +530,7 @@ impl TypeError {
 }
 
 impl<'b> Cxt<'b> {
-    fn elab_type(&mut self, ty: &PreType) -> Result<Type, TypeError> {
+    fn elab_type(&self, ty: &PreType) -> Result<Type, TypeError> {
         match ty {
             PreType::I32 => Ok(Type::I32),
             PreType::I64 => Ok(Type::I64),
@@ -556,11 +556,13 @@ impl<'b> Cxt<'b> {
             PreItem::Fn(_) => Ok(()),
             PreItem::ExternFn(_) => Ok(()),
             PreItem::Let(_, _, _, _) => Ok(()),
-            PreItem::Class { path, variants, .. } => {
+            PreItem::Class {
+                path, variants: _, ..
+            } => {
                 self.create_class(
                     path.clone(),
                     ClassInfo {
-                        variants: variants.clone(),
+                        // variants: variants.clone(),
                         ..ClassInfo::default()
                     },
                 );
@@ -635,13 +637,27 @@ impl<'b> Cxt<'b> {
                     .map(|x| x.iter().map(|x| self.elab_type(x)).collect())
                     .transpose()?;
                 let id = self.class(path).unwrap();
-                let info = self.class_info_mut(id);
-                *info = ClassInfo {
+                let info = ClassInfo {
                     methods,
                     members,
                     constructor,
-                    variants: variants.clone(),
+                    variants: variants
+                        .as_ref()
+                        .map(|x| {
+                            x.iter()
+                                .map(|(s, t)| {
+                                    Ok((
+                                        *s,
+                                        t.iter()
+                                            .map(|x| self.elab_type(x))
+                                            .collect::<Result<_, _>>()?,
+                                    ))
+                                })
+                                .collect::<Result<_, _>>()
+                        })
+                        .transpose()?,
                 };
+                *self.class_info_mut(id) = info;
                 Ok(())
             }
             PreItem::Use(path, wildcard) => {
@@ -768,8 +784,11 @@ impl<'b> Cxt<'b> {
                         let info = self.class_info(c);
                         if let Some(v) = info.variants.clone() {
                             let ty = Type::Class(c);
-                            for i in v {
-                                self.create(Spanned::new(i, path.span()), ty.clone(), false);
+                            for (i, tys) in v {
+                                // TODO import non-empty variants as functions
+                                if tys.is_empty() {
+                                    self.create(Spanned::new(i, path.span()), ty.clone(), false);
+                                }
                             }
                         } else {
                             return Err(TypeError::NoVariants(path.span(), Type::Class(c)));
@@ -862,7 +881,17 @@ impl<'b> Cxt<'b> {
                 ..
             } => Ok(vec![Item::Enum(
                 self.class(path).unwrap(),
-                variants.clone(),
+                variants
+                    .iter()
+                    .map(|(s, t)| {
+                        Ok((
+                            *s,
+                            t.iter()
+                                .map(|x| self.elab_type(x))
+                                .collect::<Result<_, _>>()?,
+                        ))
+                    })
+                    .collect::<Result<_, _>>()?,
                 *ext,
             )]),
             PreItem::Use(path, wildcard) => {
@@ -877,9 +906,16 @@ impl<'b> Cxt<'b> {
                         if let Some(v) = info.variants.clone() {
                             let ty = Type::Class(c);
                             let mut block = Vec::new();
-                            for i in v {
-                                let (v, _) = self.var(&lpath(Spanned::hack(i))).unwrap();
-                                block.push(Item::Let(v, ty.clone(), Some(Term::Variant(c, i))));
+                            for (i, tys) in v {
+                                // TODO import non-empty variants as functions
+                                if tys.is_empty() {
+                                    let (v, _) = self.var(&lpath(Spanned::hack(i))).unwrap();
+                                    block.push(Item::Let(
+                                        v,
+                                        ty.clone(),
+                                        Some(Term::Variant(c, i, Vec::new())),
+                                    ));
+                                }
                             }
                             return Ok(block);
                         }
@@ -980,11 +1016,11 @@ impl<'b> Cxt<'b> {
                         let b = raw.1;
                         if let Some(class) = self.class(&a) {
                             let variants = self.class_info(class).variants.as_ref();
-                            if variants.map_or(true, |v| v.iter().all(|x| *x != *b)) {
+                            if variants.map_or(true, |v| v.iter().all(|(x, _)| *x != *b)) {
                                 return Err(TypeError::NotFound(lpath(b)));
                             }
 
-                            return Ok((Term::Variant(class, *b), Type::Class(class)));
+                            return Ok((Term::Variant(class, *b, Vec::new()), Type::Class(class)));
                         } else if let Some(ty) = self.module(*a.stem()) {
                             let (_, s, t) = ty
                                 .vars
@@ -1129,6 +1165,30 @@ impl<'b> Cxt<'b> {
                     } else {
                         Err(TypeError::NotFound(f.clone()))
                     }
+                } else if f.len() > 1 {
+                    let mut v = f.0.clone();
+                    let last = v.pop().unwrap();
+                    let c = RawPath(v, last);
+                    let b = f.1;
+                    if let Some(class) = self.class(&c) {
+                        let variants = self.class_info(class).variants.as_ref();
+                        let atys = match variants.iter().flat_map(|x| *x).find(|(x, _)| *x == *b) {
+                            Some((_, a)) => a,
+                            None => return Err(TypeError::NotFound(lpath(b))),
+                        };
+
+                        if a.len() != atys.len() {
+                            return Err(TypeError::WrongArity(pre.span, a.len(), atys.len()));
+                        }
+                        let mut a2 = Vec::new();
+                        for (a, t) in a.iter().zip(atys.clone()) {
+                            a2.push(self.check(a, t)?);
+                        }
+
+                        return Ok((Term::Variant(class, *b, a2), Type::Class(class)));
+                    } else {
+                        Err(TypeError::NotFound(f.clone()))
+                    }
                 } else {
                     Err(TypeError::NotFound(f.clone()))
                 }
@@ -1253,24 +1313,17 @@ impl<'b> Cxt<'b> {
                         .ok_or(TypeError::NoVariants(xspan, xty))?,
                     _ => return Err(TypeError::NoVariants(xspan, xty)),
                 };
-                let mut covered: Vec<_> = variants.iter().map(|x| (*x, false)).collect();
+                let mut covered: Vec<_> = variants.iter().map(|x| (x.clone(), false)).collect();
 
                 let mut v = Vec::new();
                 let mut rty = None;
                 let mut had_default = false;
-                for (s, t) in branches {
-                    let t = match &rty {
-                        None => {
-                            let (t, ty) = self.infer(t)?;
-                            rty = Some(ty);
-                            t
-                        }
-                        Some(rty) => self.check(t, rty.clone())?,
-                    };
+                for (s, captures, body) in branches {
+                    let mut captures2 = Vec::new();
                     if let Some(s2) = **s {
-                        let (_, b) = covered
+                        let ((_, ref atys), b) = covered
                             .iter_mut()
-                            .find(|(x, _)| *x == s2)
+                            .find(|((x, _), _)| *x == s2)
                             .ok_or(TypeError::NotFound(lpath(Spanned::new(s2, s.span))))?;
                         if *b {
                             Spanned::new(
@@ -1280,9 +1333,24 @@ impl<'b> Cxt<'b> {
                             )
                             .emit(Severity::Warning, self.file_id);
                         } else {
+                            if atys.len() != captures.len() {
+                                return Err(TypeError::WrongArity(
+                                    s.span,
+                                    captures.len(),
+                                    atys.len(),
+                                ));
+                            } else {
+                                for (&(raw, public), ty) in captures.iter().zip(atys) {
+                                    let s = self.create(raw, ty.clone(), public);
+                                    captures2.push((s, ty.clone()));
+                                }
+                            }
                             *b = true;
                         }
                     } else {
+                        if !captures.is_empty() {
+                            return Err(TypeError::WrongArity(s.span, captures.len(), 0));
+                        }
                         if had_default {
                             Spanned::new(Doc::start("Duplicate default branch in pattern match, this one is unreachable"),
                                 s.span,
@@ -1292,12 +1360,22 @@ impl<'b> Cxt<'b> {
                             had_default = true;
                         }
                     }
-                    v.push((**s, t));
+
+                    let body = match &rty {
+                        None => {
+                            let (body, ty) = self.infer(body)?;
+                            rty = Some(ty);
+                            body
+                        }
+                        Some(rty) => self.check(body, rty.clone())?,
+                    };
+
+                    v.push((**s, captures2, body));
                 }
 
                 if !had_default {
                     let mut missing = Vec::new();
-                    for (s, b) in covered {
+                    for ((s, _), b) in covered {
                         if !b {
                             missing.push(s);
                         }

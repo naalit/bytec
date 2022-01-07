@@ -841,10 +841,36 @@ impl<'a> Parser<'a> {
                     let needs_semicolon = match self.peek().as_deref() {
                         Some(Tok::Name(_)) => {
                             let name = self.ident().unwrap();
+
+                            let mut captures = Vec::new();
+                            if self.peek().as_deref() == Some(&Tok::OpenParen) {
+                                self.next();
+                                loop {
+                                    if self.peek().as_deref() == Some(&Tok::CloseParen) {
+                                        self.next();
+                                        break;
+                                    }
+
+                                    let mut public = false;
+                                    if self.peek().as_deref() == Some(&Tok::Pub) {
+                                        public = true;
+                                    }
+
+                                    let name = self.ident().ok_or(self.err("expected name"))?;
+                                    captures.push((name, public));
+                                    if self.peek().as_deref() == Some(&Tok::Comma) {
+                                        self.next();
+                                    } else {
+                                        self.expect(Tok::CloseParen, "closing ')'")?;
+                                        break;
+                                    }
+                                }
+                            }
+
                             self.expect(Tok::WideArrow, "'=>'")?;
                             let term = self.term()?.ok_or(self.err("expected expression"))?;
                             let n = term.needs_semicolon();
-                            branches.push((Spanned::new(Some(*name), name.span), term));
+                            branches.push((Spanned::new(Some(*name), name.span), captures, term));
                             n
                         }
                         Some(Tok::Else) => {
@@ -853,7 +879,7 @@ impl<'a> Parser<'a> {
                             self.expect(Tok::WideArrow, "'=>'")?;
                             let term = self.term()?.ok_or(self.err("expected expression"))?;
                             let n = term.needs_semicolon();
-                            branches.push((Spanned::new(None, espan), term));
+                            branches.push((Spanned::new(None, espan), Vec::new(), term));
                             n
                         }
                         Some(Tok::CloseBrace) => {
@@ -1116,7 +1142,25 @@ impl<'a> Parser<'a> {
         let mut v = Vec::new();
         loop {
             if let Some(name) = self.ident() {
-                v.push(*name);
+                let mut args = Vec::new();
+                if self.peek().as_deref() == Some(&Tok::OpenParen) {
+                    self.next();
+                    loop {
+                        if self.peek().as_deref() == Some(&Tok::CloseParen) {
+                            self.next();
+                            break;
+                        }
+
+                        args.push(self.ty()?.ok_or(self.err("expected type"))?);
+                        if self.peek().as_deref() == Some(&Tok::Comma) {
+                            self.next();
+                        } else {
+                            self.expect(Tok::CloseParen, "closing ')'")?;
+                            break;
+                        }
+                    }
+                }
+                v.push((*name, args));
                 if self.peek().as_deref() == Some(&Tok::Comma) {
                     self.next();
                     continue;
