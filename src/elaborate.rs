@@ -1305,12 +1305,14 @@ impl<'b> Cxt<'b> {
                 let xspan = x.span;
                 let (x, xty) = self.infer(x)?;
 
-                let variants = match &xty {
-                    Type::Class(tid) => self
-                        .class_info(*tid)
-                        .variants
-                        .as_ref()
-                        .ok_or(TypeError::NoVariants(xspan, xty))?,
+                let (tid, variants) = match &xty {
+                    Type::Class(tid) => (
+                        *tid,
+                        self.class_info(*tid)
+                            .variants
+                            .as_ref()
+                            .ok_or(TypeError::NoVariants(xspan, xty))?,
+                    ),
                     _ => return Err(TypeError::NoVariants(xspan, xty)),
                 };
                 let mut covered: Vec<_> = variants.iter().map(|x| (x.clone(), false)).collect();
@@ -1385,7 +1387,7 @@ impl<'b> Cxt<'b> {
                     }
                 }
 
-                Ok((Term::Match(Box::new(x), v), rty.unwrap()))
+                Ok((Term::Match(tid, Box::new(x), v), rty.unwrap()))
             }
         }
     }

@@ -260,7 +260,11 @@ pub enum Term {
     Member(Box<Term>, RawSym),
     Constructor(TypeId, Vec<Term>),
     Set(LValue, Option<BinOp>, Box<Term>),
-    Match(Box<Term>, Vec<(Option<RawSym>, Vec<(Sym, Type)>, Term)>),
+    Match(
+        TypeId,
+        Box<Term>,
+        Vec<(Option<RawSym>, Vec<(Sym, Type)>, Term)>,
+    ),
     Not(Box<Term>),
     Null(Type),
 }
@@ -533,12 +537,12 @@ impl Term {
                 Box::new(b.cloned_(cln)),
                 c.as_ref().map(|x| Box::new(x.cloned_(cln))),
             ),
-            Term::Match(x, branches) => {
+            Term::Match(tid, x, branches) => {
                 let branches = branches
                     .iter()
                     .map(|(s, v, t)| (*s, v.clone(), t.cloned_(cln)))
                     .collect();
-                Term::Match(Box::new(x.cloned_(cln)), branches)
+                Term::Match(*tid, Box::new(x.cloned_(cln)), branches)
             }
             Term::Set(l, op, x) => Term::Set(l.cloned_(cln), *op, Box::new(x.cloned_(cln))),
             Term::Break => Term::Break,
@@ -716,7 +720,7 @@ impl Term {
                         .map(|no| Doc::keyword(" else").space().chain(no.pretty(cxt)))
                         .unwrap_or(Doc::none()),
                 ),
-            Term::Match(x, branches) => Doc::keyword("match")
+            Term::Match(_, x, branches) => Doc::keyword("match")
                 .space()
                 .chain(x.pretty(cxt))
                 .space()

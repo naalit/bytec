@@ -28,9 +28,13 @@ pub fn declare_p1(code: &[Item], cxt: &mut Cxt) {
 
                 continue;
             }
-            Item::Enum(c, _, _) => {
+            Item::Enum(c, v, _) => {
                 let class = cxt.fresh_class();
                 cxt.types.push((*c, class));
+                if v.iter().any(|(_, v)| !v.is_empty()) {
+                    let wrapper = cxt.fresh_class();
+                    cxt.enum_wrappers.insert(class, wrapper);
+                }
 
                 continue;
             }
@@ -68,7 +72,10 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
                 if *ext {
                     mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
                 } else {
-                    mappings.push((class.0, cxt.bindings.type_name(*c), false));
+                    mappings.push((class.0, cxt.bindings.type_name(*c), true));
+                    if let Some(&wrapper) = cxt.enum_wrappers.get(&class) {
+                        mappings.push((wrapper.0, cxt.bindings.type_name(*c), true));
+                    }
                 }
 
                 continue;
@@ -258,7 +265,7 @@ struct JFn {
 #[derive(Clone, Debug, PartialEq)]
 enum JItem {
     Fn(JFn),
-    Enum(JClass, Vec<(RawSym, Vec<JTy>)>),
+    Enum(JClass, Vec<(RawSym, Vec<JTy>)>, Option<JClass>),
     // Unlike in statement position, a let may end up running statements that are in its value term
     // So it needs a block, which is realized as a `static { ... }` in Java
     Let(Vec<(JVar, JTy, Option<JTerm>)>, Vec<JStmt>),
@@ -467,7 +474,7 @@ impl JTerm {
             JTerm::Variant(class, variant) => {
                 format!(
                     "{}.{}",
-                    cxt.bindings.resolve_path(&cxt.names[&class.0].0),
+                    cxt.class_str(*class),
                     cxt.bindings.resolve_raw(*variant)
                 )
             }
@@ -745,8 +752,7 @@ impl JTy {
             JTy::I64 => "long".into(),
             JTy::Bool => "boolean".into(),
             JTy::String => "String".into(),
-            // Classes are all external, so are never mangled
-            JTy::Class(c) => cxt.bindings.resolve_path(&cxt.names[&c.0].0).into(),
+            JTy::Class(c) => cxt.class_str(*c),
             JTy::Array(t) => {
                 let mut s = t.gen(cxt);
                 s.push_str("[]");
@@ -843,7 +849,7 @@ impl JItem {
     fn gen(&self, cxt: &mut Gen) -> String {
         match self {
             JItem::Fn(f) => f.gen(cxt),
-            JItem::Enum(tid, variants) => {
+            JItem::Enum(tid, variants, wrapper) => {
                 let mut buf = String::new();
                 write!(buf, "public static enum {} {{", cxt.class_str(*tid)).unwrap();
                 cxt.push();
@@ -854,29 +860,47 @@ impl JItem {
                     buf.push_str(cxt.bindings.resolve_raw(*i));
                     buf.push(',');
                 }
-                buf.pop();
-                buf.push(';');
-
-                // Variant members are made into global fields that start out uninitialized
-                for (i, tys) in variants {
-                    for (n, ty) in tys.iter().enumerate() {
-                        write!(
-                            buf,
-                            "\n{}public {} _enum${}${};",
-                            cxt.indent(),
-                            ty.gen(cxt),
-                            cxt.bindings.resolve_raw(*i),
-                            n
-                        )
-                        .unwrap();
-                    }
-                }
 
                 cxt.pop();
                 buf.push('\n');
                 buf.push_str(cxt.indent());
                 buf.push_str("}\n");
                 buf.push_str(cxt.indent());
+
+                if let Some(wrapper) = wrapper {
+                    write!(buf, "public static class {} {{", cxt.class_str(*wrapper)).unwrap();
+                    cxt.push();
+
+                    // We need a field for the variant tag
+                    write!(
+                        buf,
+                        "\n{}public {} $type;",
+                        cxt.indent(),
+                        cxt.class_str(*tid)
+                    )
+                    .unwrap();
+
+                    // Variant members are made into global fields on the wrapper class that start out uninitialized
+                    for (i, tys) in variants {
+                        for (n, ty) in tys.iter().enumerate() {
+                            write!(
+                                buf,
+                                "\n{}public {} _enum${}${};",
+                                cxt.indent(),
+                                ty.gen(cxt),
+                                cxt.bindings.resolve_raw(*i),
+                                n
+                            )
+                            .unwrap();
+                        }
+                    }
+
+                    cxt.pop();
+                    buf.push('\n');
+                    buf.push_str(cxt.indent());
+                    buf.push_str("}\n");
+                    buf.push_str(cxt.indent());
+                }
                 buf
             }
             JItem::Let(vars, block) => {
@@ -940,6 +964,7 @@ pub struct Cxt<'a> {
     current_fn: JFnId,
     items: Vec<JItem>,
     predefs: Vec<(Predef, JFnId)>,
+    enum_wrappers: HashMap<JClass, JClass>,
     next: u64,
 }
 impl<'a> Cxt<'a> {
@@ -957,6 +982,7 @@ impl<'a> Cxt<'a> {
             current_fn: JFnId(0),
             items: Vec::new(),
             predefs: Vec::new(),
+            enum_wrappers: HashMap::new(),
             next: 0,
         }
     }
@@ -1111,18 +1137,23 @@ impl Term {
                 return JTerms::empty();
             }
             Term::Variant(tid, s, v) => {
-                let variant = JTerm::Variant(cxt.class(*tid).unwrap(), *s);
-                if v.is_empty() {
-                    variant
-                } else {
-                    let ty = variant.ty();
+                let class = cxt.class(*tid).unwrap();
+                let variant = JTerm::Variant(class, *s);
+                if let Some(wrapper) = cxt.enum_wrappers.get(&class) {
+                    let term = JTerm::ClassNew(*wrapper, Vec::new());
+                    let ty = JTy::Class(*wrapper);
                     let var = cxt.fresh_var(false);
                     let raw = cxt.bindings.raw("$_variant");
                     cxt.tys.insert(var, ty.clone());
-                    cxt.block
-                        .push(JStmt::Let(raw, ty.clone(), var, Some(variant)));
-                    let v: Vec<_> = v.iter().flat_map(|x| x.lower(cxt)).collect();
+                    cxt.block.push(JStmt::Let(raw, ty.clone(), var, Some(term)));
                     let term = JTerm::Var(var, ty);
+                    cxt.block.push(JStmt::PropSet(
+                        term.clone(),
+                        cxt.bindings.raw("$type"),
+                        None,
+                        variant,
+                    ));
+                    let v: Vec<_> = v.iter().flat_map(|x| x.lower(cxt)).collect();
                     for (n, val) in v.into_iter().enumerate() {
                         let prop = format!("_enum${}${}", cxt.bindings.resolve_raw(*s), n);
                         let prop = cxt.bindings.raw(prop);
@@ -1130,6 +1161,9 @@ impl Term {
                             .push(JStmt::PropSet(term.clone(), prop, None, val));
                     }
                     term
+                } else {
+                    assert_eq!(v.len(), 0);
+                    variant
                 }
             }
             Term::Tuple(v) => return JTerms::Tuple(v.iter().flat_map(|x| x.lower(cxt)).collect()),
@@ -1481,24 +1515,32 @@ impl Term {
 
                 return JTerms::Tuple(ret);
             }
-            Term::Match(x, branches) => {
+            Term::Match(tid, x, branches) => {
                 let mut x = x.lower(cxt).one();
-                let mut cached = false;
-
-                let mut v = Vec::new();
-                let mut default = None;
-                let mut vars: Option<Vec<_>> = None;
-                for (variant, captures, body) in branches {
-                    if !cached && !captures.is_empty() && !x.simple() {
+                let scrut = if let Some(_wrapper) = cxt.enum_wrappers.get(&cxt.class(*tid).unwrap())
+                {
+                    if !x.simple() {
                         // Don't recompute x every time, store it in a local
                         let raw = cxt.bindings.raw("$_scrutinee");
                         let var = cxt.fresh_var(false);
                         let ty = x.ty();
                         cxt.block.push(JStmt::Let(raw, ty.clone(), var, Some(x)));
                         x = JTerm::Var(var, ty.clone());
-                        cached = true;
                     }
+                    JTerm::Prop(
+                        Box::new(x.clone()),
+                        cxt.bindings.raw("$type"),
+                        JTy::Class(cxt.class(*tid).unwrap()),
+                    )
+                } else {
+                    // will only be used once, as the scrutinee
+                    x.clone()
+                };
 
+                let mut v = Vec::new();
+                let mut default = None;
+                let mut vars: Option<Vec<_>> = None;
+                for (variant, captures, body) in branches {
                     cxt.push_block();
 
                     if let Some(variant) = variant {
@@ -1573,7 +1615,7 @@ impl Term {
                 }
                 let k = cxt.fresh_block();
                 cxt.block
-                    .push(JStmt::Switch(k, x, v, default.unwrap_or_default()));
+                    .push(JStmt::Switch(k, scrut, v, default.unwrap_or_default()));
 
                 return JTerms::Tuple(ret);
             }
@@ -1760,7 +1802,11 @@ impl Item {
                         .map(|(s, t)| (*s, t.iter().flat_map(|x| x.lower(cxt)).collect()))
                         .collect();
 
-                    cxt.items.push(JItem::Enum(class, variants));
+                    cxt.items.push(JItem::Enum(
+                        class,
+                        variants,
+                        cxt.enum_wrappers.get(&class).copied(),
+                    ));
                 }
             }
             Item::ExternFn(_) => (),
@@ -1802,7 +1848,14 @@ impl Type {
             Type::Bool => JTy::Bool,
             Type::Str => JTy::String,
             Type::Unit => return JTys::empty(),
-            Type::Class(c) => JTy::Class(cxt.class(*c).unwrap()),
+            Type::Class(c) => {
+                let class = cxt.class(*c).unwrap();
+                if let Some(wrapper) = cxt.enum_wrappers.get(&class) {
+                    JTy::Class(*wrapper)
+                } else {
+                    JTy::Class(class)
+                }
+            }
             Type::Tuple(v) => return JTys::Tuple(v.iter().flat_map(|x| x.lower(cxt)).collect()),
             // Automatic struct-of-arrays
             // This actually has basically no effect on bytecode count - in testing, it only made a one instruction difference
