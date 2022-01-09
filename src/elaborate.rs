@@ -605,7 +605,7 @@ impl<'b> Cxt<'b> {
                 members,
                 constructor,
                 variants,
-                ext: _,
+                ext,
             } => {
                 let methods = methods
                     .iter()
@@ -662,15 +662,18 @@ impl<'b> Cxt<'b> {
                     .collect::<Result<_, _>>()?;
                 let members = members
                     .iter()
-                    .map(|(s, t)| {
+                    .map(|(s, public, t, _val)| {
                         let t = self.elab_type(t)?;
-                        Ok((*s, t))
+                        Ok((**s, self.bindings.create(lpath(*s), *public), t))
                     })
                     .collect::<Result<_, _>>()?;
-                let constructor = constructor
+                let mut constructor = constructor
                     .as_ref()
                     .map(|x| x.iter().map(|x| self.elab_type(x)).collect())
                     .transpose()?;
+                if constructor.is_none() && !ext {
+                    constructor = Some(Vec::new());
+                }
                 let id = self.class(path).unwrap();
                 let info = ClassInfo {
                     methods,
@@ -846,7 +849,7 @@ impl<'b> Cxt<'b> {
         FnType(atys, rty): FnType,
     ) -> Result<Fn, TypeError> {
         let PreFn {
-            name,
+            name: _,
             ret_ty: _,
             args,
             body,
@@ -878,8 +881,9 @@ impl<'b> Cxt<'b> {
             PreItem::InlineJava(s) => Ok(vec![Item::InlineJava(*s)]),
             PreItem::Fn(f) => {
                 let (fid, fty) = self.fun(&lpath(f.name)).unwrap();
+                let fty = fty.clone();
 
-                let f = self.check_fn(f, fid, fty.clone())?;
+                let f = self.check_fn(f, fid, fty)?;
 
                 Ok(vec![Item::Fn(f)])
             }
@@ -918,8 +922,50 @@ impl<'b> Cxt<'b> {
             PreItem::Class {
                 path,
                 variants: None,
+                ext: true,
                 ..
             } => Ok(vec![Item::ExternClass(self.class(path).unwrap())]),
+            PreItem::Class {
+                path,
+                variants: None,
+                methods,
+                members,
+                constructor,
+                ext: false,
+            } => {
+                let class = self.class(path).unwrap();
+                self.in_classes.push(class);
+                let info = self.class_info(class).clone();
+                let r = Ok(vec![Item::Class(
+                    self.class(path).unwrap(),
+                    members
+                        .iter()
+                        .map(|(r, _, t, val)| {
+                            let t = self.elab_type(t)?;
+                            let val = val
+                                .as_ref()
+                                .map(|val| self.check(val, t.clone()))
+                                .transpose()?;
+                            let (_, s, _) =
+                                info.members.iter().find(|(r2, _, _)| *r2 == **r).unwrap();
+                            Ok((*s, t, val))
+                        })
+                        .collect::<Result<_, _>>()?,
+                    methods
+                        .iter()
+                        .filter_map(|f| match f {
+                            PreFnEither::Extern(_) => None,
+                            PreFnEither::Local(f) => {
+                                let (_, fid, fty) =
+                                    info.methods.iter().find(|(r, _, _)| *r == *f.name).unwrap();
+                                Some(self.check_fn(f, *fid, fty.clone()))
+                            }
+                        })
+                        .collect::<Result<_, _>>()?,
+                )]);
+                self.in_classes.pop();
+                r
+            }
             PreItem::Class {
                 path,
                 variants: Some(variants),
@@ -1189,8 +1235,8 @@ impl<'b> Cxt<'b> {
                 match t {
                     Type::Class(t) => {
                         let info = self.class_info(t);
-                        if let Some((_, t)) = info.members.iter().find(|(s, _)| *s == **m) {
-                            Ok((Term::Member(Box::new(x), **m), t.clone()))
+                        if let Some((_, s, t)) = info.members.iter().find(|(s, _, _)| *s == **m) {
+                            Ok((Term::Member(Box::new(x), *s), t.clone()))
                         } else {
                             Err(TypeError::NotFound(lpath(*m)))
                         }
@@ -1206,6 +1252,7 @@ impl<'b> Cxt<'b> {
                         Term::Var(s) => LValue::Idx(s, i),
                         _ => unreachable!(),
                     },
+                    Term::Member(a, b) => LValue::Member(a, b),
                     l => return Err(TypeError::NotLValue(pl.span, l)),
                 };
                 let x = self.check(x, t)?;

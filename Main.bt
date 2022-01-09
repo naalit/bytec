@@ -202,3 +202,17 @@ fn intsSum(i: Ints): i32 = match i {
     }
 };
 fn callsLen(i: Ints): i32 = i.len() + 1;
+
+class MyClass {
+    let x: i32 = 12;
+    let y: i32;
+    let z: [i32] = [1, 2, 3];
+
+    fn total(): i32 = self.x + self.y;
+}
+fn uses(): i32 {
+    let myVar = MyClass();
+    myVar.y = 2;
+    myVar.z.push(4);
+    myVar.total() + myVar.z.len()
+}

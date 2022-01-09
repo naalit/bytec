@@ -1207,7 +1207,7 @@ impl<'a> Parser<'a> {
     ) -> Result<
         (
             Vec<PreFnEither>,
-            Vec<(RawSym, PreType)>,
+            Vec<(Spanned<RawSym>, bool, PreType, Option<SPre>)>,
             Option<Vec<PreType>>,
         ),
         Error,
@@ -1248,13 +1248,25 @@ impl<'a> Parser<'a> {
                 }
                 Some(Tok::Let) => {
                     self.next();
+                    let public = if self.peek().as_deref() == Some(&Tok::Pub) {
+                        self.next();
+                        true
+                    } else {
+                        false
+                    };
                     let name = self.ident().ok_or(self.err("expected name"))?;
                     self.expect(Tok::Colon, "':'")?;
                     let ty = self.ty()?.ok_or(self.err("expected type"))?;
+
+                    let mut body = None;
+                    if self.peek().as_deref() == Some(&Tok::Equals) {
+                        self.next();
+                        body = Some(self.term()?.ok_or(self.err("expected expression"))?);
+                    }
+
                     self.expect(Tok::Semicolon, "';'")?;
-                    members.push((*name, ty));
+                    members.push((name, public, ty, body));
                 }
-                // TODO local functions
                 Some(Tok::Fn) => {
                     self.next();
                     let (name, args, ret_ty) = self.prototype()?;
@@ -1326,7 +1338,7 @@ impl<'a> Parser<'a> {
             Some(Tok::Semicolon) => {
                 self.next();
                 Ok(Some(PreItem::Class {
-                    ext: true,
+                    ext,
                     path,
                     variants: None,
                     methods: Vec::new(),
@@ -1344,7 +1356,7 @@ impl<'a> Parser<'a> {
                     methods,
                     members,
                     constructor,
-                    ext: true,
+                    ext,
                     variants: None,
                 }))
             }
@@ -1386,6 +1398,10 @@ impl<'a> Parser<'a> {
                 self.expect(Tok::Semicolon, "';'")?;
 
                 Ok(Some(PreItem::Let(name, ty, value, public)))
+            }
+            Some(Tok::Class) => {
+                self.next();
+                self.class(false)
             }
             Some(Tok::Extern | Tok::Fn | Tok::Enum) => {
                 // fn f(x: T, y: T): Z = x

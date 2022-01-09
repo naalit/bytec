@@ -28,6 +28,12 @@ pub fn declare_p1(code: &[Item], cxt: &mut Cxt) {
 
                 continue;
             }
+            Item::Class(c, _, _) => {
+                let class = cxt.fresh_class();
+                cxt.types.push((*c, class));
+
+                continue;
+            }
             Item::Enum(c, v, _, _) => {
                 let class = cxt.fresh_class();
                 cxt.types.push((*c, class));
@@ -64,6 +70,31 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
             Item::ExternClass(c) => {
                 let class = cxt.class(*c).unwrap();
                 mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
+
+                continue;
+            }
+            Item::Class(c, members, methods) => {
+                let class = cxt.class(*c).unwrap();
+                mappings.push((class.0, cxt.bindings.type_name(*c), true));
+                for f in methods {
+                    let item = cxt.fresh_fn();
+                    cxt.fn_ids.push((f.id, item));
+
+                    let ret = f.ret_ty.lower(&cxt);
+                    cxt.fn_ret_tys.insert(item, ret);
+                    mappings.push((item.0, cxt.bindings.fn_name(f.id), !f.public));
+                }
+                for (s, t, m) in members {
+                    let t = t.lower(&cxt);
+                    let mut vars = Vec::new();
+                    for t in t {
+                        let var = cxt.fresh_var(cxt.bindings.public(*s));
+                        cxt.tys.insert(var, t);
+                        mappings.push((var.0, cxt.bindings.sym_path(*s), !var.1));
+                        vars.push(var);
+                    }
+                    cxt.vars.push((*s, JVars::Tuple(vars)));
+                }
 
                 continue;
             }
@@ -196,12 +227,18 @@ enum JLit {
     Bool(bool),
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum Prop {
+    Var(JVar),
+    Raw(RawSym),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum JTerm {
     Var(JVar, JTy),
     Lit(JLit),
     Call(Option<Box<JTerm>>, JFnId, Vec<JTerm>, JTy),
-    Prop(Box<JTerm>, RawSym, JTy),
+    Prop(Box<JTerm>, Prop, JTy),
     BinOp(BinOp, Box<JTerm>, Box<JTerm>),
     Variant(JClass, RawSym),
     Array(Vec<JTerm>, JTy),
@@ -213,13 +250,28 @@ enum JTerm {
     This(JClass),
     InlineJava(RawSym, JTy),
 }
+impl JTerm {
+    fn to_lval(self) -> Option<JLVal> {
+        match self {
+            JTerm::Var(v, _) => Some(JLVal::Var(v)),
+            JTerm::Index(a, b, _) => Some(JLVal::Idx(Box::new(a.to_lval()?), *b)),
+            JTerm::Prop(a, b, _) => Some(JLVal::Prop(*a, b)),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum JLVal {
+    Var(JVar),
+    Idx(Box<JLVal>, JTerm),
+    Prop(JTerm, Prop),
+}
 
 #[derive(Clone, Debug, PartialEq)]
 enum JStmt {
     Let(RawSym, JTy, JVar, Option<JTerm>),
-    Set(JVar, Option<BinOp>, JTerm),
-    IdxSet(JVar, JTerm, Option<BinOp>, JTerm),
-    PropSet(JTerm, RawSym, Option<BinOp>, JTerm),
+    Set(JLVal, Option<BinOp>, JTerm),
     Term(JTerm),
     If(JTerm, Vec<JStmt>, Vec<JStmt>),
     Switch(JBlock, JTerm, Vec<(RawSym, Vec<JStmt>)>, Vec<JStmt>),
@@ -276,6 +328,11 @@ struct JFn {
 enum JItem {
     Fn(JFn),
     Enum(JClass, Vec<(RawSym, Vec<JTy>)>, Option<JClass>, Vec<JFn>),
+    Class(
+        JClass,
+        Vec<(Vec<(JVar, JTy, Option<JTerm>)>, Vec<JStmt>)>,
+        Vec<JFn>,
+    ),
     // Unlike in statement position, a let may end up running statements that are in its value term
     // So it needs a block, which is realized as a `static { ... }` in Java
     Let(Vec<(JVar, JTy, Option<JTerm>)>, Vec<JStmt>),
@@ -411,6 +468,14 @@ impl<'a> Gen<'a> {
     }
 }
 
+impl Prop {
+    fn gen(&self, cxt: &Gen) -> String {
+        match self {
+            Prop::Var(v) => cxt.name_str(*v),
+            Prop::Raw(s) => cxt.bindings.resolve_raw(*s).to_string(),
+        }
+    }
+}
 impl JTerm {
     fn gen(&self, cxt: &Gen) -> String {
         match self {
@@ -461,7 +526,7 @@ impl JTerm {
                 buf
             }
             JTerm::Prop(obj, prop, _) => {
-                format!("{}.{}", obj.gen(cxt), cxt.bindings.resolve_raw(*prop))
+                format!("{}.{}", obj.gen(cxt), prop.gen(cxt))
             }
             JTerm::BinOp(op @ (BinOp::Eq | BinOp::Neq), a, b)
                 if !a.ty().primitive()
@@ -539,6 +604,15 @@ impl JTerm {
         }
     }
 }
+impl JLVal {
+    fn gen(&self, cxt: &mut Gen) -> String {
+        match self {
+            JLVal::Var(v) => cxt.name_str(*v),
+            JLVal::Idx(l, i) => format!("{}[{}]", l.gen(cxt), i.gen(cxt)),
+            JLVal::Prop(a, b) => format!("{}.{}", a.gen(cxt), b.gen(cxt)),
+        }
+    }
+}
 impl JStmt {
     fn gen(&self, cxt: &mut Gen) -> String {
         match self {
@@ -553,25 +627,7 @@ impl JStmt {
             JStmt::Set(v, op, x) => {
                 format!(
                     "{} {}= {};",
-                    cxt.name_str(*v),
-                    op.map_or("", |op| op.repr()),
-                    x.gen(cxt)
-                )
-            }
-            JStmt::IdxSet(v, idx, op, x) => {
-                format!(
-                    "{}[{}] {}= {};",
-                    cxt.name_str(*v),
-                    idx.gen(cxt),
-                    op.map_or("", |op| op.repr()),
-                    x.gen(cxt)
-                )
-            }
-            JStmt::PropSet(v, m, op, x) => {
-                format!(
-                    "{}.{} {}= {};",
                     v.gen(cxt),
-                    cxt.bindings.resolve_raw(*m),
                     op.map_or("", |op| op.repr()),
                     x.gen(cxt)
                 )
@@ -873,6 +929,62 @@ impl JItem {
     fn gen(&self, cxt: &mut Gen) -> String {
         match self {
             JItem::Fn(f) => f.gen(cxt, true),
+            JItem::Class(tid, members, methods) => {
+                let mut buf = String::new();
+
+                write!(buf, "public static class {} {{", cxt.class_str(*tid)).unwrap();
+                cxt.push();
+
+                for (vars, _block) in members {
+                    for (i, (r, ty, _x)) in vars.iter().enumerate() {
+                        write!(
+                            buf,
+                            "\n{}public {} {};",
+                            cxt.indent(),
+                            ty.gen(cxt),
+                            cxt.name_str(*r)
+                        )
+                        .unwrap();
+                    }
+                }
+                write!(buf, "\n{}public {}() {{", cxt.indent(), cxt.class_str(*tid)).unwrap();
+                cxt.push();
+                for (vars, block) in members {
+                    for stmt in block {
+                        buf.push_str(&stmt.gen(cxt));
+                        buf.push_str("\n");
+                        buf.push_str(cxt.indent());
+                    }
+
+                    for (i, (r, _ty, x)) in vars.iter().enumerate() {
+                        if let Some(x) = x {
+                            write!(
+                                buf,
+                                "\n{}{} = {};",
+                                cxt.indent(),
+                                cxt.name_str(*r),
+                                x.gen(cxt)
+                            )
+                            .unwrap();
+                        }
+                    }
+                }
+                cxt.pop();
+                write!(buf, "\n{}}}", cxt.indent()).unwrap();
+                buf.push('\n');
+                buf.push_str(cxt.indent());
+                for f in methods {
+                    buf.push_str(&f.gen(cxt, false));
+                }
+
+                cxt.pop();
+                buf.push('\n');
+                buf.push_str(cxt.indent());
+                buf.push_str("}\n");
+                buf.push_str(cxt.indent());
+
+                buf
+            }
             JItem::Enum(tid, variants, wrapper, methods) => {
                 let mut buf = String::new();
                 write!(buf, "public static enum {} {{", cxt.class_str(*tid)).unwrap();
@@ -1197,9 +1309,8 @@ impl Term {
                     cxt.tys.insert(var, ty.clone());
                     cxt.block.push(JStmt::Let(raw, ty.clone(), var, Some(term)));
                     let term = JTerm::Var(var, ty);
-                    cxt.block.push(JStmt::PropSet(
-                        term.clone(),
-                        cxt.bindings.raw("$type"),
+                    cxt.block.push(JStmt::Set(
+                        JLVal::Prop(term.clone(), Prop::Raw(cxt.bindings.raw("$type"))),
                         None,
                         variant,
                     ));
@@ -1207,8 +1318,11 @@ impl Term {
                     for (n, val) in v.into_iter().enumerate() {
                         let prop = format!("_enum${}${}", cxt.bindings.resolve_raw(*s), n);
                         let prop = cxt.bindings.raw(prop);
-                        cxt.block
-                            .push(JStmt::PropSet(term.clone(), prop, None, val));
+                        cxt.block.push(JStmt::Set(
+                            JLVal::Prop(term.clone(), Prop::Raw(prop)),
+                            None,
+                            val,
+                        ));
                     }
                     term
                 } else {
@@ -1222,9 +1336,28 @@ impl Term {
                 x.to_vec().swap_remove(*i)
             }
             Term::Member(x, m) => {
-                let x = x.lower(cxt).one();
+                let mut x = x.lower(cxt).one();
                 // TODO get actual type somehow
-                JTerm::Prop(Box::new(x), *m, JTy::I32)
+                let m = cxt.var(*m).unwrap();
+                if m.len() > 1 {
+                    if !x.simple() {
+                        let raw = cxt.bindings.raw("$_class");
+                        let var = cxt.fresh_var(false);
+                        let ty = x.ty();
+                        cxt.block.push(JStmt::Let(raw, ty.clone(), var, Some(x)));
+                        x = JTerm::Var(var, ty.clone());
+                    }
+                    return m.map(|v| {
+                        JTerm::Prop(
+                            Box::new(x.clone()),
+                            Prop::Var(v),
+                            cxt.tys.get(&v).unwrap().clone(),
+                        )
+                    });
+                } else {
+                    let m = m.one();
+                    JTerm::Prop(Box::new(x), Prop::Var(m), cxt.tys.get(&m).unwrap().clone())
+                }
             }
             Term::Constructor(t, args) => {
                 let t = cxt.class(*t).unwrap();
@@ -1239,7 +1372,7 @@ impl Term {
                     let v = cxt.var(*v).unwrap();
                     let x = x.lower(cxt);
                     for (v, x) in v.into_iter().zip(x) {
-                        cxt.block.push(JStmt::Set(v, *op, x));
+                        cxt.block.push(JStmt::Set(JLVal::Var(v), *op, x));
                     }
                     return JTerms::empty();
                 }
@@ -1255,14 +1388,23 @@ impl Term {
                     }
                     let x = x.lower(cxt);
                     for (v, x) in v.into_iter().zip(x) {
-                        cxt.block.push(JStmt::IdxSet(v, idx.clone(), *op, x));
+                        cxt.block.push(JStmt::Set(
+                            JLVal::Idx(Box::new(JLVal::Var(v)), idx.clone()),
+                            *op,
+                            x,
+                        ));
                     }
                     return JTerms::empty();
                 }
                 LValue::Member(v, m) => {
                     let v = v.lower(cxt).one();
                     let x = x.lower(cxt).one();
-                    cxt.block.push(JStmt::PropSet(v, *m, *op, x));
+                    // TODO multivalue members (will have to cache x)
+                    cxt.block.push(JStmt::Set(
+                        JLVal::Prop(v, Prop::Var(cxt.var(*m).unwrap().one())),
+                        *op,
+                        x,
+                    ));
                     return JTerms::empty();
                 }
             },
@@ -1331,130 +1473,112 @@ impl Term {
                 match m {
                     ArrayMethod::Len => len,
                     ArrayMethod::Clear => {
-                        match len {
-                            JTerm::Var(v, _) => {
-                                // Just set len to 0
-                                cxt.block
-                                    .push(JStmt::Set(v, None, JTerm::Lit(JLit::Int(0))));
-                                return JTerms::empty();
-                            }
-                            _ => unreachable!("clear() requires an rvalue"),
-                        }
+                        let slen = len.to_lval().expect("clear() requires an lvalue");
+                        // Just set len to 0
+                        cxt.block
+                            .push(JStmt::Set(slen, None, JTerm::Lit(JLit::Int(0))));
+                        return JTerms::empty();
                     }
                     ArrayMethod::Pop => {
-                        match len {
-                            JTerm::Var(v, _) => {
-                                // `a -= 1` is as fast as `a--`, but `a = a - 1` is slower
-                                cxt.block.push(JStmt::Set(
-                                    v,
-                                    Some(BinOp::Sub),
-                                    JTerm::Lit(JLit::Int(1)),
-                                ));
-                                // return a[len]
-                                let n = arrs.len() - 1;
-                                return JTerms::Tuple(
-                                    arrs.into_iter()
-                                        .take(n)
-                                        .map(|x| {
-                                            let ty = match x.ty() {
-                                                JTy::Array(t) => *t,
-                                                _ => unreachable!(),
-                                            };
-                                            JTerm::Index(Box::new(x), Box::new(len.clone()), ty)
-                                        })
-                                        .collect(),
-                                );
-                            }
-                            _ => unreachable!("pop() requires an rvalue"),
-                        }
+                        let slen = len.clone().to_lval().expect("pop() requires an lvalue");
+                        // `a -= 1` is as fast as `a--`, but `a = a - 1` is slower
+                        cxt.block.push(JStmt::Set(
+                            slen,
+                            Some(BinOp::Sub),
+                            JTerm::Lit(JLit::Int(1)),
+                        ));
+                        // return a[len]
+                        let n = arrs.len() - 1;
+                        return JTerms::Tuple(
+                            arrs.into_iter()
+                                .take(n)
+                                .map(|x| {
+                                    let ty = match x.ty() {
+                                        JTy::Array(t) => *t,
+                                        _ => unreachable!(),
+                                    };
+                                    JTerm::Index(Box::new(x), Box::new(len.clone()), ty)
+                                })
+                                .collect(),
+                        );
                     }
-                    ArrayMethod::Push(x) => match &len {
-                        JTerm::Var(v, _) => {
-                            cxt.block.push(JStmt::Set(
-                                *v,
-                                Some(BinOp::Add),
-                                JTerm::Lit(JLit::Int(1)),
-                            ));
-                            let x = x.lower(cxt);
-                            assert_eq!(x.len(), arrs.len() - 1);
-                            // Check if the array needs expanding
-                            if arrs.len() != 1 {
+                    ArrayMethod::Push(x) => {
+                        let slen = len.clone().to_lval().expect("push() requires an lvalue");
+                        cxt.block.push(JStmt::Set(
+                            slen,
+                            Some(BinOp::Add),
+                            JTerm::Lit(JLit::Int(1)),
+                        ));
+                        let x = x.lower(cxt);
+                        assert_eq!(x.len(), arrs.len() - 1);
+                        // Check if the array needs expanding
+                        if arrs.len() != 1 {
+                            let cap = JTerm::Prop(
+                                Box::new(arrs.clone().to_vec().swap_remove(0)),
+                                Prop::Raw(cxt.bindings.raw("length")),
+                                JTy::I32,
+                            );
+                            let too_small =
+                                JTerm::BinOp(BinOp::Gt, Box::new(len.clone()), Box::new(cap));
+                            let mut block = Vec::new();
+                            let mut block2 = Vec::new();
+                            for (arr, x) in arrs.clone().into_iter().zip(x) {
+                                let sarr =
+                                    arr.clone().to_lval().expect("push() requires an lvalue");
+                                // let old = arr;
+                                // arr = new T[old.length * 2];
+                                // System.arraycopy(old, 0, arr, 0, old.length);
+
+                                let old = cxt.fresh_var(false);
+                                let raw = cxt.bindings.raw("$_old_array");
+                                // cxt.vars.push((cxt.bindings.create(lpath(Spanned::hack(raw)), false), JVars::One(old)));
+                                block.push(JStmt::Let(raw, arr.ty(), old, Some(arr.clone())));
+
                                 let cap = JTerm::Prop(
-                                    Box::new(arrs.clone().to_vec().swap_remove(0)),
-                                    cxt.bindings.raw("length"),
+                                    Box::new(JTerm::Var(old, arr.ty())),
+                                    Prop::Raw(cxt.bindings.raw("length")),
                                     JTy::I32,
                                 );
-                                let too_small =
-                                    JTerm::BinOp(BinOp::Gt, Box::new(len.clone()), Box::new(cap));
-                                let mut block = Vec::new();
-                                let mut block2 = Vec::new();
-                                for (arr, x) in arrs.clone().into_iter().zip(x) {
-                                    match &arr {
-                                        JTerm::Var(var, _) => {
-                                            // let old = arr;
-                                            // arr = new T[old.length * 2];
-                                            // System.arraycopy(old, 0, arr, 0, old.length);
+                                let new_cap = JTerm::BinOp(
+                                    BinOp::Mul,
+                                    Box::new(cap.clone()),
+                                    Box::new(JTerm::Lit(JLit::Int(2))),
+                                );
+                                block.push(JStmt::Set(
+                                    sarr.clone(),
+                                    None,
+                                    JTerm::ArrayNew(Box::new(new_cap), arr.ty()),
+                                ));
 
-                                            let old = cxt.fresh_var(false);
-                                            let raw = cxt.bindings.raw("$_old_array");
-                                            // cxt.vars.push((cxt.bindings.create(lpath(Spanned::hack(raw)), false), JVars::One(old)));
-                                            block.push(JStmt::Let(
-                                                raw,
-                                                arr.ty(),
-                                                old,
-                                                Some(arr.clone()),
-                                            ));
+                                let copy_fn = cxt.predef(Predef::ArrayCopy);
+                                let call = JStmt::MultiCall(
+                                    None,
+                                    copy_fn,
+                                    vec![
+                                        JTerm::Var(old, arr.ty()),
+                                        JTerm::Lit(JLit::Int(0)),
+                                        arr.clone(),
+                                        JTerm::Lit(JLit::Int(0)),
+                                        cap,
+                                    ],
+                                    Vec::new(),
+                                );
+                                block.push(call);
 
-                                            let cap = JTerm::Prop(
-                                                Box::new(JTerm::Var(old, arr.ty())),
-                                                cxt.bindings.raw("length"),
-                                                JTy::I32,
-                                            );
-                                            let new_cap = JTerm::BinOp(
-                                                BinOp::Mul,
-                                                Box::new(cap.clone()),
-                                                Box::new(JTerm::Lit(JLit::Int(2))),
-                                            );
-                                            block.push(JStmt::Set(
-                                                *var,
-                                                None,
-                                                JTerm::ArrayNew(Box::new(new_cap), arr.ty()),
-                                            ));
-
-                                            let copy_fn = cxt.predef(Predef::ArrayCopy);
-                                            let call = JStmt::MultiCall(
-                                                None,
-                                                copy_fn,
-                                                vec![
-                                                    JTerm::Var(old, arr.ty()),
-                                                    JTerm::Lit(JLit::Int(0)),
-                                                    arr.clone(),
-                                                    JTerm::Lit(JLit::Int(0)),
-                                                    cap,
-                                                ],
-                                                Vec::new(),
-                                            );
-                                            block.push(call);
-
-                                            // arr[len-1] = x;
-                                            let idx = JTerm::BinOp(
-                                                BinOp::Sub,
-                                                Box::new(len.clone()),
-                                                Box::new(JTerm::Lit(JLit::Int(1))),
-                                            );
-                                            block2.push(JStmt::IdxSet(*var, idx, None, x));
-                                        }
-                                        _ => unreachable!(),
-                                    }
-                                }
-                                // Expand, then set
-                                cxt.block.push(JStmt::If(too_small, block, Vec::new()));
-                                cxt.block.append(&mut block2);
+                                // arr[len-1] = x;
+                                let idx = JTerm::BinOp(
+                                    BinOp::Sub,
+                                    Box::new(len.clone()),
+                                    Box::new(JTerm::Lit(JLit::Int(1))),
+                                );
+                                block2.push(JStmt::Set(JLVal::Idx(Box::new(sarr), idx), None, x));
                             }
-                            return JTerms::empty();
+                            // Expand, then set
+                            cxt.block.push(JStmt::If(too_small, block, Vec::new()));
+                            cxt.block.append(&mut block2);
                         }
-                        _ => unreachable!("push() requires an rvalue"),
-                    },
+                        return JTerms::empty();
+                    }
                 }
             }
             Term::Call(o, f, a) => {
@@ -1475,7 +1599,7 @@ impl Term {
 
                         let len = JTerm::Prop(
                             Box::new(JTerm::Var(arr, t.clone())),
-                            cxt.bindings.raw("length"),
+                            Prop::Raw(cxt.bindings.raw("length")),
                             JTy::I32,
                         );
 
@@ -1541,7 +1665,7 @@ impl Term {
                     .collect();
                 for ((var, _, ty), a) in vars.iter().zip(a) {
                     cxt.tys.insert(*var, ty.clone());
-                    cxt.block.push(JStmt::Set(*var, None, a));
+                    cxt.block.push(JStmt::Set(JLVal::Var(*var), None, a));
                 }
                 let a = cxt.pop_block();
 
@@ -1549,7 +1673,7 @@ impl Term {
                     cxt.push_block();
                     let b = b.lower(cxt);
                     for ((var, _, _), b) in vars.iter().zip(b) {
-                        cxt.block.push(JStmt::Set(*var, None, b));
+                        cxt.block.push(JStmt::Set(JLVal::Var(*var), None, b));
                     }
                     cxt.pop_block()
                 } else {
@@ -1579,7 +1703,7 @@ impl Term {
                     }
                     JTerm::Prop(
                         Box::new(x.clone()),
-                        cxt.bindings.raw("$type"),
+                        Prop::Raw(cxt.bindings.raw("$type")),
                         JTy::Class(cxt.class(*tid).unwrap()),
                     )
                 } else {
@@ -1603,7 +1727,8 @@ impl Term {
                                 let prop =
                                     format!("_enum${}${}", cxt.bindings.resolve_raw(*variant), n);
                                 let prop = cxt.bindings.raw(prop);
-                                let x = JTerm::Prop(Box::new(x.clone()), prop, t.clone());
+                                let x =
+                                    JTerm::Prop(Box::new(x.clone()), Prop::Raw(prop), t.clone());
                                 n += 1;
 
                                 let var = cxt.fresh_var(cxt.bindings.public(*s));
@@ -1642,7 +1767,7 @@ impl Term {
                         }
                     }
                     for ((var, _, _), t) in vars.as_ref().unwrap().iter().zip(body) {
-                        cxt.block.push(JStmt::Set(*var, None, t));
+                        cxt.block.push(JStmt::Set(JLVal::Var(*var), None, t));
                     }
                     let block = cxt.pop_block();
 
@@ -1867,6 +1992,41 @@ impl Item {
                         methods,
                     ));
                 }
+            }
+            Item::Class(tid, members, methods) => {
+                let class = cxt.class(*tid).unwrap();
+                let members = members
+                    .iter()
+                    .map(|(r, t, x)| {
+                        cxt.push_block();
+                        let t = t.lower(cxt);
+                        let x = x.as_ref().map(|x| x.lower(cxt));
+                        let block = cxt.pop_block();
+                        // TODO multivalue members
+                        let r = cxt.var(*r).unwrap();
+                        if let Some(x) = x {
+                            (
+                                x.into_iter()
+                                    .zip(t)
+                                    .zip(r)
+                                    .map(|((x, t), r)| (r, t, Some(x)))
+                                    .collect::<Vec<_>>(),
+                                block,
+                            )
+                        } else {
+                            (
+                                t.into_iter()
+                                    .zip(r)
+                                    .map(|(t, r)| (r, t, None))
+                                    .collect::<Vec<_>>(),
+                                block,
+                            )
+                        }
+                    })
+                    .collect();
+                let methods = methods.iter().map(|x| x.lower(cxt)).collect();
+
+                cxt.items.push(JItem::Class(class, members, methods));
             }
             Item::ExternFn(_) => (),
             Item::ExternClass(_) => (),

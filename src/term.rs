@@ -213,7 +213,7 @@ pub struct FnType(pub Vec<Type>, pub Type);
 pub struct ClassInfo {
     pub methods: Vec<(RawSym, FnId, FnType)>,
     pub variants: Option<Vec<(RawSym, Vec<Type>)>>,
-    pub members: Vec<(RawSym, Type)>,
+    pub members: Vec<(RawSym, Sym, Type)>,
     pub constructor: Option<Vec<Type>>,
 }
 
@@ -230,7 +230,7 @@ pub enum LValue {
     // arr[i] = x
     Idx(Sym, Box<Term>),
     // a.b = x
-    Member(Box<Term>, RawSym),
+    Member(Box<Term>, Sym),
 }
 
 pub enum ForIter {
@@ -257,7 +257,7 @@ pub enum Term {
     Array(Vec<Term>, Type),
     ArrayIdx(Box<Term>, Box<Term>),
     ArrayMethod(Box<Term>, ArrayMethod),
-    Member(Box<Term>, RawSym),
+    Member(Box<Term>, Sym),
     Constructor(TypeId, Vec<Term>),
     Set(LValue, Option<BinOp>, Box<Term>),
     Match(
@@ -284,6 +284,7 @@ pub enum Item {
     InlineJava(RawSym),
     /// If the bool is true, it's extern and shouldn't be generated
     Enum(TypeId, Vec<(RawSym, Vec<Type>)>, bool, Vec<Fn>),
+    Class(TypeId, Vec<(Sym, Type, Option<Term>)>, Vec<Fn>),
     Let(Sym, Type, Option<Term>),
 }
 pub struct Fn {
@@ -422,7 +423,7 @@ pub enum PreItem {
         path: RawPath,
         variants: Option<Vec<(RawSym, Vec<PreType>)>>,
         methods: Vec<PreFnEither>,
-        members: Vec<(RawSym, PreType)>,
+        members: Vec<(Spanned<RawSym>, bool, PreType, Option<SPre>)>,
         constructor: Option<Vec<PreType>>,
     },
     Let(Spanned<RawSym>, Option<PreType>, Option<SPre>, bool),
@@ -762,7 +763,7 @@ impl Term {
             Term::Continue => Doc::keyword("continue"),
             Term::Return(None) => Doc::keyword("return"),
             Term::Return(Some(x)) => Doc::keyword("return").space().chain(x.pretty(cxt)),
-            Term::Member(x, m) => x.pretty(cxt).add('.').add(cxt.resolve_raw(*m)),
+            Term::Member(x, m) => x.pretty(cxt).add('.').chain(cxt.sym_path(*m).pretty(cxt)),
             Term::Constructor(f, a) => cxt
                 .type_name(*f)
                 .pretty(cxt)
@@ -864,6 +865,7 @@ impl Item {
                     .line()
                     .add('}')
             }
+            Item::Class(tid, _, _) => Doc::keyword("class").chain(cxt.type_name(*tid).pretty(cxt)),
             Item::ExternClass(c) => cxt.type_name(*c).pretty(cxt),
             Item::InlineJava(s) => Doc::keyword("extern")
                 .space()
@@ -973,7 +975,7 @@ impl LValue {
                 .add('[')
                 .chain(i.pretty(cxt))
                 .add(']'),
-            LValue::Member(x, m) => x.pretty(cxt).add('.').add(cxt.resolve_raw(*m)),
+            LValue::Member(x, m) => x.pretty(cxt).add('.').chain(cxt.sym_path(*m).pretty(cxt)),
         }
     }
 }
