@@ -1248,18 +1248,19 @@ impl<'a> Parser<'a> {
                 }
                 Some(Tok::Let) => {
                     self.next();
-                    let public = if self.peek().as_deref() == Some(&Tok::Pub) {
-                        self.next();
-                        true
-                    } else {
-                        false
-                    };
+                    let public = ext
+                        || if self.peek().as_deref() == Some(&Tok::Pub) {
+                            self.next();
+                            true
+                        } else {
+                            false
+                        };
                     let name = self.ident().ok_or(self.err("expected name"))?;
                     self.expect(Tok::Colon, "':'")?;
                     let ty = self.ty()?.ok_or(self.err("expected type"))?;
 
                     let mut body = None;
-                    if self.peek().as_deref() == Some(&Tok::Equals) {
+                    if !ext && self.peek().as_deref() == Some(&Tok::Equals) {
                         self.next();
                         body = Some(self.term()?.ok_or(self.err("expected expression"))?);
                     }

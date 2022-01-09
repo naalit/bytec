@@ -280,10 +280,16 @@ pub enum Statement {
 pub enum Item {
     Fn(Fn),
     ExternFn(ExternFn),
-    ExternClass(TypeId),
+    ExternClass(TypeId, Vec<(Sym, Type)>),
     InlineJava(RawSym),
     /// If the bool is true, it's extern and shouldn't be generated
-    Enum(TypeId, Vec<(RawSym, Vec<Type>)>, bool, Vec<Fn>),
+    Enum(
+        TypeId,
+        Vec<(RawSym, Vec<Type>)>,
+        bool,
+        Vec<(Sym, Type)>,
+        Vec<Fn>,
+    ),
     Class(TypeId, Vec<(Sym, Type, Option<Term>)>, Vec<Fn>),
     Let(Sym, Type, Option<Term>),
 }
@@ -833,7 +839,7 @@ impl Item {
                         .style(Style::Literal),
                 )
                 .add(";"),
-            Item::Enum(id, variants, ext, methods) => {
+            Item::Enum(id, variants, ext, members, methods) => {
                 let mut doc = Doc::none();
                 if *ext {
                     doc = Doc::keyword("extern").space();
@@ -866,7 +872,7 @@ impl Item {
                     .add('}')
             }
             Item::Class(tid, _, _) => Doc::keyword("class").chain(cxt.type_name(*tid).pretty(cxt)),
-            Item::ExternClass(c) => cxt.type_name(*c).pretty(cxt),
+            Item::ExternClass(c, _) => cxt.type_name(*c).pretty(cxt),
             Item::InlineJava(s) => Doc::keyword("extern")
                 .space()
                 .chain(

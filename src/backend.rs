@@ -22,7 +22,7 @@ pub struct IRMod {
 pub fn declare_p1(code: &[Item], cxt: &mut Cxt) {
     for i in code {
         match i {
-            Item::ExternClass(c) => {
+            Item::ExternClass(c, _) => {
                 let class = cxt.fresh_class();
                 cxt.types.push((*c, class));
 
@@ -34,7 +34,7 @@ pub fn declare_p1(code: &[Item], cxt: &mut Cxt) {
 
                 continue;
             }
-            Item::Enum(c, v, _, _) => {
+            Item::Enum(c, v, _, _, _) => {
                 let class = cxt.fresh_class();
                 cxt.types.push((*c, class));
                 if v.iter().any(|(_, v)| !v.is_empty()) {
@@ -67,9 +67,20 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
         let (name, ret, m, public, ext) = match i {
             Item::Fn(f) => (f.id, &f.ret_ty, cxt.bindings.fn_name(f.id), f.public, false),
             Item::ExternFn(f) => (f.id, &f.ret_ty, lpath(Spanned::hack(f.mapping)), true, true),
-            Item::ExternClass(c) => {
+            Item::ExternClass(c, members) => {
                 let class = cxt.class(*c).unwrap();
                 mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
+                for (s, t) in members {
+                    let t = t.lower(&cxt);
+                    let mut vars = Vec::new();
+                    for t in t {
+                        let var = cxt.fresh_var(cxt.bindings.public(*s));
+                        cxt.tys.insert(var, t);
+                        mappings.push((var.0, cxt.bindings.sym_path(*s), !var.1));
+                        vars.push(var);
+                    }
+                    cxt.vars.push((*s, JVars::Tuple(vars)));
+                }
 
                 continue;
             }
@@ -84,7 +95,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
                     cxt.fn_ret_tys.insert(item, ret);
                     mappings.push((item.0, cxt.bindings.fn_name(f.id), !f.public));
                 }
-                for (s, t, m) in members {
+                for (s, t, _) in members {
                     let t = t.lower(&cxt);
                     let mut vars = Vec::new();
                     for t in t {
@@ -98,10 +109,21 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
 
                 continue;
             }
-            Item::Enum(c, _, ext, methods) => {
+            Item::Enum(c, _, ext, members, methods) => {
                 let class = cxt.class(*c).unwrap();
                 if *ext {
                     mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
+                    for (s, t) in members {
+                        let t = t.lower(&cxt);
+                        let mut vars = Vec::new();
+                        for t in t {
+                            let var = cxt.fresh_var(cxt.bindings.public(*s));
+                            cxt.tys.insert(var, t);
+                            mappings.push((var.0, cxt.bindings.sym_path(*s), !var.1));
+                            vars.push(var);
+                        }
+                        cxt.vars.push((*s, JVars::Tuple(vars)));
+                    }
                 } else {
                     mappings.push((class.0, cxt.bindings.type_name(*c), true));
                     if let Some(&wrapper) = cxt.enum_wrappers.get(&class) {
@@ -1975,7 +1997,7 @@ impl Item {
                 let f = f.lower(cxt);
                 cxt.items.push(JItem::Fn(f));
             }
-            Item::Enum(tid, variants, ext, methods) => {
+            Item::Enum(tid, variants, ext, _members, methods) => {
                 if !ext {
                     let class = cxt.class(*tid).unwrap();
                     let variants = variants
@@ -2029,7 +2051,7 @@ impl Item {
                 cxt.items.push(JItem::Class(class, members, methods));
             }
             Item::ExternFn(_) => (),
-            Item::ExternClass(_) => (),
+            Item::ExternClass(_, _) => (),
             Item::Let(name, ty, None) => {
                 let var = cxt.var(*name).unwrap();
                 let ty = ty.lower(cxt);

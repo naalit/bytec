@@ -564,16 +564,8 @@ impl<'b> Cxt<'b> {
             PreItem::Fn(_) => Ok(()),
             PreItem::ExternFn(_) => Ok(()),
             PreItem::Let(_, _, _, _) => Ok(()),
-            PreItem::Class {
-                path, variants: _, ..
-            } => {
-                self.create_class(
-                    path.clone(),
-                    ClassInfo {
-                        // variants: variants.clone(),
-                        ..ClassInfo::default()
-                    },
-                );
+            PreItem::Class { path, .. } => {
+                self.create_class(path.clone(), ClassInfo::default());
                 Ok(())
             }
             PreItem::Use(path, wildcard) => {
@@ -922,9 +914,25 @@ impl<'b> Cxt<'b> {
             PreItem::Class {
                 path,
                 variants: None,
+                members,
                 ext: true,
                 ..
-            } => Ok(vec![Item::ExternClass(self.class(path).unwrap())]),
+            } => {
+                let class = self.class(path).unwrap();
+                let info = self.class_info(class).clone();
+                Ok(vec![Item::ExternClass(
+                    class,
+                    members
+                        .iter()
+                        .map(|(r, _, t, _)| {
+                            let t = self.elab_type(t)?;
+                            let (_, s, _) =
+                                info.members.iter().find(|(r2, _, _)| *r2 == **r).unwrap();
+                            Ok((*s, t))
+                        })
+                        .collect::<Result<_, _>>()?,
+                )])
+            }
             PreItem::Class {
                 path,
                 variants: None,
@@ -937,7 +945,7 @@ impl<'b> Cxt<'b> {
                 self.in_classes.push(class);
                 let info = self.class_info(class).clone();
                 let r = Ok(vec![Item::Class(
-                    self.class(path).unwrap(),
+                    class,
                     members
                         .iter()
                         .map(|(r, _, t, val)| {
@@ -969,42 +977,57 @@ impl<'b> Cxt<'b> {
             PreItem::Class {
                 path,
                 variants: Some(variants),
+                members,
                 methods,
                 ext,
                 ..
-            } => Ok(vec![Item::Enum(
-                self.class(path).unwrap(),
-                variants
-                    .iter()
-                    .map(|(s, t)| {
-                        Ok((
-                            *s,
-                            t.iter()
-                                .map(|x| self.elab_type(x))
-                                .collect::<Result<_, _>>()?,
-                        ))
-                    })
-                    .collect::<Result<_, _>>()?,
-                *ext,
-                {
-                    let class = self.class(path).unwrap();
-                    self.in_classes.push(class);
-                    let info = self.class_info(class).methods.clone();
-                    let r = methods
+            } => {
+                let class = self.class(path).unwrap();
+                let info = self.class_info(class).clone();
+                Ok(vec![Item::Enum(
+                    class,
+                    variants
                         .iter()
-                        .filter_map(|f| match f {
-                            PreFnEither::Extern(_) => None,
-                            PreFnEither::Local(f) => {
-                                let (_, fid, fty) =
-                                    info.iter().find(|(r, _, _)| *r == *f.name).unwrap();
-                                Some(self.check_fn(f, *fid, fty.clone()))
-                            }
+                        .map(|(s, t)| {
+                            Ok((
+                                *s,
+                                t.iter()
+                                    .map(|x| self.elab_type(x))
+                                    .collect::<Result<_, _>>()?,
+                            ))
                         })
-                        .collect::<Result<_, _>>()?;
-                    self.in_classes.pop();
-                    r
-                },
-            )]),
+                        .collect::<Result<_, _>>()?,
+                    *ext,
+                    members
+                        .iter()
+                        .map(|(r, _, t, _)| {
+                            let t = self.elab_type(t)?;
+                            let (_, s, _) =
+                                info.members.iter().find(|(r2, _, _)| *r2 == **r).unwrap();
+                            Ok((*s, t))
+                        })
+                        .collect::<Result<_, _>>()?,
+                    {
+                        self.in_classes.push(class);
+                        let r = methods
+                            .iter()
+                            .filter_map(|f| match f {
+                                PreFnEither::Extern(_) => None,
+                                PreFnEither::Local(f) => {
+                                    let (_, fid, fty) = info
+                                        .methods
+                                        .iter()
+                                        .find(|(r, _, _)| *r == *f.name)
+                                        .unwrap();
+                                    Some(self.check_fn(f, *fid, fty.clone()))
+                                }
+                            })
+                            .collect::<Result<_, _>>()?;
+                        self.in_classes.pop();
+                        r
+                    },
+                )])
+            }
             PreItem::Use(path, wildcard) => {
                 if *wildcard {
                     if path.len() == 1 {
