@@ -255,6 +255,7 @@ struct Cxt<'b> {
     local_classes: HashMap<RawSym, TypeId>,
     classes: HashMap<RawPath, (TypeId, ClassInfo)>,
     ret_tys: Vec<Option<Type>>,
+    in_classes: Vec<TypeId>,
     bindings: &'b mut Bindings,
     mods: HashMap<RawSym, ModType>,
     extra_items: Vec<Item>,
@@ -268,6 +269,7 @@ impl<'b> Cxt<'b> {
             local_classes: HashMap::new(),
             classes: HashMap::new(),
             ret_tys: Vec::new(),
+            in_classes: Vec::new(),
             bindings,
             mods: HashMap::new(),
             extra_items: Vec::new(),
@@ -293,6 +295,7 @@ impl<'b> Cxt<'b> {
             local_classes,
             classes,
             ret_tys: Vec::new(),
+            in_classes: Vec::new(),
             bindings,
             mods,
             extra_items,
@@ -450,6 +453,7 @@ enum TypeError {
     TupleOutOfBounds(Span, Type, usize),
     NotLValue(Span, Term),
     TypeNeeded(Span),
+    SelfOutsideClass(Span),
 }
 impl TypeError {
     fn to_error(self, bindings: &Bindings) -> Error {
@@ -523,6 +527,10 @@ impl TypeError {
             ),
             TypeError::TypeNeeded(span) => Spanned::new(
                 Doc::start("Type of expression could not be inferred, type annotation needed"),
+                span,
+            ),
+            TypeError::SelfOutsideClass(span) => Spanned::new(
+                Doc::start("'self' can't be used outside of class or enum"),
                 span,
             ),
         }
@@ -602,27 +610,54 @@ impl<'b> Cxt<'b> {
                 let methods = methods
                     .iter()
                     .map(|f| {
-                        let mut args = Vec::new();
-                        let mut args2 = Vec::new();
-                        for (s, t, _) in &f.args {
-                            let t = self.elab_type(t)?;
-                            args.push(t.clone());
-                            args2.push((self.bindings.create(lpath(*s), true), t));
-                        }
-                        let rty = self.elab_type(&f.ret_ty)?;
-                        let ty = FnType(args, rty.clone());
-                        let id = self.bindings.add_fn(lpath(f.name));
-                        // Make sure the mapping gets through to the backend.
-                        // This technically has the wrong type since it doesn't include the object,
-                        // but it doesn't matter because the function is only accessible as a method.
-                        self.extra_items.push(Item::ExternFn(ExternFn {
-                            id,
-                            ret_ty: rty,
-                            args: args2,
-                            mapping: f.mapping,
-                        }));
+                        match f {
+                            PreFnEither::Extern(f) => {
+                                let mut args = Vec::new();
+                                let mut args2 = Vec::new();
+                                for (s, t, _) in &f.args {
+                                    let t = self.elab_type(t)?;
+                                    args.push(t.clone());
+                                    args2.push((self.bindings.create(lpath(*s), true), t));
+                                }
+                                let rty = self.elab_type(&f.ret_ty)?;
+                                let ty = FnType(args, rty.clone());
+                                let id = self.bindings.add_fn(lpath(f.name));
+                                // Make sure the mapping gets through to the backend.
+                                // This technically has the wrong type since it doesn't include the object,
+                                // but it doesn't matter because the function is only accessible as a method.
+                                self.extra_items.push(Item::ExternFn(ExternFn {
+                                    id,
+                                    ret_ty: rty,
+                                    args: args2,
+                                    mapping: f.mapping,
+                                }));
 
-                        Ok((*f.name, id, ty))
+                                Ok((*f.name, id, ty))
+                            }
+                            PreFnEither::Local(f) => {
+                                let mut args = Vec::new();
+                                let mut args2 = Vec::new();
+                                for (s, t, _) in &f.args {
+                                    let t = self.elab_type(t)?;
+                                    args.push(t.clone());
+                                    args2.push((self.bindings.create(lpath(*s), true), t));
+                                }
+                                let rty = self.elab_type(&f.ret_ty)?;
+                                let ty = FnType(args, rty.clone());
+                                let id = self.bindings.add_fn(lpath(f.name));
+                                // // Make sure the mapping gets through to the backend.
+                                // // This technically has the wrong type since it doesn't include the object,
+                                // // but it doesn't matter because the function is only accessible as a method.
+                                // self.extra_items.push(Item::ExternFn(ExternFn {
+                                //     id,
+                                //     ret_ty: rty,
+                                //     args: args2,
+                                //     mapping: f.mapping,
+                                // }));
+
+                                Ok((*f.name, id, ty))
+                            }
+                        }
                     })
                     .collect::<Result<_, _>>()?;
                 let members = members
@@ -804,38 +839,49 @@ impl<'b> Cxt<'b> {
         }
     }
 
+    fn check_fn(
+        &mut self,
+        f: &PreFn,
+        fid: FnId,
+        FnType(atys, rty): FnType,
+    ) -> Result<Fn, TypeError> {
+        let PreFn {
+            name,
+            ret_ty: _,
+            args,
+            body,
+            public,
+            throws,
+        } = f;
+
+        self.push(Some(rty.clone()));
+        let mut args2 = Vec::new();
+        for ((a, _, public), t) in args.iter().zip(atys) {
+            let a = self.create(*a, t.clone(), *public);
+            args2.push((a, t));
+        }
+        let body = self.check(body, rty.clone())?;
+        self.pop();
+
+        Ok(Fn {
+            id: fid,
+            ret_ty: rty,
+            args: args2,
+            public: *public,
+            body,
+            throws: throws.clone(),
+        })
+    }
+
     fn check_item(&mut self, item: &PreItem) -> Result<Vec<Item>, TypeError> {
         match item {
             PreItem::InlineJava(s) => Ok(vec![Item::InlineJava(*s)]),
             PreItem::Fn(f) => {
-                let PreFn {
-                    name,
-                    ret_ty: _,
-                    args,
-                    body,
-                    public,
-                    throws,
-                } = f;
-                let (fid, fty) = self.fun(&lpath(*name)).unwrap();
-                let FnType(atys, rty) = fty.clone();
+                let (fid, fty) = self.fun(&lpath(f.name)).unwrap();
 
-                self.push(Some(rty.clone()));
-                let mut args2 = Vec::new();
-                for ((a, _, public), t) in args.iter().zip(atys) {
-                    let a = self.create(*a, t.clone(), *public);
-                    args2.push((a, t));
-                }
-                let body = self.check(body, rty.clone())?;
-                self.pop();
+                let f = self.check_fn(f, fid, fty.clone())?;
 
-                Ok(vec![Item::Fn(Fn {
-                    id: fid,
-                    ret_ty: rty,
-                    args: args2,
-                    public: *public,
-                    body,
-                    throws: throws.clone(),
-                })])
+                Ok(vec![Item::Fn(f)])
             }
             PreItem::ExternFn(f) => {
                 let PreEFn {
@@ -877,6 +923,7 @@ impl<'b> Cxt<'b> {
             PreItem::Class {
                 path,
                 variants: Some(variants),
+                methods,
                 ext,
                 ..
             } => Ok(vec![Item::Enum(
@@ -893,6 +940,24 @@ impl<'b> Cxt<'b> {
                     })
                     .collect::<Result<_, _>>()?,
                 *ext,
+                {
+                    let class = self.class(path).unwrap();
+                    self.in_classes.push(class);
+                    let info = self.class_info(class).methods.clone();
+                    let r = methods
+                        .iter()
+                        .filter_map(|f| match f {
+                            PreFnEither::Extern(_) => None,
+                            PreFnEither::Local(f) => {
+                                let (_, fid, fty) =
+                                    info.iter().find(|(r, _, _)| *r == *f.name).unwrap();
+                                Some(self.check_fn(f, *fid, fty.clone()))
+                            }
+                        })
+                        .collect::<Result<_, _>>()?;
+                    self.in_classes.pop();
+                    r
+                },
             )]),
             PreItem::Use(path, wildcard) => {
                 if *wildcard {
@@ -1004,6 +1069,13 @@ impl<'b> Cxt<'b> {
                 Ok((Term::Not(Box::new(x)), Type::Bool))
             }
             Pre::Null => Err(TypeError::TypeNeeded(pre.span)),
+            Pre::Selph => {
+                if let Some(ty) = self.in_classes.last() {
+                    Ok((Term::Selph(*ty), Type::Class(*ty)))
+                } else {
+                    Err(TypeError::SelfOutsideClass(pre.span))
+                }
+            }
             Pre::Var(raw) => self
                 .var(raw)
                 .map(|(s, t)| (Term::Var(s), t.clone()))

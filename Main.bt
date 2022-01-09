@@ -123,7 +123,7 @@ fn pretty_arr(arr: [i32]) {
 use Lib::*;
 fn stuff() {
     add_arr(3);
-    for i in arr {
+    for i in getArr() {
         println("entry");
     }
 }
@@ -178,7 +178,15 @@ fn callsArray(): i32 {
 enum Ints {
     Lots([i32]),
     One(i32),
-    None,
+    None;
+
+    // fn asArray(): [i32] = [12];
+
+    fn len(): i32 = match self {
+        None => 0,
+        One(_) => 1,
+        Lots(l) => l.len(),
+    };
 }
 let ints = Ints::Lots([1, 2, 3]);
 let nothing = Ints::None;
@@ -193,3 +201,4 @@ fn intsSum(i: Ints): i32 = match i {
         sum
     }
 };
+fn callsLen(i: Ints): i32 = i.len() + 1;

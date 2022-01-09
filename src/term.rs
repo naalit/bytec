@@ -267,6 +267,7 @@ pub enum Term {
     ),
     Not(Box<Term>),
     Null(Type),
+    Selph(TypeId),
 }
 pub enum Statement {
     Term(Term),
@@ -282,7 +283,7 @@ pub enum Item {
     ExternClass(TypeId),
     InlineJava(RawSym),
     /// If the bool is true, it's extern and shouldn't be generated
-    Enum(TypeId, Vec<(RawSym, Vec<Type>)>, bool),
+    Enum(TypeId, Vec<(RawSym, Vec<Type>)>, bool, Vec<Fn>),
     Let(Sym, Type, Option<Term>),
 }
 pub struct Fn {
@@ -385,6 +386,8 @@ pub enum Pre {
     Not(SPre),
     // null
     Null,
+    // self
+    Selph,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -403,6 +406,11 @@ pub struct PreEFn {
     pub args: Vec<(Spanned<RawSym>, PreType, bool)>,
     pub mapping: RawSym,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub enum PreFnEither {
+    Extern(PreEFn),
+    Local(PreFn),
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreItem {
@@ -413,7 +421,7 @@ pub enum PreItem {
         ext: bool,
         path: RawPath,
         variants: Option<Vec<(RawSym, Vec<PreType>)>>,
-        methods: Vec<PreEFn>,
+        methods: Vec<PreFnEither>,
         members: Vec<(RawSym, PreType)>,
         constructor: Option<Vec<PreType>>,
     },
@@ -554,6 +562,7 @@ impl Term {
             }
             Term::Not(x) => Term::Not(Box::new(x.cloned_(cln))),
             Term::Null(t) => Term::Null(t.clone()),
+            Term::Selph(t) => Term::Selph(*t),
         }
     }
 }
@@ -765,6 +774,7 @@ impl Term {
                 .add(")"),
             Term::Not(x) => Doc::start("!").chain(x.pretty(cxt).nest(Prec::Atom)),
             Term::Null(_) => Doc::keyword("null"),
+            Term::Selph(_) => Doc::keyword("self"),
         }
     }
 }
@@ -822,7 +832,7 @@ impl Item {
                         .style(Style::Literal),
                 )
                 .add(";"),
-            Item::Enum(id, variants, ext) => {
+            Item::Enum(id, variants, ext, methods) => {
                 let mut doc = Doc::none();
                 if *ext {
                     doc = Doc::keyword("extern").space();

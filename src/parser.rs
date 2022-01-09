@@ -68,6 +68,8 @@ enum Tok<'a> {
     Throws,
     // null
     Null,
+    // self
+    Selph,
 
     // +
     Add,
@@ -195,6 +197,7 @@ impl<'a> Lexer<'a> {
             "constructor" => Tok::Constructor,
             "throws" => Tok::Throws,
             "null" => Tok::Null,
+            "self" => Tok::Selph,
             _ => Tok::Name(name),
         };
 
@@ -787,6 +790,10 @@ impl<'a> Parser<'a> {
                 self.next();
                 Ok(Some(Box::new(Spanned::new(Pre::Null, self.span()))))
             }
+            Some(Tok::Selph) => {
+                self.next();
+                Ok(Some(Box::new(Spanned::new(Pre::Selph, self.span()))))
+            }
             Some(Tok::Break) => {
                 self.next();
                 Ok(Some(Box::new(Spanned::new(Pre::Break, self.span()))))
@@ -1175,14 +1182,12 @@ impl<'a> Parser<'a> {
         let mut members = Vec::new();
         if self.peek().as_deref() == Some(&Tok::Semicolon) {
             self.next();
-            if ext {
-                let (methods2, members2, cons) = self.class_members()?;
-                if cons.is_some() {
-                    return Err(self.err("enum cannot have a constructor"));
-                }
-                methods = methods2;
-                members = members2;
+            let (methods2, members2, cons) = self.class_members(ext)?;
+            if cons.is_some() {
+                return Err(self.err("enum cannot have a constructor"));
             }
+            methods = methods2;
+            members = members2;
         }
         self.expect(Tok::CloseBrace, "closing '}'")?;
 
@@ -1198,7 +1203,15 @@ impl<'a> Parser<'a> {
 
     fn class_members(
         &mut self,
-    ) -> Result<(Vec<PreEFn>, Vec<(RawSym, PreType)>, Option<Vec<PreType>>), Error> {
+        ext: bool,
+    ) -> Result<
+        (
+            Vec<PreFnEither>,
+            Vec<(RawSym, PreType)>,
+            Option<Vec<PreType>>,
+        ),
+        Error,
+    > {
         let mut methods = Vec::new();
         let mut members = Vec::new();
         let mut constructor = None;
@@ -1241,11 +1254,14 @@ impl<'a> Parser<'a> {
                     self.expect(Tok::Semicolon, "';'")?;
                     members.push((*name, ty));
                 }
+                // TODO local functions
                 Some(Tok::Fn) => {
                     self.next();
                     let (name, args, ret_ty) = self.prototype()?;
-                    let mapping =
-                        if *self.peek().ok_or(self.err("expected closing '}'"))? == Tok::Equals {
+                    if ext {
+                        let mapping = if *self.peek().ok_or(self.err("expected ';'"))?
+                            == Tok::Equals
+                        {
                             self.next();
                             if let Some(Tok::LitS(s)) = self.peek().as_deref() {
                                 self.next();
@@ -1256,14 +1272,47 @@ impl<'a> Parser<'a> {
                         } else {
                             *name
                         };
-                    self.expect(Tok::Semicolon, "';'")?;
-                    let f = PreEFn {
-                        name,
-                        ret_ty,
-                        args,
-                        mapping,
-                    };
-                    methods.push(f);
+                        self.expect(Tok::Semicolon, "';'")?;
+
+                        let f = PreEFn {
+                            name,
+                            ret_ty,
+                            args,
+                            mapping,
+                        };
+                        methods.push(PreFnEither::Extern(f));
+                    } else {
+                        let mut throws = Vec::new();
+                        if self.peek().as_deref() == Some(&Tok::Throws) {
+                            self.next();
+                            while let Some(n) = self.ident() {
+                                throws.push(*n);
+                            }
+                        }
+
+                        let body = match self.peek().as_deref() {
+                            Some(Tok::Equals) => {
+                                self.next();
+                                let t = self.term()?;
+                                self.expect(Tok::Semicolon, "';' to end function body")?;
+                                t
+                            }
+                            // let term() consume the brace
+                            Some(Tok::OpenBrace) => self.term()?,
+                            _ => return Err(self.err("expected '=' or '{' to start function body")),
+                        }
+                        .ok_or(self.err("expected function body"))?;
+
+                        let f = PreFn {
+                            name,
+                            ret_ty,
+                            args,
+                            public: false,
+                            body,
+                            throws,
+                        };
+                        methods.push(PreFnEither::Local(f));
+                    }
                 }
                 _ => return Err(self.err("expected item or closing '}'")),
             }
@@ -1271,7 +1320,7 @@ impl<'a> Parser<'a> {
         Ok((methods, members, constructor))
     }
 
-    fn class(&mut self) -> Result<Option<PreItem>, Error> {
+    fn class(&mut self, ext: bool) -> Result<Option<PreItem>, Error> {
         let path = self.path().ok_or(self.err("expected class name"))?;
         match self.peek().as_deref() {
             Some(Tok::Semicolon) => {
@@ -1287,7 +1336,7 @@ impl<'a> Parser<'a> {
             }
             Some(Tok::OpenBrace) => {
                 self.next();
-                let (methods, members, constructor) = self.class_members()?;
+                let (methods, members, constructor) = self.class_members(ext)?;
                 self.expect(Tok::CloseBrace, "'}'")?;
 
                 Ok(Some(PreItem::Class {
@@ -1356,7 +1405,7 @@ impl<'a> Parser<'a> {
                             self.expect(Tok::Semicolon, "';'")?;
                             return Ok(Some(PreItem::InlineJava(self.bindings.raw(s))));
                         }
-                        Some(Tok::Class) => return self.class(),
+                        Some(Tok::Class) => return self.class(true),
                         _ => return Err(self.err("expected 'fn', 'enum', or inline Java string")),
                     },
                     _ => unreachable!(),

@@ -14,6 +14,8 @@ extern class Random {
     fn next_int(max: i32): i32 = "nextInt";
 }
 
+fn getArr(): [i32] = arr;
+
 let arr: [i32] = [];
 fn add_arr(i: i32) {
     arr.push(i);

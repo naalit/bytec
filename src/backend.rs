@@ -28,7 +28,7 @@ pub fn declare_p1(code: &[Item], cxt: &mut Cxt) {
 
                 continue;
             }
-            Item::Enum(c, v, _) => {
+            Item::Enum(c, v, _, _) => {
                 let class = cxt.fresh_class();
                 cxt.types.push((*c, class));
                 if v.iter().any(|(_, v)| !v.is_empty()) {
@@ -67,7 +67,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
 
                 continue;
             }
-            Item::Enum(c, _, ext) => {
+            Item::Enum(c, _, ext, methods) => {
                 let class = cxt.class(*c).unwrap();
                 if *ext {
                     mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
@@ -75,6 +75,14 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
                     mappings.push((class.0, cxt.bindings.type_name(*c), true));
                     if let Some(&wrapper) = cxt.enum_wrappers.get(&class) {
                         mappings.push((wrapper.0, cxt.bindings.type_name(*c), true));
+                    }
+                    for f in methods {
+                        let item = cxt.fresh_fn();
+                        cxt.fn_ids.push((f.id, item));
+
+                        let ret = f.ret_ty.lower(&cxt);
+                        cxt.fn_ret_tys.insert(item, ret);
+                        mappings.push((item.0, cxt.bindings.fn_name(f.id), !f.public));
                     }
                 }
 
@@ -101,6 +109,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
         cxt.fn_ids.push((name, item));
 
         let mut ret = ret.lower(&cxt);
+        // Try to convert certain types - for example, convert Java arrays to Bytec dynamic arrays
         if ext {
             if ret.len() > 1 {
                 let mut fixed = false;
@@ -201,6 +210,7 @@ enum JTerm {
     Index(Box<JTerm>, Box<JTerm>, JTy),
     Not(Box<JTerm>),
     Null(JTy),
+    This(JClass),
     InlineJava(RawSym, JTy),
 }
 
@@ -265,7 +275,7 @@ struct JFn {
 #[derive(Clone, Debug, PartialEq)]
 enum JItem {
     Fn(JFn),
-    Enum(JClass, Vec<(RawSym, Vec<JTy>)>, Option<JClass>),
+    Enum(JClass, Vec<(RawSym, Vec<JTy>)>, Option<JClass>, Vec<JFn>),
     // Unlike in statement position, a let may end up running statements that are in its value term
     // So it needs a block, which is realized as a `static { ... }` in Java
     Let(Vec<(JVar, JTy, Option<JTerm>)>, Vec<JStmt>),
@@ -407,6 +417,7 @@ impl JTerm {
             JTerm::Not(x) => format!("!({})", x.gen(cxt)),
             JTerm::Var(v, _) => cxt.name_str(*v),
             JTerm::Null(_) => "null".to_string(),
+            JTerm::This(_) => "this".to_string(),
             JTerm::Lit(l) => match l {
                 JLit::Int(i) => i.to_string(),
                 JLit::Long(i) => format!("{}L", i),
@@ -729,10 +740,21 @@ impl JStmt {
                     cxt.names.insert(v.0, (lpath(Spanned::hack(*raw)), !v.1));
                     write!(
                         buf,
-                        "\n{}{} {} = {}$_ret{}$S;",
+                        "\n{}{} {} = {}{}$_ret{}$S;",
                         cxt.indent(),
                         t.gen(cxt),
                         cxt.name_str(*v),
+                        o.as_ref()
+                            .map(|o| {
+                                let ty = o.ty();
+                                let mut s = match ty {
+                                    JTy::Class(class) => cxt.class_str(class),
+                                    _ => unreachable!(),
+                                };
+                                s.push('.');
+                                s
+                            })
+                            .unwrap_or(String::new()),
                         cxt.fn_str(*f),
                         i
                     )
@@ -772,7 +794,7 @@ impl JTy {
     }
 }
 impl JFn {
-    fn gen(&self, cxt: &mut Gen) -> String {
+    fn gen(&self, cxt: &mut Gen, is_static: bool) -> String {
         let mut buf = String::new();
 
         if self.ret_tys.len() != 1 {
@@ -781,6 +803,7 @@ impl JFn {
             for (i, ty) in self.ret_tys.iter().enumerate() {
                 write!(
                     buf,
+                    // TODO should this be static for methods?
                     "public static {} {}$_ret{}$S;\n{}",
                     ty.gen(cxt),
                     cxt.fn_str(self.fn_id),
@@ -793,7 +816,8 @@ impl JFn {
 
         write!(
             buf,
-            "public static {} {}(",
+            "public {}{} {}(",
+            if is_static { "static " } else { "" },
             if self.ret_tys.len() == 1 {
                 self.ret_tys[0].gen(cxt)
             } else {
@@ -848,8 +872,8 @@ impl JFn {
 impl JItem {
     fn gen(&self, cxt: &mut Gen) -> String {
         match self {
-            JItem::Fn(f) => f.gen(cxt),
-            JItem::Enum(tid, variants, wrapper) => {
+            JItem::Fn(f) => f.gen(cxt, true),
+            JItem::Enum(tid, variants, wrapper, methods) => {
                 let mut buf = String::new();
                 write!(buf, "public static enum {} {{", cxt.class_str(*tid)).unwrap();
                 cxt.push();
@@ -859,6 +883,14 @@ impl JItem {
                     buf.push_str(cxt.indent());
                     buf.push_str(cxt.bindings.resolve_raw(*i));
                     buf.push(',');
+                }
+
+                if wrapper.is_none() && !methods.is_empty() {
+                    buf.pop();
+                    buf.push(';');
+                    for f in methods {
+                        buf.push_str(&f.gen(cxt, false));
+                    }
                 }
 
                 cxt.pop();
@@ -893,6 +925,11 @@ impl JItem {
                             )
                             .unwrap();
                         }
+                    }
+                    buf.push('\n');
+                    buf.push_str(cxt.indent());
+                    for f in methods {
+                        buf.push_str(&f.gen(cxt, false));
                     }
 
                     cxt.pop();
@@ -1057,7 +1094,11 @@ impl JTerm {
     /// Simple instructions can be duplicated freely.
     fn simple(&self) -> bool {
         match self {
-            JTerm::Var(_, _) | JTerm::Variant(_, _) | JTerm::Lit(_) | JTerm::Null(_) => true,
+            JTerm::Var(_, _)
+            | JTerm::Variant(_, _)
+            | JTerm::Lit(_)
+            | JTerm::Null(_)
+            | JTerm::This(_) => true,
             JTerm::Call(_, _, _, _)
             | JTerm::BinOp(_, _, _)
             | JTerm::Index(_, _, _)
@@ -1074,6 +1115,7 @@ impl JTerm {
         match self {
             JTerm::Var(_, t) => t.clone(),
             JTerm::Null(t) => t.clone(),
+            JTerm::This(s) => JTy::Class(*s),
             JTerm::Lit(l) => match l {
                 JLit::Int(_) => JTy::I32,
                 JLit::Long(_) => JTy::I64,
@@ -1106,6 +1148,14 @@ impl Term {
                 return var.map(|var| JTerm::Var(var, cxt.tys.get(&var).unwrap().clone()));
             }
             Term::Null(t) => JTerm::Null(t.lower(cxt).one()),
+            Term::Selph(t) => {
+                let class = cxt.class(*t).unwrap();
+                if let Some(wrapper) = cxt.enum_wrappers.get(&class) {
+                    JTerm::This(*wrapper)
+                } else {
+                    JTerm::This(class)
+                }
+            }
             Term::Not(x) => JTerm::Not(Box::new(x.lower(cxt).one())),
             Term::Lit(l, t) => match l {
                 Literal::Int(i) => match t {
@@ -1747,54 +1797,60 @@ impl Statement {
         }
     }
 }
+impl Fn {
+    fn lower(&self, cxt: &mut Cxt) -> JFn {
+        let mut block = Vec::new();
+        let fn_id = cxt.fun(self.id).unwrap();
+        std::mem::swap(&mut block, &mut cxt.block);
+
+        cxt.push();
+        cxt.current_fn = fn_id;
+        let mut args = Vec::new();
+        for (name, ty) in &self.args {
+            let mut vars = Vec::new();
+            for ty in ty.lower(cxt) {
+                let var = cxt.fresh_var(cxt.bindings.public(*name));
+                args.push((*cxt.bindings.sym_path(*name).stem(), var, ty.clone()));
+                cxt.tys.insert(var, ty);
+                vars.push(var);
+            }
+            cxt.vars.push((name.clone(), JVars::Tuple(vars)));
+        }
+        let ret = self.body.lower(cxt);
+        match (ret, &self.ret_ty) {
+            // Java doesn't like using 'return' with void functions
+            (ret, Type::Unit) => {
+                for i in ret {
+                    cxt.block.push(JStmt::Term(i))
+                }
+            }
+            (ret, _) => cxt.block.push(JStmt::Ret(fn_id, ret.into())),
+        }
+        cxt.pop();
+
+        std::mem::swap(&mut block, &mut cxt.block);
+        let ret_ty = self.ret_ty.lower(cxt);
+        JFn {
+            name: *cxt.bindings.fn_name(self.id).stem(),
+            fn_id,
+            ret_tys: ret_ty.into(),
+            args,
+            body: block,
+            public: self.public,
+            throws: self.throws.clone(),
+        }
+    }
+}
 impl Item {
     fn lower(&self, cxt: &mut Cxt) {
         match self {
             // Module-level inline java is handled by codegen()
             Item::InlineJava(_) => (),
             Item::Fn(f) => {
-                let mut block = Vec::new();
-                let fn_id = cxt.fun(f.id).unwrap();
-                std::mem::swap(&mut block, &mut cxt.block);
-
-                cxt.push();
-                cxt.current_fn = fn_id;
-                let mut args = Vec::new();
-                for (name, ty) in &f.args {
-                    let mut vars = Vec::new();
-                    for ty in ty.lower(cxt) {
-                        let var = cxt.fresh_var(cxt.bindings.public(*name));
-                        args.push((*cxt.bindings.sym_path(*name).stem(), var, ty.clone()));
-                        cxt.tys.insert(var, ty);
-                        vars.push(var);
-                    }
-                    cxt.vars.push((name.clone(), JVars::Tuple(vars)));
-                }
-                let ret = f.body.lower(cxt);
-                match (ret, &f.ret_ty) {
-                    // Java doesn't like using 'return' with void functions
-                    (ret, Type::Unit) => {
-                        for i in ret {
-                            cxt.block.push(JStmt::Term(i))
-                        }
-                    }
-                    (ret, _) => cxt.block.push(JStmt::Ret(fn_id, ret.into())),
-                }
-                cxt.pop();
-
-                std::mem::swap(&mut block, &mut cxt.block);
-                let ret_ty = f.ret_ty.lower(cxt);
-                cxt.items.push(JItem::Fn(JFn {
-                    name: *cxt.bindings.fn_name(f.id).stem(),
-                    fn_id,
-                    ret_tys: ret_ty.into(),
-                    args,
-                    body: block,
-                    public: f.public,
-                    throws: f.throws.clone(),
-                }));
+                let f = f.lower(cxt);
+                cxt.items.push(JItem::Fn(f));
             }
-            Item::Enum(tid, variants, ext) => {
+            Item::Enum(tid, variants, ext, methods) => {
                 if !ext {
                     let class = cxt.class(*tid).unwrap();
                     let variants = variants
@@ -1802,10 +1858,13 @@ impl Item {
                         .map(|(s, t)| (*s, t.iter().flat_map(|x| x.lower(cxt)).collect()))
                         .collect();
 
+                    let methods = methods.iter().map(|x| x.lower(cxt)).collect();
+
                     cxt.items.push(JItem::Enum(
                         class,
                         variants,
                         cxt.enum_wrappers.get(&class).copied(),
+                        methods,
                     ));
                 }
             }
