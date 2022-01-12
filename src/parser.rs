@@ -1,12 +1,12 @@
 use crate::term::*;
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 
 // LEXER
 // This is basically Rust syntax
 #[derive(Clone, Debug, PartialEq)]
-enum Tok<'a> {
+pub enum Tok {
     // x
-    Name(&'a str),
+    Name(RawSym),
     // 3
     LitI(i64),
     // 3.5
@@ -14,7 +14,7 @@ enum Tok<'a> {
     // "Hello world!\n"
     LitS(String),
     // extern { ... }
-    ExternBlock(&'a str),
+    ExternBlock(RawSym),
 
     // fn
     Fn,
@@ -70,6 +70,10 @@ enum Tok<'a> {
     Null,
     // self
     Selph,
+    // #define
+    Define,
+    // #ifdef
+    IfDef,
 
     // +
     Add,
@@ -142,6 +146,7 @@ enum Tok<'a> {
 struct Lexer<'a> {
     input: &'a str,
     pos: usize,
+    bindings: &'a mut Bindings,
 }
 impl<'a> Lexer<'a> {
     fn peek(&self) -> Option<char> {
@@ -164,7 +169,7 @@ impl<'a> Lexer<'a> {
         c.is_alphanumeric() || c == '_'
     }
 
-    fn alpha(&mut self) -> Result<Spanned<Tok<'a>>, Error> {
+    fn alpha(&mut self) -> Result<Spanned<Tok>, Error> {
         let start = self.pos;
         while self.peek().map_or(false, Lexer::is_ident_char) {
             self.pos += 1;
@@ -198,7 +203,9 @@ impl<'a> Lexer<'a> {
             "throws" => Tok::Throws,
             "null" => Tok::Null,
             "self" => Tok::Selph,
-            _ => Tok::Name(name),
+            "define" => Tok::Define,
+            "ifdef" => Tok::IfDef,
+            _ => Tok::Name(self.bindings.raw(name)),
         };
 
         // Handle extern blocks: `extern { ...java code... }`
@@ -220,7 +227,7 @@ impl<'a> Lexer<'a> {
                             if nbrackets == 0 {
                                 let java = &self.input[start_java..self.pos - 1];
                                 return Ok(Spanned::new(
-                                    Tok::ExternBlock(java),
+                                    Tok::ExternBlock(self.bindings.raw(java)),
                                     Span(start, self.pos),
                                 ));
                             }
@@ -244,16 +251,16 @@ impl<'a> Lexer<'a> {
         Ok(Spanned::new(tok, Span(start, self.pos)))
     }
 
-    fn single<T>(&mut self, tok: Tok<'a>) -> Option<Result<Spanned<Tok<'a>>, T>> {
+    fn single<T>(&mut self, tok: Tok) -> Option<Result<Spanned<Tok>, T>> {
         self.pos += 1;
         Some(Ok(Spanned::new(tok, Span(self.pos - 1, self.pos))))
     }
-    fn single_n<T>(&mut self, tok: Tok<'a>, n: usize) -> Option<Result<Spanned<Tok<'a>>, T>> {
+    fn single_n<T>(&mut self, tok: Tok, n: usize) -> Option<Result<Spanned<Tok>, T>> {
         self.pos += n;
         Some(Ok(Spanned::new(tok, Span(self.pos - n, self.pos))))
     }
 
-    fn lex_number(&mut self) -> Result<Spanned<Tok<'a>>, Error> {
+    fn lex_number(&mut self) -> Result<Spanned<Tok>, Error> {
         let start = self.pos;
         let mut buf = String::new();
         let neg = self.peek() == Some('-');
@@ -314,7 +321,7 @@ impl<'a> Lexer<'a> {
     }
 }
 impl<'a> Iterator for Lexer<'a> {
-    type Item = Result<Spanned<Tok<'a>>, Error>;
+    type Item = Result<Spanned<Tok>, Error>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.peek()? {
             '/' if self.peekn(1) == Some('/') => {
@@ -426,24 +433,63 @@ impl<'a> Iterator for Lexer<'a> {
     }
 }
 
+pub fn lex_one(input: &str, bindings: &mut Bindings) -> Option<Tok> {
+    let mut lexer = Lexer {
+        input,
+        bindings,
+        pos: 0,
+    };
+    Some(lexer.next()?.ok()?.inner)
+}
+
+enum IfDef {
+    Yes,
+    No(bool),
+}
+impl IfDef {
+    fn resolve(self, p: &mut Parser) -> bool {
+        match self {
+            IfDef::Yes => true,
+            IfDef::No(set_isreal) => {
+                if set_isreal {
+                    p.is_real = true;
+                }
+                false
+            }
+        }
+    }
+}
+
 // PARSER
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
-    next: Option<Spanned<Tok<'a>>>,
+    next: Option<Spanned<Tok>>,
     next_err: Option<Error>,
-    bindings: Bindings,
+    is_real: bool,
+    in_ifdef: bool,
+    defs: &'a mut HashMap<RawSym, Option<Tok>>,
 }
 impl<'a> Parser<'a> {
-    pub fn new(input: &'a str, bindings: Bindings) -> Self {
+    pub fn new(
+        input: &'a str,
+        bindings: &'a mut Bindings,
+        defs: &'a mut HashMap<RawSym, Option<Tok>>,
+    ) -> Self {
         Parser {
-            lexer: Lexer { input, pos: 0 },
+            lexer: Lexer {
+                input,
+                bindings,
+                pos: 0,
+            },
             next: None,
             next_err: None,
-            bindings,
+            in_ifdef: false,
+            is_real: true,
+            defs,
         }
     }
 
-    fn peek(&mut self) -> Option<Spanned<Tok<'a>>> {
+    fn peek(&mut self) -> Option<Spanned<Tok>> {
         match &self.next {
             Some(x) => Some(x.clone()),
             None => {
@@ -452,6 +498,20 @@ impl<'a> Parser<'a> {
                 }
                 if let Some(x) = self.lexer.next() {
                     match x {
+                        Ok(Spanned {
+                            inner: Tok::Name(r),
+                            span,
+                        }) if !self.in_ifdef && self.defs.contains_key(&r) => {
+                            let x = self.defs.get(&r).unwrap();
+                            match x {
+                                Some(t) => {
+                                    let t = Spanned::new(t.clone(), span);
+                                    self.next = Some(t.clone());
+                                    Some(t)
+                                }
+                                None => self.peek(),
+                            }
+                        }
                         Ok(x) => {
                             self.next = Some(x.clone());
                             Some(x)
@@ -468,7 +528,72 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn next(&mut self) -> Option<Spanned<Tok<'a>>> {
+    fn ifdef(&mut self) -> Result<IfDef, Error> {
+        if self.peek().as_deref() == Some(&Tok::IfDef) {
+            self.next();
+            self.in_ifdef = true;
+            let wanted = if self.peek().as_deref() == Some(&Tok::Not) {
+                self.next();
+                false
+            } else {
+                true
+            };
+            let ident = self
+                .ident()
+                .ok_or(self.err("expected identifier after ifdef"))?;
+            self.in_ifdef = false;
+            let defined = self.defs.contains_key(&*ident);
+            eprintln!(
+                "IFDEF '{}': {}, wanted? {}",
+                self.lexer.bindings.resolve_raw(*ident),
+                defined,
+                wanted
+            );
+            if defined == wanted {
+                Ok(IfDef::Yes)
+            } else {
+                if self.is_real {
+                    self.is_real = false;
+                    Ok(IfDef::No(true))
+                } else {
+                    Ok(IfDef::No(false))
+                }
+            }
+        } else {
+            Ok(IfDef::Yes)
+        }
+    }
+
+    fn defines(&mut self) -> Result<(), Error> {
+        while self.peek().as_deref() == Some(&Tok::Define) {
+            self.next();
+            let name = self
+                .ident()
+                .ok_or(self.err("expected identifier after define"))?;
+            if self.peek().as_deref() == Some(&Tok::Equals) {
+                self.next();
+                let val = self.next().ok_or(self.err("expected token after '='"))?;
+                self.expect(Tok::Semicolon, "';'")?;
+                if self.is_real {
+                    eprintln!(
+                        "Defining '{}' to {:?}",
+                        self.lexer.bindings.resolve_raw(*name),
+                        *val
+                    );
+                    self.defs.insert(*name, Some(val.inner.clone()));
+                }
+            } else {
+                self.expect(Tok::Semicolon, "'=' or ';'")?;
+                if self.is_real {
+                    eprintln!("Defining '{}'", self.lexer.bindings.resolve_raw(*name));
+                    self.defs.insert(*name, None);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn next(&mut self) -> Option<Spanned<Tok>> {
         let next = self.peek();
         self.next = None;
         next
@@ -497,7 +622,7 @@ impl<'a> Parser<'a> {
         match *self.peek()? {
             Tok::Name(x) => {
                 let t = self.next()?;
-                Some(Spanned::new(self.bindings.raw(x), t.span))
+                Some(Spanned::new(x, t.span))
             }
             _ => None,
         }
@@ -768,7 +893,7 @@ impl<'a> Parser<'a> {
             Some(Tok::LitS(s)) => {
                 let q = self.next().unwrap();
                 Ok(Some(Box::new(Spanned::new(
-                    Pre::Lit(Literal::Str(self.bindings.raw(s)), None),
+                    Pre::Lit(Literal::Str(self.lexer.bindings.raw(s)), None),
                     q.span,
                 ))))
             }
@@ -995,8 +1120,17 @@ impl<'a> Parser<'a> {
                     ))));
                 }
                 loop {
-                    let x = self.stmt()?.ok_or(self.err("expected statement"))?;
-                    match (x, self.peek().as_deref()) {
+                    let x = self.stmt()?;
+                    if x.is_none() && self.peek().as_deref() == Some(&Tok::CloseBrace) {
+                        self.next();
+                        return Ok(Some(Box::new(Spanned::new(
+                            Pre::Block(block, None),
+                            Span(start, self.lexer.pos),
+                        ))));
+                    } else if x.is_none() {
+                        return Err(self.err("expected statement"));
+                    }
+                    match (x.unwrap(), self.peek().as_deref()) {
                         (x @ PreStatement::Term(_), Some(Tok::Semicolon)) => {
                             block.push(x);
                             self.next();
@@ -1217,6 +1351,7 @@ impl<'a> Parser<'a> {
         let mut constructor = None;
 
         while *self.peek().ok_or(self.err("expected closing '}'"))? != Tok::CloseBrace {
+            let ifdef = self.ifdef()?;
             match self.peek().as_deref() {
                 Some(Tok::Constructor) => {
                     if constructor.is_some() {
@@ -1244,7 +1379,9 @@ impl<'a> Parser<'a> {
                     }
                     self.expect(Tok::CloseParen, "closing ')'")?;
                     self.expect(Tok::Semicolon, "';'")?;
-                    constructor = Some(args);
+                    if ifdef.resolve(self) {
+                        constructor = Some(args);
+                    }
                 }
                 Some(Tok::Let) => {
                     self.next();
@@ -1266,7 +1403,9 @@ impl<'a> Parser<'a> {
                     }
 
                     self.expect(Tok::Semicolon, "';'")?;
-                    members.push((name, public, ty, body));
+                    if ifdef.resolve(self) {
+                        members.push((name, public, ty, body));
+                    }
                 }
                 Some(Tok::Fn) => {
                     self.next();
@@ -1278,7 +1417,7 @@ impl<'a> Parser<'a> {
                             self.next();
                             if let Some(Tok::LitS(s)) = self.peek().as_deref() {
                                 self.next();
-                                self.bindings.raw(s)
+                                self.lexer.bindings.raw(s)
                             } else {
                                 return Err(self.err("expected Java method name as string literal"));
                             }
@@ -1293,7 +1432,9 @@ impl<'a> Parser<'a> {
                             args,
                             mapping,
                         };
-                        methods.push(PreFnEither::Extern(f));
+                        if ifdef.resolve(self) {
+                            methods.push(PreFnEither::Extern(f));
+                        }
                     } else {
                         let mut throws = Vec::new();
                         if self.peek().as_deref() == Some(&Tok::Throws) {
@@ -1324,7 +1465,9 @@ impl<'a> Parser<'a> {
                             body,
                             throws,
                         };
-                        methods.push(PreFnEither::Local(f));
+                        if ifdef.resolve(self) {
+                            methods.push(PreFnEither::Local(f));
+                        }
                     }
                 }
                 _ => return Err(self.err("expected item or closing '}'")),
@@ -1366,11 +1509,13 @@ impl<'a> Parser<'a> {
     }
 
     fn item(&mut self) -> Result<Option<PreItem>, Error> {
-        match self.peek().as_deref() {
+        self.defines()?;
+        let ifdef = self.ifdef()?;
+        let i = match self.peek().as_deref() {
             None => Ok(None),
             Some(Tok::ExternBlock(s)) => {
                 self.next();
-                Ok(Some(PreItem::InlineJava(self.bindings.raw(*s))))
+                Ok(Some(PreItem::InlineJava(*s)))
             }
             Some(Tok::Let) => {
                 self.next();
@@ -1420,7 +1565,7 @@ impl<'a> Parser<'a> {
                         Some(Tok::Enum) => return self.enum_dec(true).map(Some),
                         Some(Tok::LitS(s)) => {
                             self.expect(Tok::Semicolon, "';'")?;
-                            return Ok(Some(PreItem::InlineJava(self.bindings.raw(s))));
+                            return Ok(Some(PreItem::InlineJava(self.lexer.bindings.raw(s))));
                         }
                         Some(Tok::Class) => return self.class(true),
                         _ => return Err(self.err("expected 'fn', 'enum', or inline Java string")),
@@ -1432,7 +1577,7 @@ impl<'a> Parser<'a> {
                 if ext {
                     self.expect(Tok::Equals, "'='")?;
                     let mapping = match self.peek().as_deref() {
-                        Some(Tok::LitS(m)) => self.bindings.raw(m),
+                        Some(Tok::LitS(m)) => self.lexer.bindings.raw(m),
                         _ => return Err(self.err("expected Java function name as string literal")),
                     };
                     self.next();
@@ -1498,11 +1643,19 @@ impl<'a> Parser<'a> {
                 Ok(Some(PreItem::Use(path, wild)))
             }
             _ => Ok(None),
+        };
+        if ifdef.resolve(self) {
+            i
+        } else {
+            i?;
+            self.item()
         }
     }
 
     fn stmt(&mut self) -> Result<Option<PreStatement>, Error> {
-        match self.peek().as_deref() {
+        self.defines()?;
+        let ifdef = self.ifdef()?;
+        let i = match self.peek().as_deref() {
             Some(
                 Tok::Fn | Tok::Extern | Tok::ExternBlock(_) | Tok::Let | Tok::Enum | Tok::Class,
             ) => Ok(self.item()?.map(PreStatement::Item)),
@@ -1571,6 +1724,12 @@ impl<'a> Parser<'a> {
                 Ok(Some(PreStatement::For(var, public, a, b, block)))
             }
             _ => Ok(self.term()?.map(PreStatement::Term)),
+        };
+        if ifdef.resolve(self) {
+            i
+        } else {
+            i?;
+            self.stmt()
         }
     }
 
@@ -1587,15 +1746,17 @@ impl<'a> Parser<'a> {
                     }
                 }
                 Ok(None) => {
-                    if let Some(x) = self.next_err.take() {
-                        return Err(x);
-                    } else {
-                        return Err(Spanned::new(
-                            Doc::start("Unexpected ")
-                                .debug(self.peek().unwrap().inner)
-                                .add(", expected statement"),
-                            Span(self.lexer.pos, self.lexer.pos + 1),
-                        ));
+                    if self.peek().is_some() {
+                        if let Some(x) = self.next_err.take() {
+                            return Err(x);
+                        } else {
+                            return Err(Spanned::new(
+                                Doc::start("Unexpected ")
+                                    .debug(self.peek().unwrap().inner)
+                                    .add(", expected statement"),
+                                Span(self.lexer.pos, self.lexer.pos + 1),
+                            ));
+                        }
                     }
                 }
             }
@@ -1604,9 +1765,5 @@ impl<'a> Parser<'a> {
             Some(x) => Err(x),
             None => Ok(v),
         }
-    }
-
-    pub fn finish(self) -> Bindings {
-        self.bindings
     }
 }

@@ -4,6 +4,7 @@ mod elaborate;
 mod parser;
 mod pretty;
 mod term;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::{fs::File, io::Read};
 
@@ -13,16 +14,44 @@ use crate::pretty::{Doc, Style};
 fn main() {
     let mut args = std::env::args();
     let _exe = args.next();
-    let mut paths: Vec<_> = args.collect();
+    let mut paths = Vec::new();
+    let mut bindings = crate::binding::Bindings::default();
+    let mut defs = HashMap::new();
+    for i in args {
+        if i.starts_with("-D") {
+            if let Some(idx) = i.find('=') {
+                let k = &i[2..idx];
+                let v = &i[idx + 1..];
+                let v = crate::parser::lex_one(&v, &mut bindings).unwrap_or_else(|| {
+                    Doc::start("error")
+                        .style(Style::BoldRed)
+                        .add(": Invalid token is definition argument: '")
+                        .add(v)
+                        .add("'")
+                        .style(Style::Bold)
+                        .emit();
+                    std::process::exit(1)
+                });
+                defs.insert(bindings.raw(k), Some(v));
+            } else {
+                defs.insert(bindings.raw(&i[2..]), None);
+            }
+        } else {
+            paths.push(i);
+        }
+    }
 
-    let output: PathBuf = paths.pop().unwrap_or_else(|| {
-        Doc::start("error")
-            .style(Style::BoldRed)
-            .add(": No output directory given")
-            .style(Style::Bold)
-            .emit();
-        std::process::exit(1)
-    }).into();
+    let output: PathBuf = paths
+        .pop()
+        .unwrap_or_else(|| {
+            Doc::start("error")
+                .style(Style::BoldRed)
+                .add(": No output directory given")
+                .style(Style::Bold)
+                .emit();
+            std::process::exit(1)
+        })
+        .into();
 
     let mut files = Vec::new();
     for input in paths {
@@ -39,15 +68,16 @@ fn main() {
         }
     }
     let package = if output.ends_with(".java") {
-            output.parent().unwrap().file_name().unwrap()
-        } else {
-            output.file_name().unwrap()
-        }.to_str().unwrap();
+        output.parent().unwrap().file_name().unwrap()
+    } else {
+        output.file_name().unwrap()
+    }
+    .to_str()
+    .unwrap();
 
     let mut nfiles = 0;
     let mut mods = Vec::new();
     let mut p1 = Vec::new();
-    let mut bindings = crate::binding::Bindings::default();
     for input in files {
         let mut file = File::open(&input).unwrap_or_else(|_| {
             Doc::start("error")
@@ -76,9 +106,8 @@ fn main() {
                 .insert(file_id, input.clone());
         }
 
-        let mut parser = Parser::new(&buf, bindings);
+        let mut parser = Parser::new(&buf, &mut bindings, &mut defs);
         let v = parser.top_level();
-        bindings = parser.finish();
         let v = v.and_then(|v| {
             let (t, i) = crate::elaborate::declare_mod_p1(&v, &mut bindings, file_id)?;
             Ok((t, i, v))
@@ -144,9 +173,7 @@ fn main() {
         };
 
         if output.ends_with(".java") {
-            output
-                .parent()
-                .map(|p| std::fs::create_dir_all(p).unwrap());
+            output.parent().map(|p| std::fs::create_dir_all(p).unwrap());
         } else if !output.exists() {
             std::fs::create_dir_all(&output).unwrap();
         }

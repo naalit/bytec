@@ -214,3 +214,19 @@ fn uses(): i32 {
     myVar.z.push(4);
     myVar.total() + myVar.z.len()
 }
+
+ifdef NotDefined
+fn thisDoesntCompile(): str {
+    return 12;
+}
+
+define Yes;
+define Num = 12;
+
+ifdef Yes
+fn testThis() {
+    let num = Num;
+    ifdef Num2 {
+        num += Num2;
+    }
+}
