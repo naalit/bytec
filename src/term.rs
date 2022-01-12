@@ -253,8 +253,8 @@ pub enum Term {
     Variant(TypeId, RawSym, Vec<Term>),
     Tuple(Vec<Term>),
     TupleIdx(Box<Term>, usize),
-    // (array, inner type (needed for empty arrays in backend))
-    Array(Vec<Term>, Type),
+    // (array, inner type (needed for empty arrays in backend), is dynamic)
+    Array(Vec<Term>, Type, bool),
     ArrayIdx(Box<Term>, Box<Term>),
     ArrayMethod(Box<Term>, ArrayMethod),
     Member(Box<Term>, Sym),
@@ -318,6 +318,7 @@ pub enum Type {
     Class(TypeId),
     Tuple(Vec<Type>),
     Array(Box<Type>),
+    SArray(Box<Type>, usize),
 }
 
 // Presyntax
@@ -455,6 +456,7 @@ pub enum PreType {
     Class(RawPath),
     Tuple(Vec<PreType>),
     Array(Box<PreType>),
+    SArray(Box<PreType>, usize),
 }
 
 impl Pre {
@@ -528,7 +530,9 @@ impl Term {
             }
             Term::Tuple(v) => Term::Tuple(v.iter().map(|x| x.cloned_(cln)).collect()),
             Term::TupleIdx(x, i) => Term::TupleIdx(Box::new(x.cloned_(cln)), *i),
-            Term::Array(v, t) => Term::Array(v.iter().map(|x| x.cloned_(cln)).collect(), t.clone()),
+            Term::Array(v, t, d) => {
+                Term::Array(v.iter().map(|x| x.cloned_(cln)).collect(), t.clone(), *d)
+            }
             Term::ArrayIdx(arr, i) => {
                 Term::ArrayIdx(Box::new(arr.cloned_(cln)), Box::new(i.cloned_(cln)))
             }
@@ -675,12 +679,13 @@ impl Term {
                 ))
                 .add(')'),
             Term::TupleIdx(x, i) => x.pretty(cxt).add('.').add(i),
-            Term::Array(v, _) => Doc::start('[')
+            Term::Array(v, _, b) => Doc::start('[')
                 .chain(Doc::intersperse(
                     v.iter().map(|x| x.pretty(cxt)),
                     Doc::start(',').space(),
                 ))
-                .add(']'),
+                .add(']')
+                .add(if *b { "&" } else { "" }),
             Term::ArrayIdx(arr, i) => arr.pretty(cxt).add('[').chain(i.pretty(cxt)).add(']'),
             Term::ArrayMethod(arr, m) => arr.pretty(cxt).add('.').chain(match m {
                 ArrayMethod::Len => Doc::start("len()"),
@@ -970,6 +975,11 @@ impl Type {
                 ))
                 .add(')'),
             Type::Array(t) => Doc::start('[').chain(t.pretty(cxt)).add(']'),
+            Type::SArray(t, u) => Doc::start('[')
+                .chain(t.pretty(cxt))
+                .add("; ")
+                .add(u)
+                .add(']'),
         }
     }
 }

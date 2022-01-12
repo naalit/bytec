@@ -1433,7 +1433,7 @@ impl Term {
                     return JTerms::empty();
                 }
             },
-            Term::Array(v, t) if v.is_empty() => {
+            Term::Array(v, t, true) if v.is_empty() => {
                 let t = t.lower(cxt);
                 return JTerms::Tuple(
                     t.into_iter()
@@ -1442,7 +1442,7 @@ impl Term {
                         .collect(),
                 );
             }
-            Term::Array(v, _) => {
+            Term::Array(v, _, true) => {
                 let mut v2 = Vec::new();
                 let mut len = 0;
                 for i in v {
@@ -1465,6 +1465,9 @@ impl Term {
                         .chain(std::iter::once(JTerm::Lit(JLit::Int(len))))
                         .collect(),
                 );
+            }
+            Term::Array(v, _t, false) => {
+                return JTerms::Tuple(v.iter().flat_map(|x| x.lower(cxt)).collect())
             }
             Term::ArrayIdx(arr, idx) => {
                 let arrs = arr.lower(cxt);
@@ -2113,6 +2116,9 @@ impl Type {
                         .chain(std::iter::once(JTy::I32))
                         .collect(),
                 )
+            }
+            Type::SArray(t, i) => {
+                return JTys::Tuple(std::iter::repeat(t.lower(cxt)).take(*i).flatten().collect())
             }
         })
     }

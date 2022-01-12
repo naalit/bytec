@@ -230,3 +230,6 @@ fn testThis() {
         num += Num2;
     }
 }
+
+let dynamic: [i32] = [1, 2, 3];
+let static: [i32; 3] = [1, 2, 3];

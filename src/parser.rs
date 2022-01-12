@@ -1191,8 +1191,23 @@ impl<'a> Parser<'a> {
             Some(Tok::OpenBracket) => {
                 self.next();
                 let inner = self.ty()?.ok_or(self.err("expected type"))?;
+                let i = if self.peek().as_deref() == Some(&Tok::Semicolon) {
+                    self.next();
+                    if let Some(Tok::LitI(i)) = self.peek().as_deref() {
+                        self.next();
+                        Some(*i as usize)
+                    } else {
+                        return Err(self.err("expected number after ';'"));
+                    }
+                } else {
+                    None
+                };
                 self.expect(Tok::CloseBracket, "closing ']'")?;
-                Ok(Some(PreType::Array(Box::new(inner))))
+                Ok(Some(if let Some(i) = i {
+                    PreType::SArray(Box::new(inner), i)
+                } else {
+                    PreType::Array(Box::new(inner))
+                }))
             }
             Some(Tok::OpenParen) => {
                 self.next();

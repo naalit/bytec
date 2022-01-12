@@ -555,6 +555,7 @@ impl<'b> Cxt<'b> {
                 .collect::<Result<Vec<_>, _>>()
                 .map(Type::Tuple),
             PreType::Array(t) => Ok(Type::Array(Box::new(self.elab_type(t)?))),
+            PreType::SArray(t, i) => Ok(Type::SArray(Box::new(self.elab_type(t)?), *i)),
         }
     }
 
@@ -1242,7 +1243,10 @@ impl<'b> Cxt<'b> {
                 }
                 // Make an empty array default to [()]
                 let ty = ty.unwrap_or(Type::Unit);
-                Ok((Term::Array(v2, ty.clone()), Type::Array(Box::new(ty))))
+                Ok((
+                    Term::Array(v2, ty.clone(), false),
+                    Type::SArray(Box::new(ty), v.len()),
+                ))
             }
             Pre::ArrayIdx(parr, idx) => {
                 let (arr, aty) = self.infer(parr)?;
@@ -1562,7 +1566,7 @@ impl<'b> Cxt<'b> {
                 for i in v {
                     v2.push(self.check(i, (**t).clone())?);
                 }
-                Ok(Term::Array(v2, (**t).clone()))
+                Ok(Term::Array(v2, (**t).clone(), true))
             }
 
             // These technically return the never type `!`, but that's too complicated for bytec
