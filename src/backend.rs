@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 use crate::term::*;
@@ -199,6 +199,8 @@ impl IRMod {
             i.lower(cxt);
         }
 
+        cxt.opt();
+
         let mut names = HashMap::new();
         // Declare items
         for (m, _) in mods {
@@ -310,6 +312,7 @@ enum JStmt {
         Vec<(RawSym, JVar, JTy)>,
     ),
     InlineJava(RawSym),
+    None,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -463,7 +466,11 @@ impl<'a> Gen<'a> {
     }
 
     fn name_str(&self, v: JVar) -> String {
-        let (i, b) = &self.names[&v.0];
+        let (i, b) = self
+            .names
+            .get(&v.0)
+            .unwrap_or_else(|| panic!("not found: {}", v.0));
+        // let (i, b) = &self.names[&v.0];
         let s = self.bindings.resolve_path(i);
         if *b {
             format!("{}${}", s, v.0)
@@ -639,6 +646,7 @@ impl JLVal {
 impl JStmt {
     fn gen(&self, cxt: &mut Gen) -> String {
         match self {
+            JStmt::None => String::new(),
             JStmt::Let(n, t, v, None) => {
                 cxt.names.insert(v.0, (lpath(Spanned::hack(*n)), !v.1));
                 format!("{} {} = {};", t.gen(cxt), cxt.name_str(*v), t.null())
@@ -958,7 +966,7 @@ impl JItem {
                 cxt.push();
 
                 for (vars, _block) in members {
-                    for (i, (r, ty, _x)) in vars.iter().enumerate() {
+                    for (r, ty, _x) in vars {
                         write!(
                             buf,
                             "\n{}public {} {};",
@@ -978,7 +986,7 @@ impl JItem {
                         buf.push_str(cxt.indent());
                     }
 
-                    for (i, (r, _ty, x)) in vars.iter().enumerate() {
+                    for (r, _ty, x) in vars {
                         if let Some(x) = x {
                             write!(
                                 buf,
@@ -2152,5 +2160,292 @@ impl Type {
                 return JTys::Tuple(std::iter::repeat(t.lower(cxt)).take(*i).flatten().collect())
             }
         })
+    }
+}
+
+// OPTIMIZATION
+trait Visitor {
+    fn visit_term(&mut self, _: &mut JTerm) {}
+    fn visit_lval(&mut self, _: &mut JLVal) {}
+    fn visit_stmt(&mut self, _: &mut JStmt) {}
+}
+impl<V: Visitor> Visitor for &mut V {
+    fn visit_term(&mut self, t: &mut JTerm) {
+        V::visit_term(self, t);
+    }
+
+    fn visit_lval(&mut self, t: &mut JLVal) {
+        V::visit_lval(self, t);
+    }
+
+    fn visit_stmt(&mut self, t: &mut JStmt) {
+        V::visit_stmt(self, t);
+    }
+}
+struct VTerm<F: FnMut(&mut JTerm)>(F);
+impl<F: FnMut(&mut JTerm)> Visitor for VTerm<F> {
+    fn visit_term(&mut self, t: &mut JTerm) {
+        self.0(t);
+    }
+}
+struct VStmt<F: FnMut(&mut JStmt)>(F);
+impl<F: FnMut(&mut JStmt)> Visitor for VStmt<F> {
+    fn visit_stmt(&mut self, t: &mut JStmt) {
+        self.0(t);
+    }
+}
+impl JTerm {
+    /// An inwards map - f will be applied to `self`, then its children
+    fn map(&mut self, f: &mut impl Visitor) {
+        f.visit_term(self);
+        match self {
+            JTerm::Var(_, _) => (),
+            JTerm::Lit(_) => (),
+            JTerm::Call(o, _, a, _) => {
+                if let Some(o) = o {
+                    o.map(f);
+                }
+                // o.as_mut().map(|x| x.map(&mut f));
+                a.iter_mut().for_each(|x| x.map(f));
+            }
+            JTerm::Prop(x, _, _) => x.map(f),
+            JTerm::BinOp(_, a, b) => {
+                a.as_mut().map(f);
+                b.as_mut().map(f);
+            }
+            JTerm::Variant(_, _) => (),
+            JTerm::Array(v, _) => {
+                v.iter_mut().for_each(|x| x.map(f));
+            }
+            JTerm::ArrayNew(v, _) => v.map(f),
+            JTerm::ClassNew(_, v) => {
+                v.iter_mut().for_each(|x| x.map(f));
+            }
+            JTerm::Index(x, y, _) => {
+                x.as_mut().map(f);
+                y.as_mut().map(f);
+            }
+            JTerm::Not(x) => x.map(f),
+            JTerm::Null(_) => (),
+            JTerm::This(_) => (),
+            JTerm::InlineJava(_, _) => (),
+        }
+    }
+}
+impl JLVal {
+    fn map(&mut self, f: &mut impl Visitor) {
+        f.visit_lval(self);
+        match self {
+            JLVal::Var(_) => (),
+            JLVal::Idx(x, y) => {
+                x.map(f);
+                y.map(f);
+            }
+            JLVal::Prop(x, _) => x.map(f),
+        }
+    }
+}
+impl JStmt {
+    fn map(&mut self, f: &mut impl Visitor) {
+        f.visit_stmt(self);
+        match self {
+            JStmt::None => (),
+            JStmt::Let(_, _, _, x) => {
+                x.as_mut().map(|x| x.map(f));
+            }
+            JStmt::Set(l, _, x) => {
+                l.map(f);
+                x.map(f);
+            }
+            JStmt::Term(x) => x.map(f),
+            JStmt::If(x, a, b) => {
+                x.map(f);
+                a.iter_mut().for_each(|x| x.map(f));
+                b.iter_mut().for_each(|x| x.map(f));
+            }
+            JStmt::Switch(_, x, a, b) => {
+                x.map(f);
+                a.iter_mut()
+                    .flat_map(|(_, b)| b.iter_mut())
+                    .for_each(|x| x.map(f));
+                b.iter_mut().for_each(|x| x.map(f));
+            }
+            JStmt::While(_, x, a) => {
+                x.map(f);
+                a.iter_mut().for_each(|x| x.map(f));
+            }
+            JStmt::RangeFor(_, _, _, x, y, b) => {
+                x.map(f);
+                y.map(f);
+                b.iter_mut().for_each(|x| x.map(f));
+            }
+            JStmt::Continue(_) => (),
+            JStmt::Break(_) => (),
+            JStmt::Ret(_, v) => {
+                v.iter_mut().for_each(|x| x.map(f));
+            }
+            JStmt::MultiCall(x, _, v, _) => {
+                x.as_mut().map(|x| x.map(f));
+                v.iter_mut().for_each(|x| x.map(f));
+            }
+            JStmt::InlineJava(_) => (),
+        }
+    }
+}
+#[derive(Default)]
+struct UseCounter {
+    /// Doesn't count definition
+    count: HashMap<JVar, usize>,
+    mutated: HashSet<JVar>,
+}
+impl Visitor for UseCounter {
+    fn visit_term(&mut self, t: &mut JTerm) {
+        match t {
+            JTerm::Var(v, _) => *self.count.entry(*v).or_default() += 1,
+            _ => (),
+        }
+    }
+
+    fn visit_lval(&mut self, t: &mut JLVal) {
+        match t {
+            JLVal::Var(v) => {
+                *self.count.entry(*v).or_default() += 1;
+                self.mutated.insert(*v);
+            }
+            _ => (),
+        }
+    }
+
+    fn visit_stmt(&mut self, _: &mut JStmt) {
+        // Statements can't use variables directly, only define them
+    }
+}
+struct SideEffects(bool);
+impl Visitor for SideEffects {
+    fn visit_term(&mut self, t: &mut JTerm) {
+        self.0 |= match t {
+            JTerm::Call(_, _, _, _) => true,
+            JTerm::ClassNew(_, _) => true,
+            JTerm::InlineJava(_, _) => true,
+
+            JTerm::Var(_, _)
+            | JTerm::Lit(_)
+            | JTerm::Prop(_, _, _)
+            | JTerm::BinOp(_, _, _)
+            | JTerm::Variant(_, _)
+            | JTerm::Array(_, _)
+            | JTerm::ArrayNew(_, _)
+            | JTerm::Index(_, _, _)
+            | JTerm::Not(_)
+            | JTerm::Null(_)
+            | JTerm::This(_) => false,
+        };
+    }
+
+    fn visit_lval(&mut self, _: &mut JLVal) {
+        // Lvalues don't directly have side effects
+    }
+
+    fn visit_stmt(&mut self, s: &mut JStmt) {
+        self.0 |= match s {
+            JStmt::Set(_, _, _) => true,
+            JStmt::Continue(_) => true,
+            JStmt::Break(_) => true,
+            JStmt::Ret(_, _) => true,
+            JStmt::MultiCall(_, _, _, _) => true,
+            JStmt::InlineJava(_) => true,
+
+            JStmt::Let(_, _, _, _)
+            | JStmt::Term(_)
+            | JStmt::If(_, _, _)
+            | JStmt::Switch(_, _, _, _)
+            | JStmt::While(_, _, _)
+            | JStmt::RangeFor(_, _, _, _, _, _)
+            | JStmt::None => false,
+        };
+    }
+}
+impl JFn {
+    fn map(&mut self, f: &mut impl Visitor) {
+        self.body.iter_mut().for_each(|x| x.map(f));
+    }
+}
+impl JItem {
+    fn map(&mut self, f: &mut impl Visitor) {
+        match self {
+            JItem::Fn(x) => x.map(f),
+            JItem::Enum(_, _, _, methods) => methods.iter_mut().for_each(|x| x.map(f)),
+            JItem::Class(_, members, methods) => {
+                for (v, b) in members {
+                    for (_, _, x) in v {
+                        if let Some(x) = x {
+                            x.map(f);
+                        }
+                    }
+                    b.iter_mut().for_each(|x| x.map(f));
+                }
+                methods.iter_mut().for_each(|x| x.map(f));
+            }
+            JItem::Let(v, b) => {
+                for (_, _, x) in v {
+                    if let Some(x) = x {
+                        x.map(f);
+                    }
+                }
+                b.iter_mut().for_each(|x| x.map(f));
+            }
+        }
+    }
+}
+impl<'a> Cxt<'a> {
+    fn replace(&mut self, v: JVar, x: &JTerm) {
+        for i in &mut self.items {
+            i.map(&mut VTerm(|t| match t {
+                JTerm::Var(y, _) if *y == v => {
+                    *t = x.clone();
+                    // eprintln!("Replaced!");
+                }
+                _ => (),
+            }));
+        }
+    }
+
+    fn opt(&mut self) {
+        let mut counter = UseCounter::default();
+        for i in &mut self.items {
+            i.map(&mut counter);
+        }
+        let mut to_replace = Vec::new();
+        for i in &mut self.items {
+            i.map(&mut VStmt(|t| match t {
+                JStmt::Let(_, _, v, Some(x)) => {
+                    if !v.1
+                        && counter.count.get(v).map_or(true, |x| *x <= 1)
+                        && !counter.mutated.contains(v)
+                    {
+                        let mut effects = SideEffects(false);
+                        x.map(&mut effects);
+                        if !effects.0 {
+                            // eprintln!("Replacing {:?} uses of {} with {:?}", counter.count.get(v), v.0, x);
+                            to_replace.push((*v, x.clone()));
+                            *t = JStmt::None;
+                        }
+                    }
+                }
+                _ => (),
+            }));
+        }
+        while let Some((v, x)) = to_replace.pop() {
+            for (_, y) in &mut to_replace {
+                y.map(&mut VTerm(|t| match t {
+                    JTerm::Var(y, _) if *y == v => {
+                        *t = x.clone();
+                        eprintln!("Replaced!");
+                    }
+                    _ => (),
+                }));
+            }
+            self.replace(v, &x);
+        }
     }
 }
