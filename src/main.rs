@@ -13,15 +13,9 @@ use crate::pretty::{Doc, Style};
 fn main() {
     let mut args = std::env::args();
     let _exe = args.next();
-    let input = args.next().unwrap_or_else(|| {
-        Doc::start("error")
-            .style(Style::BoldRed)
-            .add(": No input file or directory given")
-            .style(Style::Bold)
-            .emit();
-        std::process::exit(1)
-    });
-    let output: PathBuf = args.next().unwrap_or_else(|| {
+    let mut paths: Vec<_> = args.collect();
+
+    let output: PathBuf = paths.pop().unwrap_or_else(|| {
         Doc::start("error")
             .style(Style::BoldRed)
             .add(": No output directory given")
@@ -31,23 +25,24 @@ fn main() {
     }).into();
 
     let mut files = Vec::new();
-    let input: PathBuf = input.into();
-    let package = if input.is_file() {
-        files.push(input.clone());
-        if output.ends_with(".java") {
+    for input in paths {
+        let input: PathBuf = input.into();
+        if input.is_file() {
+            files.push(input.clone());
+        } else {
+            for i in input.read_dir().unwrap() {
+                let i = i.unwrap();
+                if i.file_name().to_str().unwrap().ends_with(".bt") {
+                    files.push(i.path());
+                }
+            }
+        }
+    }
+    let package = if output.ends_with(".java") {
             output.parent().unwrap().file_name().unwrap()
         } else {
             output.file_name().unwrap()
-        }
-    } else {
-        for i in input.read_dir().unwrap() {
-            let i = i.unwrap();
-            if i.file_name().to_str().unwrap().ends_with(".bt") {
-                files.push(i.path());
-            }
-        }
-        output.file_name().unwrap()
-    }.to_str().unwrap();
+        }.to_str().unwrap();
 
     let mut nfiles = 0;
     let mut mods = Vec::new();
@@ -163,7 +158,7 @@ fn main() {
                 Doc::start("error")
                     .style(Style::BoldRed)
                     .add(": Output path is not a directory: ")
-                    .add(&input.as_os_str().to_str().unwrap())
+                    .add(&output.as_os_str().to_str().unwrap())
                     .style(Style::Bold)
                     .emit();
                 std::process::exit(1)
