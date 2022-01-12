@@ -1118,6 +1118,7 @@ impl<'b> Cxt<'b> {
                         let (a, t) = self.infer(pa)?;
                         match t {
                             Type::Array(t) => (ForIter::Array(Box::new(a)), *t),
+                            Type::SArray(t, _) => (ForIter::SArray(Box::new(a), (*t).clone()), *t),
                             t => return Err(TypeError::NotArray(pa.span, t)),
                         }
                     }

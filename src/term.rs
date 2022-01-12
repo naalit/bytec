@@ -238,6 +238,7 @@ pub enum ForIter {
     Range(Box<Term>, Box<Term>),
     // for i: t in arr
     Array(Box<Term>),
+    SArray(Box<Term>, Type),
 }
 
 pub enum Term {
@@ -620,6 +621,7 @@ impl ForIter {
                 ForIter::Range(Box::new(a.cloned_(cln)), Box::new(b.cloned_(cln)))
             }
             ForIter::Array(a) => ForIter::Array(Box::new(a.cloned_(cln))),
+            ForIter::SArray(a, t) => ForIter::SArray(Box::new(a.cloned_(cln)), t.clone()),
         }
     }
 }
@@ -1003,7 +1005,7 @@ impl ForIter {
                 .nest(Prec::Atom)
                 .add("..")
                 .chain(b.pretty(cxt).nest(Prec::Atom)),
-            ForIter::Array(a) => a.pretty(cxt),
+            ForIter::Array(a) | ForIter::SArray(a, _) => a.pretty(cxt),
         }
     }
 }

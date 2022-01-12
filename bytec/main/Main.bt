@@ -233,3 +233,12 @@ fn testThis() {
 
 let dynamic: [i32] = [1, 2, 3];
 let static: [i32; 3] = [1, 2, 3];
+fn looper2() {
+    let sum = 0;
+    for i in dynamic {
+        for j in static {
+            let tmp = i * j;
+            sum += tmp;
+        }
+    }
+}

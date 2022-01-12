@@ -882,7 +882,6 @@ impl JFn {
             for (i, ty) in self.ret_tys.iter().enumerate() {
                 write!(
                     buf,
-                    // TODO should this be static for methods?
                     "public static {} {}$_ret{}$S;\n{}",
                     ty.gen(cxt),
                     cxt.fn_str(self.fn_id),
@@ -1890,6 +1889,38 @@ impl Statement {
                             b,
                             block,
                         ));
+                    }
+                    ForIter::SArray(arr, t) => {
+                        let arr = arr.lower(cxt);
+                        let t = t.lower(cxt);
+
+                        let mut vars = Vec::new();
+                        for t in t {
+                            let var = cxt.fresh_var(cxt.bindings.public(*s));
+                            cxt.tys.insert(var, t.clone());
+                            cxt.block.push(JStmt::Let(
+                                *cxt.bindings.sym_path(*s).stem(),
+                                t,
+                                var,
+                                None,
+                            ));
+                            vars.push(var);
+                        }
+                        cxt.vars.push((*s, JVars::Tuple(vars.clone())));
+
+                        // Generate an unrolled loop in the current block
+                        let mut vals = arr.to_vec();
+                        while !vals.is_empty() {
+                            for &v in &vars {
+                                // TODO is this too slow?
+                                let next = vals.remove(0);
+                                cxt.block.push(JStmt::Set(JLVal::Var(v), None, next));
+                            }
+
+                            for i in block {
+                                i.lower(cxt);
+                            }
+                        }
                     }
                     ForIter::Array(arr) => {
                         let arr = arr.lower(cxt);
