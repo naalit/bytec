@@ -3,8 +3,6 @@ use std::fmt::Write;
 
 use crate::term::*;
 
-// Entry point
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum Predef {
     /// java.util.Arrays.copyOf
@@ -18,6 +16,8 @@ pub struct IRMod {
     java: Vec<RawSym>,
     out_class: String,
 }
+
+// Entry point
 
 pub fn declare_p1(code: &[Item], cxt: &mut Cxt) {
     for i in code {
@@ -214,6 +214,7 @@ impl IRMod {
         gen.names = names;
         // Generate items
         let mut s = String::new();
+        write!(s, "package {};\n\n", cxt.package).unwrap();
         // Add module-level inline Java at the top
         for &i in &self.java {
             s.push_str(cxt.bindings.resolve_raw(i));
@@ -1137,9 +1138,10 @@ pub struct Cxt<'a> {
     predefs: Vec<(Predef, JFnId)>,
     enum_wrappers: HashMap<JClass, JClass>,
     next: u64,
+    package: String,
 }
 impl<'a> Cxt<'a> {
-    pub fn new(bindings: &'a mut Bindings) -> Self {
+    pub fn new(bindings: &'a mut Bindings, package: impl Into<String>) -> Self {
         Cxt {
             bindings,
             scopes: Vec::new(),
@@ -1155,6 +1157,7 @@ impl<'a> Cxt<'a> {
             predefs: Vec::new(),
             enum_wrappers: HashMap::new(),
             next: 0,
+            package: package.into(),
         }
     }
 

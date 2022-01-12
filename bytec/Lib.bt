@@ -1,6 +1,4 @@
 extern {
-    package bytecoder;
-
     import java.util.Random;
 }
 

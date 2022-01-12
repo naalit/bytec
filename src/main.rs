@@ -21,19 +21,24 @@ fn main() {
             .emit();
         std::process::exit(1)
     });
-    let output = args.next().unwrap_or_else(|| {
+    let output: PathBuf = args.next().unwrap_or_else(|| {
         Doc::start("error")
             .style(Style::BoldRed)
             .add(": No output directory given")
             .style(Style::Bold)
             .emit();
         std::process::exit(1)
-    });
+    }).into();
 
     let mut files = Vec::new();
     let input: PathBuf = input.into();
-    if input.is_file() {
+    let package = if input.is_file() {
         files.push(input.clone());
+        if output.ends_with(".java") {
+            output.parent().unwrap().file_name().unwrap()
+        } else {
+            output.file_name().unwrap()
+        }
     } else {
         for i in input.read_dir().unwrap() {
             let i = i.unwrap();
@@ -41,7 +46,8 @@ fn main() {
                 files.push(i.path());
             }
         }
-    }
+        output.file_name().unwrap()
+    }.to_str().unwrap();
 
     let mut nfiles = 0;
     let mut mods = Vec::new();
@@ -142,18 +148,17 @@ fn main() {
             }
         };
 
-        let out_path: &std::path::Path = output.as_ref();
-        if out_path.ends_with(".java") {
-            out_path
+        if output.ends_with(".java") {
+            output
                 .parent()
                 .map(|p| std::fs::create_dir_all(p).unwrap());
-        } else if !out_path.exists() {
-            std::fs::create_dir_all(out_path).unwrap();
+        } else if !output.exists() {
+            std::fs::create_dir_all(&output).unwrap();
         }
 
-        let out_path = if !out_path.is_dir() {
+        let out_path = if !output.is_dir() {
             if nfiles == 1 {
-                out_path.into()
+                output.clone()
             } else {
                 Doc::start("error")
                     .style(Style::BoldRed)
@@ -164,7 +169,7 @@ fn main() {
                 std::process::exit(1)
             }
         } else {
-            out_path.join(format!(
+            output.join(format!(
                 "{}.java",
                 input_path.file_stem().unwrap().to_str().unwrap()
             ))
@@ -179,7 +184,7 @@ fn main() {
         elabed.push((v, out_path))
     }
     let mut ir_mods = Vec::new();
-    let mut cxt = backend::Cxt::new(&mut bindings);
+    let mut cxt = backend::Cxt::new(&mut bindings, package);
     for (v, _) in &elabed {
         crate::backend::declare_p1(v, &mut cxt);
     }
