@@ -127,6 +127,10 @@ impl Bindings {
         })
     }
 
+    pub fn get_raw(&self, s: &str) -> Option<RawSym> {
+        self.strings.get(s).copied()
+    }
+
     /// Creates a new symbol with the same name as `s`, but a fresh value
     pub fn fresh(&mut self, s: Sym) -> Sym {
         let raw = self.syms[s.0.get() as usize - 1].clone();
