@@ -2668,7 +2668,7 @@ impl<'a> Cxt<'a> {
                 }
                 JStmt::Set(l, _, x) => {
                     if let Some(v) = l.root_var() {
-                        if !v.1 && counter.count.get(&v).map_or(true, |x| *x == 0) {
+                        if !v.1 && counter.count.get(&v).map_or(true, |x| *x == 0) && counter.defined.contains(&v) {
                             let mut effects = SideEffects(false);
                             x.map(&mut effects);
                             if !effects.0 {
@@ -3223,7 +3223,7 @@ impl JStmt {
                     i.prop(env);
                 }
             }
-            JStmt::RangeFor(_, _, v, a, b, block, unroll) => {
+            JStmt::RangeFor(_, raw, v, a, b, block, unroll) => {
                 let a = a.prop(env);
                 let b = b.prop(env);
                 env.locals.insert(*v);
@@ -3237,6 +3237,12 @@ impl JStmt {
 
                             // TODO WHY IS THIS GENNING WRONG
                             let mut stmts = Vec::new();
+                            stmts.push(JStmt::Let(
+                                *raw,
+                                JTy::I32,
+                                *v,
+                                None,
+                            ));
                             for i in a..b {
                                 stmts.push(JStmt::Set(
                                     JLVal::Var(*v),
