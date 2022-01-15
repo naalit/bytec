@@ -2668,7 +2668,10 @@ impl<'a> Cxt<'a> {
                 }
                 JStmt::Set(l, _, x) => {
                     if let Some(v) = l.root_var() {
-                        if !v.1 && counter.count.get(&v).map_or(true, |x| *x == 0) && counter.defined.contains(&v) {
+                        if !v.1
+                            && counter.count.get(&v).map_or(true, |x| *x == 0)
+                            && counter.defined.contains(&v)
+                        {
                             let mut effects = SideEffects(false);
                             x.map(&mut effects);
                             if !effects.0 {
@@ -3084,6 +3087,17 @@ impl JLVal {
             JLVal::Var(v) => {
                 env.not_modified.remove(v);
                 env.env.remove(v);
+                let mut to_remove = Vec::new();
+                for (k, v) in &env.env {
+                    if let CVal::Term(v) = v {
+                        if !v.is_valid(env) {
+                            to_remove.push(*k);
+                        }
+                    }
+                }
+                for k in to_remove {
+                    env.env.remove(&k);
+                }
                 if let Some(val) = val {
                     env.env.insert(*v, val);
                 }
@@ -3237,12 +3251,7 @@ impl JStmt {
 
                             // TODO WHY IS THIS GENNING WRONG
                             let mut stmts = Vec::new();
-                            stmts.push(JStmt::Let(
-                                *raw,
-                                JTy::I32,
-                                *v,
-                                None,
-                            ));
+                            stmts.push(JStmt::Let(*raw, JTy::I32, *v, None));
                             for i in a..b {
                                 stmts.push(JStmt::Set(
                                     JLVal::Var(*v),
