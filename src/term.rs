@@ -227,15 +227,15 @@ pub enum ArrayMethod {
 pub enum LValue {
     // v = x
     Var(Sym),
-    // arr[i] = x
-    Idx(Sym, Box<Term>),
+    // arr[i] = x (is_static)
+    Idx(Sym, Box<Term>, bool),
     // a.b = x
     Member(Box<Term>, Sym),
 }
 
 pub enum ForIter {
-    // for i in 0..10 (note: only i32)
-    Range(Box<Term>, Box<Term>),
+    // for i in [unroll] 0..10 (note: only i32)
+    Range(Box<Term>, Box<Term>, bool),
     // for i: t in arr
     Array(Box<Term>),
     SArray(Box<Term>, Type),
@@ -256,7 +256,8 @@ pub enum Term {
     TupleIdx(Box<Term>, usize),
     // (array, inner type (needed for empty arrays in backend), is dynamic)
     Array(Vec<Term>, Type, bool),
-    ArrayIdx(Box<Term>, Box<Term>),
+    // (arr, idx, static, inner_ty, inline)
+    ArrayIdx(Box<Term>, Box<Term>, bool, Type, bool),
     ArrayMethod(Box<Term>, ArrayMethod),
     Member(Box<Term>, Sym),
     Constructor(TypeId, Vec<Term>),
@@ -301,6 +302,7 @@ pub struct Fn {
     pub args: Vec<(Sym, Type)>,
     pub body: Term,
     pub throws: Vec<RawSym>,
+    pub inline: bool,
 }
 pub struct ExternFn {
     pub id: FnId,
@@ -380,8 +382,8 @@ pub enum Pre {
     TupleIdx(SPre, usize),
     // [a, b, c]
     Array(Vec<SPre>),
-    // x[i]
-    ArrayIdx(SPre, SPre),
+    // x[(inline) i]
+    ArrayIdx(SPre, SPre, bool),
     // x.m
     Member(SPre, Spanned<RawSym>),
     // v op= x
@@ -407,6 +409,7 @@ pub struct PreFn {
     pub args: Vec<(Spanned<RawSym>, PreType, bool)>,
     pub body: SPre,
     pub throws: Vec<RawSym>,
+    pub inline: bool,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreEFn {
@@ -444,8 +447,15 @@ pub enum PreStatement {
     Item(PreItem),
     Term(SPre),
     While(SPre, Vec<PreStatement>),
-    // for pub a in b..c
-    For(Spanned<RawSym>, bool, SPre, Option<SPre>, Vec<PreStatement>),
+    // for pub a in [unroll] b..c
+    For(
+        Spanned<RawSym>,
+        bool,
+        bool,
+        SPre,
+        Option<SPre>,
+        Vec<PreStatement>,
+    ),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -534,9 +544,13 @@ impl Term {
             Term::Array(v, t, d) => {
                 Term::Array(v.iter().map(|x| x.cloned_(cln)).collect(), t.clone(), *d)
             }
-            Term::ArrayIdx(arr, i) => {
-                Term::ArrayIdx(Box::new(arr.cloned_(cln)), Box::new(i.cloned_(cln)))
-            }
+            Term::ArrayIdx(arr, i, sta, t, inl) => Term::ArrayIdx(
+                Box::new(arr.cloned_(cln)),
+                Box::new(i.cloned_(cln)),
+                *sta,
+                t.clone(),
+                *inl,
+            ),
             Term::ArrayMethod(arr, m) => {
                 Term::ArrayMethod(Box::new(arr.cloned_(cln)), m.cloned_(cln))
             }
@@ -609,7 +623,7 @@ impl LValue {
     fn cloned_(&self, cln: &mut Cloner) -> LValue {
         match self {
             LValue::Var(x) => LValue::Var(*x),
-            LValue::Idx(a, b) => LValue::Idx(*a, Box::new(b.cloned_(cln))),
+            LValue::Idx(a, b, s) => LValue::Idx(*a, Box::new(b.cloned_(cln)), *s),
             LValue::Member(a, b) => LValue::Member(Box::new(a.cloned_(cln)), *b),
         }
     }
@@ -617,8 +631,8 @@ impl LValue {
 impl ForIter {
     fn cloned_(&self, cln: &mut Cloner) -> ForIter {
         match self {
-            ForIter::Range(a, b) => {
-                ForIter::Range(Box::new(a.cloned_(cln)), Box::new(b.cloned_(cln)))
+            ForIter::Range(a, b, u) => {
+                ForIter::Range(Box::new(a.cloned_(cln)), Box::new(b.cloned_(cln)), *u)
             }
             ForIter::Array(a) => ForIter::Array(Box::new(a.cloned_(cln))),
             ForIter::SArray(a, t) => ForIter::SArray(Box::new(a.cloned_(cln)), t.clone()),
@@ -688,7 +702,9 @@ impl Term {
                 ))
                 .add(']')
                 .add(if *b { "&" } else { "" }),
-            Term::ArrayIdx(arr, i) => arr.pretty(cxt).add('[').chain(i.pretty(cxt)).add(']'),
+            Term::ArrayIdx(arr, i, _, _, _) => {
+                arr.pretty(cxt).add('[').chain(i.pretty(cxt)).add(']')
+            }
             Term::ArrayMethod(arr, m) => arr.pretty(cxt).add('.').chain(match m {
                 ArrayMethod::Len => Doc::start("len()"),
                 ArrayMethod::Pop => Doc::start("pop()"),
@@ -989,7 +1005,7 @@ impl LValue {
     pub fn pretty(&self, cxt: &Bindings) -> Doc {
         match self {
             LValue::Var(x) => Doc::start(cxt.resolve_local(*x)),
-            LValue::Idx(arr, i) => Doc::start(cxt.resolve_local(*arr))
+            LValue::Idx(arr, i, _) => Doc::start(cxt.resolve_local(*arr))
                 .add('[')
                 .chain(i.pretty(cxt))
                 .add(']'),
@@ -1000,7 +1016,7 @@ impl LValue {
 impl ForIter {
     pub fn pretty(&self, cxt: &Bindings) -> Doc {
         match self {
-            ForIter::Range(a, b) => a
+            ForIter::Range(a, b, u) => a
                 .pretty(cxt)
                 .nest(Prec::Atom)
                 .add("..")

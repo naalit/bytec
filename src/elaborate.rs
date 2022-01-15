@@ -848,6 +848,7 @@ impl<'b> Cxt<'b> {
             body,
             public,
             throws,
+            inline,
         } = f;
 
         self.push(Some(rty.clone()));
@@ -866,6 +867,7 @@ impl<'b> Cxt<'b> {
             public: *public,
             body,
             throws: throws.clone(),
+            inline: *inline,
         })
     }
 
@@ -1065,9 +1067,7 @@ impl<'b> Cxt<'b> {
     fn check_stmt(&mut self, stmt: &PreStatement) -> Result<Option<Statement>, TypeError> {
         match stmt {
             PreStatement::Item(
-                item
-                @
-                (PreItem::Fn(_)
+                item @ (PreItem::Fn(_)
                 | PreItem::ExternFn(_)
                 | PreItem::Class { .. }
                 | PreItem::Use(_, _)),
@@ -1105,13 +1105,13 @@ impl<'b> Cxt<'b> {
 
                 Ok(Some(Statement::While(cond, block2)))
             }
-            PreStatement::For(s, public, pa, b, block) => {
+            PreStatement::For(s, public, unroll, pa, b, block) => {
                 let (iter, t) = match b {
                     // Range
                     Some(b) => {
                         let a = self.check(pa, Type::I32)?;
                         let b = self.check(b, Type::I32)?;
-                        (ForIter::Range(Box::new(a), Box::new(b)), Type::I32)
+                        (ForIter::Range(Box::new(a), Box::new(b), *unroll), Type::I32)
                     }
                     // Array
                     None => {
@@ -1249,14 +1249,18 @@ impl<'b> Cxt<'b> {
                     Type::SArray(Box::new(ty), v.len()),
                 ))
             }
-            Pre::ArrayIdx(parr, idx) => {
+            Pre::ArrayIdx(parr, idx, inline) => {
                 let (arr, aty) = self.infer(parr)?;
-                let ty = match aty {
-                    Type::Array(t) => *t,
+                let (ty, sta) = match aty {
+                    Type::Array(t) => (*t, false),
+                    Type::SArray(t, _) => (*t, true),
                     t => return Err(TypeError::NotArray(parr.span, t)),
                 };
                 let idx = self.check(idx, Type::I32)?;
-                Ok((Term::ArrayIdx(Box::new(arr), Box::new(idx)), ty))
+                Ok((
+                    Term::ArrayIdx(Box::new(arr), Box::new(idx), sta, ty.clone(), *inline),
+                    ty,
+                ))
             }
             Pre::Member(px, m) => {
                 let (x, t) = self.infer(px)?;
@@ -1276,8 +1280,8 @@ impl<'b> Cxt<'b> {
                 let (l, t) = self.infer(pl)?;
                 let l = match l {
                     Term::Var(s) => LValue::Var(s),
-                    Term::ArrayIdx(b, i) if matches!(&*b, Term::Var(_)) => match *b {
-                        Term::Var(s) => LValue::Idx(s, i),
+                    Term::ArrayIdx(b, i, sta, _, _) if matches!(&*b, Term::Var(_)) => match *b {
+                        Term::Var(s) => LValue::Idx(s, i, sta),
                         _ => unreachable!(),
                     },
                     Term::Member(a, b) => LValue::Member(a, b),
@@ -1361,6 +1365,15 @@ impl<'b> Cxt<'b> {
                         }
                         Ok((Term::Call(Some(Box::new(o)), fid, a2), rty))
                     }
+                    Type::SArray(_, l) => match self.bindings.resolve_raw(**f) {
+                        "len" => {
+                            if a.len() != 0 {
+                                return Err(TypeError::WrongArity(pre.span, a.len(), 0));
+                            }
+                            Ok((Term::Lit(Literal::Int(l as i64), Type::I32), Type::I32))
+                        }
+                        _ => return Err(TypeError::NotFound(lpath(*f))),
+                    },
                     Type::Array(t) => match self.bindings.resolve_raw(**f) {
                         "len" => {
                             if a.len() != 0 {

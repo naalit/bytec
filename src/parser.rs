@@ -74,6 +74,10 @@ pub enum Tok {
     Define,
     // #ifdef
     IfDef,
+    // unroll
+    Unroll,
+    // inline
+    Inline,
 
     // +
     Add,
@@ -205,6 +209,8 @@ impl<'a> Lexer<'a> {
             "self" => Tok::Selph,
             "define" => Tok::Define,
             "ifdef" => Tok::IfDef,
+            "unroll" => Tok::Unroll,
+            "inline" => Tok::Inline,
             _ => Tok::Name(self.bindings.raw(name)),
         };
 
@@ -543,12 +549,6 @@ impl<'a> Parser<'a> {
                 .ok_or(self.err("expected identifier after ifdef"))?;
             self.in_ifdef = false;
             let defined = self.defs.contains_key(&*ident);
-            eprintln!(
-                "IFDEF '{}': {}, wanted? {}",
-                self.lexer.bindings.resolve_raw(*ident),
-                defined,
-                wanted
-            );
             if defined == wanted {
                 Ok(IfDef::Yes)
             } else {
@@ -575,17 +575,11 @@ impl<'a> Parser<'a> {
                 let val = self.next().ok_or(self.err("expected token after '='"))?;
                 self.expect(Tok::Semicolon, "';'")?;
                 if self.is_real {
-                    eprintln!(
-                        "Defining '{}' to {:?}",
-                        self.lexer.bindings.resolve_raw(*name),
-                        *val
-                    );
                     self.defs.insert(*name, Some(val.inner.clone()));
                 }
             } else {
                 self.expect(Tok::Semicolon, "'=' or ';'")?;
                 if self.is_real {
-                    eprintln!("Defining '{}'", self.lexer.bindings.resolve_raw(*name));
                     self.defs.insert(*name, None);
                 }
             }
@@ -840,10 +834,16 @@ impl<'a> Parser<'a> {
                 }
                 Some(Tok::OpenBracket) => {
                     self.next();
+                    let inline = if self.peek().as_deref() == Some(&Tok::Inline) {
+                        self.next();
+                        true
+                    } else {
+                        false
+                    };
                     let idx = self.term()?.ok_or(self.err("expected expression"))?;
                     self.expect(Tok::CloseBracket, "closing ']'")?;
                     let span = Span(t.span.0, self.lexer.pos);
-                    t = Box::new(Spanned::new(Pre::ArrayIdx(t, idx), span));
+                    t = Box::new(Spanned::new(Pre::ArrayIdx(t, idx, inline), span));
                 }
                 _ => break,
             }
@@ -931,6 +931,15 @@ impl<'a> Parser<'a> {
                 self.next();
                 let x = self.term()?;
                 Ok(Some(Box::new(Spanned::new(Pre::Return(x), self.span()))))
+            }
+            Some(Tok::Sub) => {
+                let zero = Box::new(Spanned::new(Pre::Lit(Literal::Int(0), None), self.span()));
+                self.next();
+                let x = self.atom()?.ok_or(self.err("expected expression"))?;
+                Ok(Some(Box::new(Spanned::new(
+                    Pre::BinOp(BinOp::Sub, zero, x),
+                    self.span(),
+                ))))
             }
             Some(Tok::If) => {
                 let start = self.lexer.pos;
@@ -1479,6 +1488,7 @@ impl<'a> Parser<'a> {
                             public: false,
                             body,
                             throws,
+                            inline: false,
                         };
                         if ifdef.resolve(self) {
                             methods.push(PreFnEither::Local(f));
@@ -1587,6 +1597,12 @@ impl<'a> Parser<'a> {
                     },
                     _ => unreachable!(),
                 };
+                let inline = if self.peek().as_deref() == Some(&Tok::Inline) {
+                    self.next();
+                    true
+                } else {
+                    false
+                };
                 let (name, args, ret_type) = self.prototype()?;
 
                 if ext {
@@ -1633,6 +1649,7 @@ impl<'a> Parser<'a> {
                         body,
                         public,
                         throws,
+                        inline,
                     })))
                 }
             }
@@ -1713,6 +1730,13 @@ impl<'a> Parser<'a> {
 
                 self.expect(Tok::In, "'in'")?;
 
+                let unroll = if self.peek().as_deref() == Some(&Tok::Unroll) {
+                    self.next();
+                    true
+                } else {
+                    false
+                };
+
                 let a = self.term()?.ok_or(self.err("expected expression"))?;
                 let b = if self.peek().as_deref() == Some(&Tok::DotDot) {
                     self.next();
@@ -1736,7 +1760,7 @@ impl<'a> Parser<'a> {
                     block.push(stmt);
                 }
 
-                Ok(Some(PreStatement::For(var, public, a, b, block)))
+                Ok(Some(PreStatement::For(var, public, unroll, a, b, block)))
             }
             _ => Ok(self.term()?.map(PreStatement::Term)),
         };
