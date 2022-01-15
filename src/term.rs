@@ -258,6 +258,8 @@ pub enum Term {
     Array(Vec<Term>, Type, bool),
     // (arr, idx, static, inner_ty, inline)
     ArrayIdx(Box<Term>, Box<Term>, bool, Type, bool),
+    // (len, ty)
+    ArrayNew(Box<Term>, Type),
     ArrayMethod(Box<Term>, ArrayMethod),
     Member(Box<Term>, Sym),
     Constructor(TypeId, Vec<Term>),
@@ -384,6 +386,8 @@ pub enum Pre {
     Array(Vec<SPre>),
     // x[(inline) i]
     ArrayIdx(SPre, SPre, bool),
+    // [; 84]
+    ArrayNew(SPre),
     // x.m
     Member(SPre, Spanned<RawSym>),
     // v op= x
@@ -551,6 +555,7 @@ impl Term {
                 t.clone(),
                 *inl,
             ),
+            Term::ArrayNew(x, t) => Term::ArrayNew(Box::new(x.cloned_(cln)), t.clone()),
             Term::ArrayMethod(arr, m) => {
                 Term::ArrayMethod(Box::new(arr.cloned_(cln)), m.cloned_(cln))
             }
@@ -705,6 +710,7 @@ impl Term {
             Term::ArrayIdx(arr, i, _, _, _) => {
                 arr.pretty(cxt).add('[').chain(i.pretty(cxt)).add(']')
             }
+            Term::ArrayNew(x, _) => Doc::start("[; ").chain(x.pretty(cxt)).add("]"),
             Term::ArrayMethod(arr, m) => arr.pretty(cxt).add('.').chain(match m {
                 ArrayMethod::Len => Doc::start("len()"),
                 ArrayMethod::Pop => Doc::start("pop()"),

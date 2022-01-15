@@ -1262,6 +1262,7 @@ impl<'b> Cxt<'b> {
                     ty,
                 ))
             }
+            Pre::ArrayNew(_) => Err(TypeError::TypeNeeded(pre.span)),
             Pre::Member(px, m) => {
                 let (x, t) = self.infer(px)?;
                 match t {
@@ -1581,6 +1582,10 @@ impl<'b> Cxt<'b> {
                     v2.push(self.check(i, (**t).clone())?);
                 }
                 Ok(Term::Array(v2, (**t).clone(), true))
+            }
+            (Pre::ArrayNew(l), Type::Array(t)) => {
+                let l = self.check(l, Type::I32)?;
+                Ok(Term::ArrayNew(Box::new(l), (**t).clone()))
             }
 
             // These technically return the never type `!`, but that's too complicated for bytec

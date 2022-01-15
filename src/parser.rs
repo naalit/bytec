@@ -1095,6 +1095,16 @@ impl<'a> Parser<'a> {
                 let start = self.lexer.pos;
                 self.next();
 
+                if self.peek().as_deref() == Some(&Tok::Semicolon) {
+                    self.next();
+                    let len = self.term()?.ok_or(self.err("expected expression"))?;
+                    self.expect(Tok::CloseBracket, "closing ']'")?;
+                    return Ok(Some(Box::new(Spanned::new(
+                        Pre::ArrayNew(len),
+                        Span(start, self.lexer.pos),
+                    ))));
+                }
+
                 let mut v = Vec::new();
                 loop {
                     if self.peek().as_deref() == Some(&Tok::CloseBracket) {

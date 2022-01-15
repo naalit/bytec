@@ -582,6 +582,9 @@ impl JTerm {
             JTerm::Prop(obj, prop, _) => {
                 format!("{}.{}", obj.gen(cxt), prop.gen(cxt))
             }
+            JTerm::BinOp(BinOp::Sub, a, b) if **a == JTerm::Lit(JLit::Int(0)) => {
+                format!("(-{})", b.gen(cxt))
+            }
             JTerm::BinOp(op @ (BinOp::Eq | BinOp::Neq), a, b)
                 if !a.ty().primitive()
                     && !matches!(&**a, JTerm::Null(_))
@@ -1557,6 +1560,23 @@ impl Term {
             }
             Term::Array(v, _t, false) => {
                 return JTerms::Tuple(v.iter().flat_map(|x| x.lower(cxt)).collect())
+            }
+            Term::ArrayNew(len, t) => {
+                let mut len = len.lower(cxt).one();
+                if !len.simple() {
+                    // Don't recompute len every time, store it in a local
+                    let raw = cxt.bindings.raw("$_len");
+                    let var = cxt.fresh_var(false);
+                    cxt.block.push(JStmt::Let(raw, JTy::I32, var, Some(len)));
+                    len = JTerm::Var(var, JTy::I32);
+                }
+                return JTerms::Tuple(
+                    t.lower(cxt)
+                        .into_iter()
+                        .map(|ty| JTerm::ArrayNew(Box::new(len.clone()), JTy::Array(Box::new(ty))))
+                        .chain(std::iter::once(len.clone()))
+                        .collect(),
+                );
             }
             Term::ArrayIdx(arr, idx, false, _, _) => {
                 let arrs = arr.lower(cxt);
@@ -2924,6 +2944,7 @@ impl<'a> Env<'a> {
     }
 
     fn union(&mut self, other: &Env) {
+        self.next = other.next;
         let keys: Vec<_> = self.env.keys().cloned().collect();
         for k in keys {
             let a = self.env[&k].clone();
@@ -3338,11 +3359,12 @@ impl BinOp {
                 BinOp::Neq => a != b,
                 _ => return None,
             })),
-            (a, b) => {
-                let a = a.to_term_partial()?;
-                let b = b.to_term_partial()?;
-                Some(CVal::Term(JTerm::BinOp(self, Box::new(a), Box::new(b))))
-            }
+            // (a, b) => {
+            //     let a = a.to_term_partial()?;
+            //     let b = b.to_term_partial()?;
+            //     Some(CVal::Term(JTerm::BinOp(self, Box::new(a), Box::new(b))))
+            // }
+            _ => None,
         }
     }
 }
@@ -3466,7 +3488,7 @@ impl JTerm {
             Some(x) => Some(x),
             // TODO what constant makes sense here? A store and load takes 2
             None => {
-                if self.ops() <= 2 && self.start_valid(env) {
+                if self.ops() < 2 && self.start_valid(env) {
                     Some(CVal::Term(self.clone()))
                 } else {
                     None
