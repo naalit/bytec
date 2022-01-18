@@ -78,6 +78,7 @@ fn main() {
     let mut nfiles = 0;
     let mut mods = Vec::new();
     let mut p1 = Vec::new();
+    let mut had_err = false;
     for input in files {
         let mut file = File::open(&input).unwrap_or_else(|_| {
             Doc::start("error")
@@ -117,8 +118,14 @@ fn main() {
                 mods.push((file_id.1, t.clone()));
                 p1.push((v, t, items, file_id, input));
             }
-            Err(x) => x.emit(term::Severity::Error, file_id),
+            Err(x) => {
+                had_err = true;
+                x.emit(term::Severity::Error, file_id)
+            }
         }
+    }
+    if had_err {
+        std::process::exit(1)
     }
     let mut p2 = Vec::new();
     let mut mods2 = Vec::new();
@@ -127,12 +134,16 @@ fn main() {
             match crate::elaborate::declare_mod_p2(&v, t, &mods, items, &mut bindings, file_id) {
                 Ok(x) => x,
                 Err(x) => {
+                    had_err = true;
                     x.emit(term::Severity::Error, file_id);
                     continue;
                 }
             };
         mods2.push((file_id.1, t.clone()));
         p2.push((v, t, items, file_id, input_path));
+    }
+    if had_err {
+        std::process::exit(1)
     }
     let mut p3 = Vec::new();
     let mut mods3 = Vec::new();
@@ -141,12 +152,16 @@ fn main() {
             match crate::elaborate::declare_mod_p3(&v, t, &mods2, items, &mut bindings, file_id) {
                 Ok(x) => x,
                 Err(x) => {
+                    had_err = true;
                     x.emit(term::Severity::Error, file_id);
                     continue;
                 }
             };
         mods3.push((file_id.1, t.clone()));
         p3.push((v, t, items, file_id, input_path));
+    }
+    if had_err {
+        std::process::exit(1)
     }
     let mut p4 = Vec::new();
     let mut mods4 = Vec::new();
@@ -155,6 +170,7 @@ fn main() {
             match crate::elaborate::declare_mod_p4(&v, t, &mods3, items, &mut bindings, file_id) {
                 Ok(x) => x,
                 Err(x) => {
+                    had_err = true;
                     x.emit(term::Severity::Error, file_id);
                     continue;
                 }
@@ -162,11 +178,15 @@ fn main() {
         mods4.push((file_id.1, t.clone()));
         p4.push((v, t, items, file_id, input_path));
     }
+    if had_err {
+        std::process::exit(1)
+    }
     let mut elabed = Vec::new();
     for (v, t, items, file_id, input_path) in p4 {
         let v = match crate::elaborate::elab_mod(&v, t, &mods4, items, &mut bindings, file_id) {
             Ok(v) => v,
             Err(x) => {
+                had_err = true;
                 x.emit(term::Severity::Error, file_id);
                 continue;
             }
@@ -204,6 +224,9 @@ fn main() {
         );
 
         elabed.push((v, out_path))
+    }
+    if had_err {
+        std::process::exit(1)
     }
     let mut ir_mods = Vec::new();
     let mut cxt = backend::Cxt::new(&mut bindings, package);

@@ -798,12 +798,22 @@ impl<'a> Parser<'a> {
     }
 
     fn method(&mut self) -> Result<Option<SPre>, Error> {
-        let not = if self.peek().as_deref() == Some(&Tok::Not) {
-            let start = self.lexer.pos;
-            self.next();
-            Some(start)
-        } else {
-            None
+        let not = match self.peek().as_deref() {
+            Some(Tok::Not) => {
+                let start = self.lexer.pos;
+                self.next();
+                Some(start)
+            }
+            Some(Tok::Sub) => {
+                let zero = Box::new(Spanned::new(Pre::Lit(Literal::Int(0), None), self.span()));
+                self.next();
+                let x = self.method()?.ok_or(self.err("expected expression"))?;
+                return Ok(Some(Box::new(Spanned::new(
+                    Pre::BinOp(BinOp::Sub, zero, x),
+                    self.span(),
+                ))));
+            }
+            _ => None,
         };
 
         let mut t = match self.atom()? {
@@ -931,15 +941,6 @@ impl<'a> Parser<'a> {
                 self.next();
                 let x = self.term()?;
                 Ok(Some(Box::new(Spanned::new(Pre::Return(x), self.span()))))
-            }
-            Some(Tok::Sub) => {
-                let zero = Box::new(Spanned::new(Pre::Lit(Literal::Int(0), None), self.span()));
-                self.next();
-                let x = self.atom()?.ok_or(self.err("expected expression"))?;
-                Ok(Some(Box::new(Spanned::new(
-                    Pre::BinOp(BinOp::Sub, zero, x),
-                    self.span(),
-                ))))
             }
             Some(Tok::If) => {
                 let start = self.lexer.pos;

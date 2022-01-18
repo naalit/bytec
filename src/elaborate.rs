@@ -1099,9 +1099,11 @@ impl<'b> Cxt<'b> {
             PreStatement::While(cond, block) => {
                 let cond = self.check(cond, Type::Bool)?;
                 let mut block2 = Vec::new();
+                self.push(None);
                 for i in block {
                     self.check_stmt(i)?.map(|x| block2.push(x));
                 }
+                self.pop();
 
                 Ok(Some(Statement::While(cond, block2)))
             }
@@ -1123,11 +1125,13 @@ impl<'b> Cxt<'b> {
                         }
                     }
                 };
+                self.push(None);
                 let n = self.create(*s, t, *public);
                 let mut block2 = Vec::new();
                 for i in block {
                     self.check_stmt(i)?.map(|x| block2.push(x));
                 }
+                self.pop();
                 Ok(Some(Statement::For(n, iter, block2)))
             }
         }

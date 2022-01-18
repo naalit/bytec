@@ -2088,6 +2088,8 @@ impl Statement {
                         cxt.vars.push((*s, JVars::Tuple(vars.clone())));
 
                         // Generate an unrolled loop in the current block
+                        let k = cxt.fresh_block();
+                        cxt.push_loop(k);
                         let mut vals = arr.to_vec();
                         while !vals.is_empty() {
                             for &v in &vars {
@@ -2100,6 +2102,8 @@ impl Statement {
                                 i.lower(cxt);
                             }
                         }
+                        let mut block = cxt.pop_block();
+                        cxt.block.append(&mut block);
                     }
                     ForIter::Array(arr) => {
                         let arr = arr.lower(cxt);
@@ -3249,7 +3253,6 @@ impl JStmt {
                                 s.map(&mut counter);
                             }
 
-                            // TODO WHY IS THIS GENNING WRONG
                             let mut stmts = Vec::new();
                             stmts.push(JStmt::Let(*raw, JTy::I32, *v, None));
                             for i in a..b {
