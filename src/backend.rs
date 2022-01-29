@@ -113,6 +113,10 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
                     let ret = f.ret_ty.lower(&cxt);
                     cxt.fn_ret_tys.insert(item, ret);
                     mappings.push((item.0, cxt.bindings.fn_name(f.id), !f.public));
+
+                    if f.inline {
+                        cxt.inline_fns.insert(item, (f.args.clone(), f.body.cloned(cxt.bindings)));
+                    }
                 }
                 for (s, t, _) in members {
                     let t = t.lower(&cxt);
@@ -155,6 +159,10 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
                         let ret = f.ret_ty.lower(&cxt);
                         cxt.fn_ret_tys.insert(item, ret);
                         mappings.push((item.0, cxt.bindings.fn_name(f.id), !f.public));
+
+                        if f.inline {
+                            cxt.inline_fns.insert(item, (f.args.clone(), f.body.cloned(cxt.bindings)));
+                        }
                     }
                 }
 
@@ -1346,6 +1354,64 @@ impl JTerm {
     }
 }
 
+impl LValue {
+    fn lower(&self, cxt: &mut Cxt, nvals: usize) -> MaybeList<JLVal> {
+        match self {
+            LValue::Var(v) => {
+                let v = cxt.var(*v).unwrap();
+                v.map(JLVal::Var)
+            }
+            LValue::Idx(v, idx, false) => {
+                let v = v.lower(cxt, nvals);
+                let mut idx = idx.lower(cxt).one();
+                if !idx.simple() {
+                    // Don't recompute idx every time, store it in a local
+                    let raw = cxt.bindings.raw("$_idx");
+                    let var = cxt.fresh_var(false);
+                    cxt.block.push(JStmt::Let(raw, JTy::I32, var, Some(idx)));
+                    idx = JTerm::Var(var, JTy::I32);
+                }
+                v.map(|x| JLVal::Idx(Box::new(x), idx.clone()))
+            }
+            LValue::Idx(v, idx, true) => {
+                let v = v.lower(cxt, nvals);
+                let mut idx = idx.lower(cxt).one();
+                if !idx.simple() {
+                    // Don't recompute idx every time, store it in a local
+                    let raw = cxt.bindings.raw("$_idx");
+                    let var = cxt.fresh_var(false);
+                    cxt.block.push(JStmt::Let(raw, JTy::I32, var, Some(idx)));
+                    idx = JTerm::Var(var, JTy::I32);
+                }
+                let mut vs = vec![Vec::new(); nvals];
+                for is in v.to_vec().chunks(nvals) {
+                    for (i, x) in is.iter().enumerate() {
+                        vs[i].push(x.clone());
+                    }
+                }
+                let mut r = Vec::new();
+                for v in vs {
+                    r.push(JLVal::SIdx(v, idx.clone()));
+                }
+                MaybeList::Tuple(r)
+            }
+            LValue::Member(v, m) => {
+                let mut x = v.lower(cxt).one();
+                if !x.simple() {
+                    let raw = cxt.bindings.raw("$_class");
+                    let var = cxt.fresh_var(false);
+                    let ty = x.ty();
+                    cxt.block.push(JStmt::Let(raw, ty.clone(), var, Some(x)));
+                    x = JTerm::Var(var, ty.clone());
+                }
+
+                let prop = cxt.var(*m).unwrap();
+                prop.map(|m| JLVal::Prop(x.clone(), Prop::Var(m)))
+            }
+        }
+    }
+}
+
 impl Term {
     fn lower(&self, cxt: &mut Cxt) -> JTerms {
         JTerms::One(match self {
@@ -1461,70 +1527,14 @@ impl Term {
                 }
                 JTerm::ClassNew(t, a)
             }
-            Term::Set(l, op, x) => match l {
-                LValue::Var(v) => {
-                    let v = cxt.var(*v).unwrap();
-                    let x = x.lower(cxt);
-                    for (v, x) in v.into_iter().zip(x) {
-                        cxt.block.push(JStmt::Set(JLVal::Var(v), *op, x));
-                    }
-                    return JTerms::empty();
+            Term::Set(l, op, x) => {
+                let x = x.lower(cxt);
+                let v = l.lower(cxt, x.len());
+                for (v, x) in v.into_iter().zip(x) {
+                    cxt.block.push(JStmt::Set(v, *op, x));
                 }
-                LValue::Idx(v, idx, false) => {
-                    let v = cxt.var(*v).unwrap();
-                    let mut idx = idx.lower(cxt).one();
-                    if !idx.simple() {
-                        // Don't recompute idx every time, store it in a local
-                        let raw = cxt.bindings.raw("$_idx");
-                        let var = cxt.fresh_var(false);
-                        cxt.block.push(JStmt::Let(raw, JTy::I32, var, Some(idx)));
-                        idx = JTerm::Var(var, JTy::I32);
-                    }
-                    let x = x.lower(cxt);
-                    for (v, x) in v.into_iter().zip(x) {
-                        cxt.block.push(JStmt::Set(
-                            JLVal::Idx(Box::new(JLVal::Var(v)), idx.clone()),
-                            *op,
-                            x,
-                        ));
-                    }
-                    return JTerms::empty();
-                }
-                LValue::Idx(v, idx, true) => {
-                    let v = cxt.var(*v).unwrap();
-                    let mut idx = idx.lower(cxt).one();
-                    if !idx.simple() {
-                        // Don't recompute idx every time, store it in a local
-                        let raw = cxt.bindings.raw("$_idx");
-                        let var = cxt.fresh_var(false);
-                        cxt.block.push(JStmt::Let(raw, JTy::I32, var, Some(idx)));
-                        idx = JTerm::Var(var, JTy::I32);
-                    }
-                    let x = x.lower(cxt);
-                    let mut vs = vec![Vec::new(); x.len()];
-                    for is in v.to_vec().chunks(x.len()) {
-                        for (i, x) in is.iter().enumerate() {
-                            vs[i].push(JLVal::Var(*x));
-                        }
-                    }
-                    for (v, x) in vs.into_iter().zip(x) {
-                        cxt.block
-                            .push(JStmt::Set(JLVal::SIdx(v, idx.clone()), *op, x));
-                    }
-                    return JTerms::empty();
-                }
-                LValue::Member(v, m) => {
-                    let v = v.lower(cxt).one();
-                    let x = x.lower(cxt).one();
-                    // TODO multivalue members (will have to cache x)
-                    cxt.block.push(JStmt::Set(
-                        JLVal::Prop(v, Prop::Var(cxt.var(*m).unwrap().one())),
-                        *op,
-                        x,
-                    ));
-                    return JTerms::empty();
-                }
-            },
+                return JTerms::empty();
+            }
             Term::Array(v, t, true) if v.is_empty() => {
                 let t = t.lower(cxt);
                 return JTerms::Tuple(
@@ -2272,7 +2282,7 @@ impl Item {
                         }
                     })
                     .collect();
-                let methods = methods.iter().map(|x| x.lower(cxt)).collect();
+                let methods = methods.iter().filter(|x| !x.inline).map(|x| x.lower(cxt)).collect();
 
                 cxt.items.push(JItem::Class(class, members, methods));
             }
@@ -3377,12 +3387,12 @@ impl BinOp {
                 BinOp::Neq => a != b,
                 _ => return None,
             })),
-            // (a, b) => {
-            //     let a = a.to_term_partial()?;
-            //     let b = b.to_term_partial()?;
-            //     Some(CVal::Term(JTerm::BinOp(self, Box::new(a), Box::new(b))))
-            // }
-            _ => None,
+            (a, b) => {
+                let a = a.to_term_partial()?;
+                let b = b.to_term_partial()?;
+                Some(CVal::Term(JTerm::BinOp(self, Box::new(a), Box::new(b))))
+            }
+            // _ => None,
         }
     }
 }
@@ -3411,6 +3421,7 @@ impl JTerm {
                     i.prop(env);
                 }
                 env.clobber_globals();
+                // TODO check for side effects
                 None
             }
             JTerm::Prop(x, p, _) => match x.prop(env) {

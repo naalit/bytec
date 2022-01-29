@@ -451,7 +451,7 @@ enum TypeError {
     NotArray(Span, Type),
     NoMembers(Span, Type),
     TupleOutOfBounds(Span, Type, usize),
-    NotLValue(Span, Term),
+    NotLValue(Span),
     TypeNeeded(Span),
     SelfOutsideClass(Span),
 }
@@ -520,9 +520,8 @@ impl TypeError {
                     .chain(t.pretty(bindings)),
                 span,
             ),
-            TypeError::NotLValue(span, v) => Spanned::new(
-                Doc::start("Can only assign to variables and array indices, not ")
-                    .chain(v.pretty(bindings)),
+            TypeError::NotLValue(span) => Spanned::new(
+                Doc::start("Can only assign to variables and array indices"),
                 span,
             ),
             TypeError::TypeNeeded(span) => Spanned::new(
@@ -1283,15 +1282,7 @@ impl<'b> Cxt<'b> {
             }
             Pre::Set(pl, op, x) => {
                 let (l, t) = self.infer(pl)?;
-                let l = match l {
-                    Term::Var(s) => LValue::Var(s),
-                    Term::ArrayIdx(b, i, sta, _, _) if matches!(&*b, Term::Var(_)) => match *b {
-                        Term::Var(s) => LValue::Idx(s, i, sta),
-                        _ => unreachable!(),
-                    },
-                    Term::Member(a, b) => LValue::Member(a, b),
-                    l => return Err(TypeError::NotLValue(pl.span, l)),
-                };
+                let l = l.to_lval().ok_or(TypeError::NotLValue(pl.span))?;
                 let x = self.check(x, t)?;
 
                 Ok((Term::Set(l, *op, Box::new(x)), Type::Unit))

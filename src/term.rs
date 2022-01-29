@@ -228,7 +228,7 @@ pub enum LValue {
     // v = x
     Var(Sym),
     // arr[i] = x (is_static)
-    Idx(Sym, Box<Term>, bool),
+    Idx(Box<LValue>, Box<Term>, bool),
     // a.b = x
     Member(Box<Term>, Sym),
 }
@@ -324,6 +324,20 @@ pub enum Type {
     Tuple(Vec<Type>),
     Array(Box<Type>),
     SArray(Box<Type>, usize),
+}
+
+impl Term {
+    pub fn to_lval(self) -> Option<LValue> {
+        match self {
+            Term::Var(s) => Some(LValue::Var(s)),
+            Term::ArrayIdx(b, i, sta, _, _) => {
+                let b = b.to_lval()?;
+                Some(LValue::Idx(Box::new(b), i, sta))
+            }
+            Term::Member(a, b) => Some(LValue::Member(a, b)),
+            _ => None,
+        }
+    }
 }
 
 // Presyntax
@@ -628,7 +642,7 @@ impl LValue {
     fn cloned_(&self, cln: &mut Cloner) -> LValue {
         match self {
             LValue::Var(x) => LValue::Var(*x),
-            LValue::Idx(a, b, s) => LValue::Idx(*a, Box::new(b.cloned_(cln)), *s),
+            LValue::Idx(a, b, s) => LValue::Idx(Box::new(a.cloned_(cln)), Box::new(b.cloned_(cln)), *s),
             LValue::Member(a, b) => LValue::Member(Box::new(a.cloned_(cln)), *b),
         }
     }
@@ -1011,7 +1025,7 @@ impl LValue {
     pub fn pretty(&self, cxt: &Bindings) -> Doc {
         match self {
             LValue::Var(x) => Doc::start(cxt.resolve_local(*x)),
-            LValue::Idx(arr, i, _) => Doc::start(cxt.resolve_local(*arr))
+            LValue::Idx(arr, i, _) => arr.pretty(cxt)
                 .add('[')
                 .chain(i.pretty(cxt))
                 .add(']'),

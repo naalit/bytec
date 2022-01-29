@@ -1444,6 +1444,14 @@ impl<'a> Parser<'a> {
                 }
                 Some(Tok::Fn) => {
                     self.next();
+
+                    let inline = if self.peek().as_deref() == Some(&Tok::Inline) {
+                        self.next();
+                        true
+                    } else {
+                        false
+                    };
+
                     let (name, args, ret_ty) = self.prototype()?;
                     if ext {
                         let mapping = if *self.peek().ok_or(self.err("expected ';'"))?
@@ -1499,7 +1507,7 @@ impl<'a> Parser<'a> {
                             public: false,
                             body,
                             throws,
-                            inline: false,
+                            inline,
                         };
                         if ifdef.resolve(self) {
                             methods.push(PreFnEither::Local(f));
