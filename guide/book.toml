@@ -1,0 +1,6 @@
+[book]
+authors = ["tolziplohu"]
+language = "en"
+multilingual = false
+src = "src"
+title = "ByteC Guide"
