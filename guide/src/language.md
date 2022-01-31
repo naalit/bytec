@@ -18,7 +18,7 @@ fn triple2(x: i32): i32 = x * 3;
 `if-else` and `match` (the equivalent to Java `switch`) are expressions, and can return a value from each branch:
 
 ```rust
-fn do_stuff(cond: bool, ty: RobotType) {
+fn do_stuff(cond: bool, ty: RobotType): i32 {
     let a = if cond {
         // this is just a normal block, we can put statements here too
         let tmp = 12 + 3;
@@ -66,7 +66,7 @@ for i in 0..10 {
 }
 // A loop over a static array - this is guaranteed to be unrolled:
 let sArr: [i32; 3] = [1, 2, 3];
-for i in sta {
+for i in sArr {
     a += i;
 }
 // A loop over a dynamic array - this is never unrolled:
