@@ -1,0 +1,462 @@
+<!DOCTYPE HTML>
+<html lang="en" class="sidebar-visible no-js light">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ByteC Guide</title>
+        <meta name="robots" content="noindex" />
+
+
+        <!-- Custom HTML head -->
+        
+        <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff" />
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body>
+        <!-- Provide site root to javascript -->
+        <script type="text/javascript">
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script type="text/javascript">
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script type="text/javascript">
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('no-js')
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add('js');
+        </script>
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script type="text/javascript">
+            var html = document.querySelector('html');
+            var sidebar = 'hidden';
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            }
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="usage.html"><strong aria-hidden="true">2.</strong> Usage and Project Structure</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="api.html"><strong aria-hidden="true">2.1.</strong> Interacting with the Battlecode API</a></li></ol></li><li class="chapter-item expanded "><a href="language.html"><strong aria-hidden="true">3.</strong> Language Tour</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky bordered">
+                    <div class="left-buttons">
+                        <button id="sidebar-toggle" class="icon-button" type="button" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </button>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light (default)</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">ByteC Guide</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script type="text/javascript">
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="introduction"><a class="header" href="#introduction">Introduction</a></h1>
+<p>ByteC or <code>bytec</code> is a compiler from a tiny Rust-like language to bytecode-optimized Java, intended for use in Battlecode.</p>
+<p>The language (also called &quot;bytec&quot; for lack of a better name) has a few features Java doesn't, like zero-overhead dynamic arrays, unrolled statically-sized arrays, and tuples, and it's fully interoperable with Java so it can be used for the performance-critical parts of a Java bot. The language itself is somewhere in between Rust and Java.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="usage-and-project-structure"><a class="header" href="#usage-and-project-structure">Usage and Project Structure</a></h1>
+<p>ByteC can be installed by cloning this repository and then running <code>cargo install --path .</code>; make sure you have cargo's output directory on your <code>PATH</code> (this is <code>~/.cargo/bin</code> on Linux). After that, you can use the <code>bytec</code> command to run the compiler.</p>
+<p>The project structure for a ByteC-based Battlecode bot should look something like this:</p>
+<ul>
+<li><code>battlecode22</code> - the Git repository for this year's bots, a clone of <code>battlecode22-scaffold</code>
+<ul>
+<li><code>bytec</code> - this is the directory that all ByteC source files go in; it would be called <code>src</code>, but that must be the output directory because it's hardcoded into the Battlecode engine.
+<ul>
+<li><code>common</code> - modules in here will be shared between all bots.
+<ul>
+<li><code>Common.bt</code></li>
+<li><code>Paths.bt</code></li>
+</ul>
+</li>
+<li><code>bot_one</code>
+<ul>
+<li><code>RobotPlayer.bt</code></li>
+<li><code>Soldier.bt</code></li>
+</ul>
+</li>
+<li><code>bot_two</code>
+<ul>
+<li><code>RobotPlayer.bt</code></li>
+<li><code>Miner.bt</code></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><code>src</code> - output Java files must go in this directory to be seen by the Battlecode client. This is probably in <code>.gitignore</code> so you don't commit these files every time.
+<ul>
+<li>...</li>
+</ul>
+</li>
+<li>...</li>
+</ul>
+</li>
+</ul>
+<p>Then, the CLI syntax for <code>bytec</code> looks like <code>bytec source-path1 source-path2... dest-path</code>, so here it would be:</p>
+<pre><code>bytec bytec/common bytec/bot_one src/bot_one
+</code></pre>
+<p>This is intended to make it easy to test against alternate versions of your bot - simply compile to a certain output package (the names don't need to match, <code>bytec</code> will insert the necessary <code>package</code> declarations), make a change, and then compile it again to a different output package and run them against each other. A simplified form of C <code>define</code>s can also help with this, and you can pass those as <code>-DSOME_FLAG</code> or <code>-DSOME_CONST=12</code> on the command line.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="interacting-with-the-battlecode-api"><a class="header" href="#interacting-with-the-battlecode-api">Interacting with the Battlecode API</a></h1>
+<p>You'll need to use the Battlecode API to do anything useful, and unfortunately this is a little bit harder than in Java, because ByteC isn't smart enough to find and read the API by itself. You'll probably have a file called something like <code>Common.bt</code> or <code>API.bt</code> shared by all your bots, which has a bunch of <code>extern</code> declarations for the entire Battlecode API - an example is at the end of this page. My API bindings were 300 lines of code in 2022, and automatically generating this from the Javadoc isn't too hard; I may write a dedicated script to do this and include it with ByteC at some point.</p>
+<p>You'll also need the RobotPlayer class, but this is actually easier than in Java, since every ByteC file (&quot;module&quot;) turns into a Java class with static members. Just make sure you have a file called <code>RobotPlayer.bt</code>, with something like this:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>extern {
+    import battlecode.common.*;
+}
+
+use Common::*;
+
+let rc: RobotController;
+
+// This turns into a static function in Java.
+// Don't forget the `pub`, it's necessary for Java code to access this function!
+fn pub run(rc2: RobotController) {
+    rc = rc2;
+    loop {
+        extern &quot;try {&quot;;
+
+        match rc.getType() {
+            ARCHON =&gt; Archon::turn(),
+            MINER =&gt; Miner::turn(),
+            SOLDIER =&gt; Soldier::turn(),
+            BUILDER =&gt; Builder::turn(),
+            WATCHTOWER =&gt; Watchtower::turn(),
+            SAGE =&gt; Sage::turn(),
+            LABORATORY =&gt; Laboratory::turn(),
+        }
+
+        extern &quot;} catch (Exception e) { e.printStackTrace(); }&quot;;
+
+        clockYield();
+    }
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>Some of the API binding code that corresponds to this example would look like this:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>extern {
+    import battlecode.common.*;
+}
+
+extern fn clockYield() = &quot;Clock.yield&quot;;
+extern fn bytecodeNum(): i32 = &quot;Clock.getBytecodeNum&quot;;
+extern fn bytecodeLeft(): i32 = &quot;Clock.getBytecodesLeft&quot;;
+
+extern enum RobotType {
+    ARCHON,
+    BUILDER,
+    LABORATORY,
+    MINER,
+    SAGE,
+    SOLDIER,
+    WATCHTOWER;
+
+    let actionCooldown: i32;
+    let actionRadiusSquared: i32;
+    let buildCostGold: i32;
+    let buildCostLead: i32;
+    let bytecodeLimit: i32;
+    let damage: i32;
+    let health: i32;
+    let movementCooldown: i32;
+    let visionRadiusSquared: i32;
+
+    fn canAttack(): bool;
+    fn canMine(): bool;
+    fn canBuild(t: RobotType): bool;
+    fn canRepair(t: RobotType): bool;
+    fn canMutate(t: RobotType): bool;
+    fn isBuilding(): bool;
+
+    // etc.
+}
+extern class MapLocation {
+    constructor(x: i32, y: i32);
+    let x: i32;
+    let y: i32;
+
+    fn add(dir: Direction): MapLocation;
+    fn subtract(dir: Direction): MapLocation;
+    fn directionTo(loc: MapLocation): Direction;
+    fn distanceSquaredTo(loc: MapLocation): i32;
+    fn isWithinDistanceSquared(loc: MapLocation, distanceSquared: i32): bool;
+    fn translate(dx: i32, dy: i32): MapLocation;
+    fn isAdjacentTo(loc: MapLocation): bool;    
+}
+extern class RobotController {
+    // Returns the location adjacent to current location in the given direction.
+    fn adjacentLocation(dir: Direction): MapLocation;
+
+    // Attack a given location.
+    fn attack(loc: MapLocation);
+
+    // Builds a robot of the given type in the given direction.
+    fn buildRobot(type: RobotType, dir: Direction);
+
+    // Note that ByteC doesn't support overloading, so these functions need to have different names but map to the same Java function.
+
+    // Returns all robots within vision radius.
+    fn senseNearbyRobots(): [RobotInfo];
+    // Returns all robots that can be sensed within a certain distance of this robot.
+    fn senseNearbyRobotsR(radiusSquared: i32): [RobotInfo] = &quot;senseNearbyRobots&quot;;
+    // Returns all robots of a given team that can be sensed within a certain distance of this robot.
+    fn senseNearbyRobotsT(radiusSquared: i32, team: Team): [RobotInfo] = &quot;senseNearbyRobots&quot;;
+    // Returns all robots of a given team that can be sensed within a certain radius of a specified location.
+    fn senseNearbyRobotsAt(center: MapLocation, radiusSquared: i32, team: Team): [RobotInfo] = &quot;senseNearbyRobots&quot;;
+
+    // etc.
+}
+<span class="boring">}
+</span></code></pre></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="language-tour"><a class="header" href="#language-tour">Language Tour</a></h1>
+<p>ByteC is syntactically similar to Rust: functions are declared with <code>fn</code> and variables with <code>let</code> and type inference.</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn triple(x: i32): i32 {
+    let y = x + x;
+    x + y // the last statement in a block is returned automatically
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>Functions can be written in a single-expression style as well:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn triple2(x: i32): i32 = x * 3;
+<span class="boring">}
+</span></code></pre></pre>
+<p><code>if-else</code> and <code>match</code> (the equivalent to Java <code>switch</code>) are expressions, and can return a value from each branch:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn do_stuff(cond: bool, ty: RobotType) {
+    let a = if cond {
+        // this is just a normal block, we can put statements here too
+        let tmp = 12 + 3;
+        tmp + 4
+    } else {
+        22
+    };
+    let b = match ty {
+        ARCHON =&gt; 27,
+        MINER =&gt; 2 + {
+            // a block can be used in expression position
+            // this variable is unrelated to the last one, blocks create their own scopes
+            let tmp = 9 + 8;
+            tmp * 2
+        },
+        // this is the `default` case
+        // it's not necessary if we handle all possible variants
+        else =&gt; 0,
+    };
+    a * b
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>Loops are not expressions, and there are about three types:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// The simplest kind of loop, loops infinitely until a `break`
+let a = 0;
+loop {
+    a += 1;
+    if a &gt; 12 {
+        break;
+    }
+}
+
+// A while loop, this is just like other procedural languages
+while a &lt; 24 {
+    a += 1;
+}
+
+// There are actually three kinds of four loop:
+// A range for loop - this can be unrolled by adding the `unroll` keyword before the start of the range:
+for i in 0..10 {
+    a += i;
+}
+// A loop over a static array - this is guaranteed to be unrolled:
+let sArr: [i32; 3] = [1, 2, 3];
+for i in sta {
+    a += i;
+}
+// A loop over a dynamic array - this is never unrolled:
+let dArr: [i32] = [1, 2, 3];
+for i in dArr {
+    a += i;
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>The two types of arrays, static and dynamic, are a concept that doesn't exist in Java so they deserve some explanation.
+A static array has a constant length known at compile time, and it becomes a bunch of separate variables in Java.
+Any loop over a static array is unrolled, and indexing the array must either use an index that the compiler can figure out is constant, or use the <code>inline</code> keyword to be turned into a <code>switch</code>.</p>
+<p>A dynamic array, on the other hand, doesn't have a length known at compile time. In fact, the length of the array can change at any moment.
+It's similar to a Java <code>ArrayList</code>, but all the logic is inlined, so any operations that normal Java arrays support (indexing, index assignment, looping over the array) are exactly as fast, and <code>push</code> and <code>pop</code> are pretty fast as well and don't involve method calls. Java arrays returned by <code>extern</code> functions are automatically converted to ByteC dynamic arrays. Here's an example of the operations supported by dynamic arrays:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// This initializes an array of five zeros
+let x: [i32] = [; 5];
+
+// The length of the array can be accessed with .len(); there is currently no way to access the capacity.
+// This is also supported by static arrays
+println(&quot;length: &quot; + x.len());
+
+// Note that there isn't actually bounds checking in array indexes for performance
+// So if ByteC has allocated 8 elements but the length of the array is only 5, accessing x[6] has an undefined result
+// (in practice it will return 0 or the last element to occupy that slot, or throw an exception if the space isn't allocated)
+x[0] = 2;
+let y = x[4];
+
+// adds 12 to the end of the array, reallocating if there isn't enough space
+x.push(12);
+
+// pops the last element off the end of the array, leaving the space to be used by future push() calls
+let twelve = x.pop();
+
+// clears all elements from the array, setting the length to 0 and leaving the capacity allocated
+// note that this only costs 2 bytecode, no matter the array capacity!
+x.clear();
+<span class="boring">}
+</span></code></pre></pre>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+
+
+
+        <script type="text/javascript">
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js" type="text/javascript" charset="utf-8"></script>
+        <script src="mark.min.js" type="text/javascript" charset="utf-8"></script>
+        <script src="searcher.js" type="text/javascript" charset="utf-8"></script>
+
+        <script src="clipboard.min.js" type="text/javascript" charset="utf-8"></script>
+        <script src="highlight.js" type="text/javascript" charset="utf-8"></script>
+        <script src="book.js" type="text/javascript" charset="utf-8"></script>
+
+        <!-- Custom JS scripts -->
+
+        <script type="text/javascript">
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+    </body>
+</html>
