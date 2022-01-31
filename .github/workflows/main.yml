@@ -5,11 +5,13 @@ on:
     branches: [master]
     paths:
       - "guide/**"
+      - ".github/workflows/main.yml"
 
   pull_request:
     branches: [master]
     paths:
       - "guide/**"
+      - ".github/workflows/main.yml"
 
 jobs:
   build-deploy:
