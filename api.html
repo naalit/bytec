@@ -75,7 +75,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="usage.html"><strong aria-hidden="true">2.</strong> Usage and Project Structure</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="api.html" class="active"><strong aria-hidden="true">2.1.</strong> Interacting with the Battlecode API</a></li></ol></li><li class="chapter-item expanded "><a href="language.html"><strong aria-hidden="true">3.</strong> Language Tour</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="usage.html"><strong aria-hidden="true">2.</strong> Usage and Project Structure</a></li><li class="chapter-item expanded "><a href="language.html"><strong aria-hidden="true">3.</strong> Language Tour</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="arrays.html"><strong aria-hidden="true">3.1.</strong> Arrays</a></li><li class="chapter-item expanded "><a href="classes.html"><strong aria-hidden="true">3.2.</strong> Classes and Enums</a></li><li class="chapter-item expanded "><a href="modules.html"><strong aria-hidden="true">3.3.</strong> Modules</a></li><li class="chapter-item expanded "><a href="define.html"><strong aria-hidden="true">3.4.</strong> Define</a></li></ol></li><li class="chapter-item expanded "><a href="optimization.html"><strong aria-hidden="true">4.</strong> Optimization Features</a></li><li class="chapter-item expanded "><a href="api.html" class="active"><strong aria-hidden="true">5.</strong> Interacting with the Battlecode API</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -135,7 +135,73 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="interacting-with-the-battlecode-api"><a class="header" href="#interacting-with-the-battlecode-api">Interacting with the Battlecode API</a></h1>
+<h2 id="overview-of-java-interop-in-general"><a class="header" href="#overview-of-java-interop-in-general">Overview of Java interop in general</a></h2>
+<p>Java interop is done with the <code>extern</code> keyword, which can be used in many contexts with roughly the same meaning of &quot;the thing following this is a Java thing&quot;.
+The simplest way is <code>extern</code> blocks, which can be at the top level (e.g. for imports) or in blocks, and can be multiline with braces or single line with quotes:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>extern {
+    import battlecode.common.*;
+}
+
+fn doStuff() {
+    extern &quot;System.out.print(\&quot;Hello, \&quot;);&quot;;
+    extern {
+        System.out.println(&quot;world!&quot;);
+    }
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>You can mark almost any ByteC name as <code>pub</code> to make it visible from Java, as long as it has a type that exists in Java:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn pub makeGreeting(x: str): str = &quot;Hello, &quot; + x;
+fn greet(pub name: str) {
+    extern {
+        String greeting = makeGreeting(name);
+        System.out.println(greeting);
+    }
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>However, actually writing inline Java code is very rarely necessary. Usually, you'll define the Java API to interact with and then interact with it.
+This uses <code>extern</code> classes, enums, and functions, which are generally written just like their non-<code>extern</code> variants, but without function bodies. There's also the <code>constructor</code> keyword for class constructor prototypes, although only one can be used for a given class. The names of extern functions can be changed by adding an <code>= &quot;&lt;name&gt;&quot;</code>, which is especially important for static methods and overloading (neither of which is natively supported by ByteC).</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>extern class MapLocation {
+    constructor(x: i32, y: i32);
+    let x: i32;
+    let y: i32;
+
+    fn add(dir: Direction): MapLocation;
+    fn distanceSquaredTo(loc: MapLocation): i32;
+}
+
+extern enum RobotType {
+    ARCHON,
+    BUILDER,
+    LABORATORY,
+    MINER,
+    SAGE,
+    SOLDIER,
+    WATCHTOWER;
+
+    let damage: i32;
+    let health: i32;
+
+    fn canAttack(): bool;
+    fn canMine(): bool;
+}
+
+extern fn bytecodeNum(): i32 = &quot;Clock.getBytecodeNum&quot;;
+<span class="boring">}
+</span></code></pre></pre>
+<h2 id="interacting-with-the-battlecode-api-1"><a class="header" href="#interacting-with-the-battlecode-api-1">Interacting with the Battlecode API</a></h2>
 <p>You'll need to use the Battlecode API to do anything useful, and unfortunately this is a little bit harder than in Java, because ByteC isn't smart enough to find and read the API by itself. You'll probably have a file called something like <code>Common.bt</code> or <code>API.bt</code> shared by all your bots, which has a bunch of <code>extern</code> declarations for the entire Battlecode API - an example is at the end of this page. My API bindings were 300 lines of code in 2022, and automatically generating this from the Javadoc isn't too hard; I may write a dedicated script to do this and include it with ByteC at some point.</p>
+<p>Also, most functions will probably require <code>throws GameActionException</code>. The <code>throws</code> clause is actually entirely ignored by ByteC and just passed on to the Java code, but the Java compiler will complain if you leave these out (that does mean you don't need them for inline functions, though).</p>
 <p>You'll also need the RobotPlayer class, but this is actually easier than in Java, since every ByteC file (&quot;module&quot;) turns into a Java class with static members. Just make sure you have a file called <code>RobotPlayer.bt</code>, with something like this:</p>
 <pre><pre class="playground"><code class="language-rust">
 <span class="boring">#![allow(unused)]
@@ -255,11 +321,8 @@ extern class RobotController {
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="usage.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="optimization.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
-                            </a>
-                            <a rel="next" href="language.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <i class="fa fa-angle-right"></i>
                             </a>
                         <div style="clear: both"></div>
                     </nav>
@@ -267,11 +330,8 @@ extern class RobotController {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="usage.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="optimization.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
-                    </a>
-                    <a rel="next" href="language.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <i class="fa fa-angle-right"></i>
                     </a>
             </nav>
 

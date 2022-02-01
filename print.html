@@ -76,7 +76,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="usage.html"><strong aria-hidden="true">2.</strong> Usage and Project Structure</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="api.html"><strong aria-hidden="true">2.1.</strong> Interacting with the Battlecode API</a></li></ol></li><li class="chapter-item expanded "><a href="language.html"><strong aria-hidden="true">3.</strong> Language Tour</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="usage.html"><strong aria-hidden="true">2.</strong> Usage and Project Structure</a></li><li class="chapter-item expanded "><a href="language.html"><strong aria-hidden="true">3.</strong> Language Tour</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="arrays.html"><strong aria-hidden="true">3.1.</strong> Arrays</a></li><li class="chapter-item expanded "><a href="classes.html"><strong aria-hidden="true">3.2.</strong> Classes and Enums</a></li><li class="chapter-item expanded "><a href="modules.html"><strong aria-hidden="true">3.3.</strong> Modules</a></li><li class="chapter-item expanded "><a href="define.html"><strong aria-hidden="true">3.4.</strong> Define</a></li></ol></li><li class="chapter-item expanded "><a href="optimization.html"><strong aria-hidden="true">4.</strong> Optimization Features</a></li><li class="chapter-item expanded "><a href="api.html"><strong aria-hidden="true">5.</strong> Interacting with the Battlecode API</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -179,8 +179,399 @@
 <pre><code>bytec bytec/common bytec/bot_one src/bot_one
 </code></pre>
 <p>This is intended to make it easy to test against alternate versions of your bot - simply compile to a certain output package (the names don't need to match, <code>bytec</code> will insert the necessary <code>package</code> declarations), make a change, and then compile it again to a different output package and run them against each other. A simplified form of C <code>define</code>s can also help with this, and you can pass those as <code>-DSOME_FLAG</code> or <code>-DSOME_CONST=12</code> on the command line.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="language-tour"><a class="header" href="#language-tour">Language Tour</a></h1>
+<p>ByteC is syntactically similar to Rust: functions are declared with <code>fn</code> and variables with <code>let</code> and type inference.</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn triple(x: i32): i32 {
+    let y = x + x;
+    x + y // the last statement in a block is returned automatically
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>Functions and variables declared on the top-level of a module (a source file) turn into <code>static</code> members in Java.
+Functions can be written in a single-expression style as well:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn triple2(x: i32): i32 = x * 3;
+<span class="boring">}
+</span></code></pre></pre>
+<p>ByteC has a few &quot;primitive&quot; types, which should be familiar from Rust:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let a: i32 = 12;
+let b: i64 = 1300000000;
+let c: str = &quot;Hello, world!&quot;;
+let d: bool = false;
+let e: () = {}; // The unit type, used for `void` functions
+<span class="boring">}
+</span></code></pre></pre>
+<p>As well as tuples, which don't yet support destructuring but do support member access with dot syntax. These are of course lowered to separate variables.</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let tup: (i32, i64) = (a, b);
+a += tup.0;
+b += tup.1;
+<span class="boring">}
+</span></code></pre></pre>
+<p>The <code>==</code> and <code>!=</code> operators are automatically translated to <code>.equals()</code> when comparing objects, and when neither side is <code>null</code>;
+so you can just compare everything with <code>==</code> and it should never cause problems unless you specifically need reference equality for some reason.
+Other operators are the same as Java, except that bitwise operators all have the same precedence and you should really just be using parentheses for those anyway.</p>
+<p>All variables are mutable, and can be reassigned and modified in the normal way:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let a = 3;
+a += 2;
+a = 4;
+<span class="boring">}
+</span></code></pre></pre>
+<p><code>if-else</code> and <code>match</code> (the equivalent to Java <code>switch</code>) are expressions, and can return a value from each branch.
+They don't require parentheses, but do require braces around the body:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn do_stuff(cond: bool, ty: RobotType): i32 {
+    let a = if cond {
+        // this is just a normal block, we can put statements here too
+        let tmp = 12 + 3;
+        tmp + 4
+    } else {
+        22
+    };
+    let b = match ty {
+        ARCHON =&gt; 27,
+        MINER =&gt; 2 + {
+            // a block can be used in expression position
+            // this variable is unrelated to the last one, blocks create their own scopes
+            let tmp = 9 + 8;
+            tmp * 2
+        },
+        // this is the `default` case
+        // it's not necessary if we handle all possible variants
+        else =&gt; 0,
+    };
+    a * b
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>Loops are not expressions, and there are about three types:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// The simplest kind of loop, loops infinitely until a `break`
+let a = 0;
+loop {
+    a += 1;
+    if a &gt; 12 {
+        break;
+    }
+}
+
+// A while loop, this is just like other procedural languages
+while a &lt; 24 {
+    a += 1;
+}
+
+// There are actually three kinds of four loop:
+// A range for loop - this can be unrolled by adding the `unroll` keyword before the start of the range:
+for i in 0..10 {
+    a += i;
+}
+// A loop over a static array - this is guaranteed to be unrolled:
+let sArr: [i32; 3] = [1, 2, 3];
+for i in sArr {
+    a += i;
+}
+// A loop over a dynamic array - this is never unrolled:
+let dArr: [i32] = [1, 2, 3];
+for i in dArr {
+    a += i;
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>ByteC does have <code>null</code>, which is a possible value of classes, enums, and strings (but not either kind of array).
+There are currently no optional types or any type safety regarding <code>null</code>.
+<code>null</code> is usually inferred as the correct type, but in some cases the compiler can't figure this out and a construction like this is needed:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn getMapLocation(): MapLocation {
+    let n: MapLocation = null;
+    n
+}
+<span class="boring">}
+</span></code></pre></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="arrays"><a class="header" href="#arrays">Arrays</a></h1>
+<p>The two types of arrays, static and dynamic, are a concept that doesn't exist in Java so they deserve some explanation.
+A static array has a constant length known at compile time, and it becomes a bunch of separate variables in Java.
+Any loop over a static array is unrolled, and indexing the array must either use an index that the compiler can figure out is constant, or use the <code>inline</code> keyword to be turned into a <code>switch</code>.</p>
+<p>A dynamic array, on the other hand, doesn't have a length known at compile time. In fact, the length of the array can change at any moment.
+It's similar to a Java <code>ArrayList</code>, but all the logic is inlined, so any operations that normal Java arrays support (indexing, index assignment, looping over the array) are exactly as fast, and <code>push</code> and <code>pop</code> are pretty fast as well and don't involve method calls. Java arrays returned by <code>extern</code> functions are automatically converted to ByteC dynamic arrays. Here's an example of the operations supported by dynamic arrays:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// This initializes an array of five zeros
+let x: [i32] = [; 5];
+
+// The length of the array can be accessed with .len(); there is currently no way to access the capacity.
+// This is also supported by static arrays
+println(&quot;length: &quot; + x.len());
+
+// Note that there isn't actually bounds checking in array indexes for performance
+// So if ByteC has allocated 8 elements but the length of the array is only 5, accessing x[6] has an undefined result
+// (in practice it will return 0 or the last element to occupy that slot, or throw an exception if the space isn't allocated)
+x[0] = 2;
+let y = x[4];
+
+// adds 12 to the end of the array, reallocating if there isn't enough space
+x.push(12);
+
+// pops the last element off the end of the array, leaving the space to be used by future push() calls
+let twelve = x.pop();
+
+// clears all elements from the array, setting the length to 0 and leaving the capacity allocated
+// note that this only costs 2 bytecode, no matter the array capacity!
+x.clear();
+<span class="boring">}
+</span></code></pre></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="classes-and-enums"><a class="header" href="#classes-and-enums">Classes and Enums</a></h1>
+<p>Classes in bytec (which aren't <code>extern</code>) are pretty simple. They can have fields and methods, but custom constructors aren't yet supported.</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>class LocInfo {
+    let loc: MapLocation;
+    let rubble: i32;
+    // Fields can have an initial value, but must have an explicit type
+    let score: i32 = 0;
+
+    fn set(loc: MapLocation) throws GameActionException {
+        self.loc = loc;
+        self.rubble = rc.senseRubble(loc);
+    }
+}
+let x = LocInfo();
+x.set(rc.getLocation());
+<span class="boring">}
+</span></code></pre></pre>
+<p>Enums are a little further from Java enums, and closer to Rust ones. Each variant can have members, which essentially form a tuple:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>enum Action {
+    Attack(RobotInfo),
+    Envision(AnomalyType),
+    Move(Direction),
+    Disintegrate;
+
+    fn isGood(): bool {
+        match self {
+            Disintegrate =&gt; false,
+            Envision(a) =&gt; a != AnomalyType::FURY || !isFriendlyArchonInRange(),
+            _ =&gt; true,
+        }
+    }
+}
+let toTake = Action::Move(Direction::NORTH);
+if toTake.isGood() {
+    rc.move(Direction::NORTH);
+}
+<span class="boring">}
+</span></code></pre></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="modules"><a class="header" href="#modules">Modules</a></h1>
+<p>Using multiple source files (&quot;modules&quot;) is generally a good idea. In ByteC, the directory that files are in doesn't matter, only the file name.
+Circular dependencies are allowed (at least, <em>almost</em> all the time).
+Items from other files can be accessed with <code>use</code> or with <code>::</code>, the same as Rust:</p>
+<pre><pre class="playground"><code class="language-rust">// One.bt
+let one = 1;
+fn main() = Two::doStuff();
+</code></pre></pre>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Two.bt
+use One::one; // One::* would also work
+extern fn println(x: str) = &quot;System.out.println&quot;;
+fn doStuff() {
+    println(&quot;two: &quot; + (one + one));
+}
+<span class="boring">}
+</span></code></pre></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="define"><a class="header" href="#define">Define</a></h1>
+<p>This is a somewhat hacky system for constants and conditional compilation; it might be replaced at some point.
+Currently, it's similar to a simplified version of the C preprocessor.</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>define SOME_FLAG;
+// the &quot;value&quot; of a define is allowed to be any one token, but 90% of the time it's a literal
+define SOME_CONST = 12;
+
+// ifdef can be used to qualify declarations
+ifdef SOME_FLAG
+fn someFunction() {}
+
+fn otherFunction() {
+    // or to qualify statements, usually blocks
+    ifdef SOME_FLAG {
+        println(&quot;SOME_CONST = &quot; + SOME_CONST);
+    }
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>You can also pass defines on the command line if they're not defined in the source code. For this example, it would be <code>-DSOME_FLAG -DSOME_CONST=12</code>.
+This can be useful for testing different magic numbers and features in a systematic way.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="optimization-features"><a class="header" href="#optimization-features">Optimization Features</a></h1>
+<p>The primary purpose of ByteC is to enable high-level, maintanable programming that preserves maximum bytecode efficiency.
+To that end, it has a few features designed specifically for this.</p>
+<h2 id="unrolled-loops"><a class="header" href="#unrolled-loops">Unrolled loops</a></h2>
+<p>Statically sized arrays were briefly mentioned in the language tour, but it's worth explaining them in more detail here.
+An array that looks like this:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let arr: [i32; 3] = [1, 2, 3];
+arr[1] += 1;
+for i in arr {
+    println(&quot;i = &quot; + i);
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>Will generate Java code like this:</p>
+<pre><code class="language-java">static int arr$0 = 1;
+static int arr$1 = 2;
+static int arr$2 = 3;
+
+arr$1 += 1;
+
+System.out.println(&quot;i = &quot; + arr$0);
+System.out.println(&quot;i = &quot; + arr$1);
+System.out.println(&quot;i = &quot; + arr$2);
+</code></pre>
+<p>You can also unroll range for loops with the <code>unroll</code> keyword:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>for i in unroll 0..3 {
+    arr[i] += i;
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>Note that you can index static arrays with any expression that the compiler can figure out at compile time. For example, this reduces to a bunch of one-line assignments to local variables, and the indices and if statements are all resolved at compile time:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let cache: [i32; 81];
+
+for x in unroll -4..5 {
+    for y in unroll -4..5 {
+        if x*x + y*y &lt;= 20 {
+            let i = (x + 4) * 9 + y + 4;
+            cache[i] = rc.senseRubble(MapLocation(at.x + x, at.y + y));
+        }
+    }
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>By default, indexing static arrays by non-constant expressions is an error (although the message isn't very helpful yet in this case).
+If you really want to generate a <code>switch</code> over all possible indices, you can do that with the <code>inline</code> keyword:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let tx = target.x - at.x;
+let ty = target.y - at.y;
+if tx*tx + ty*ty &lt;= 20 {
+    let i = (tx + 4) * 9 + ty + 4;
+    return cache[inline i];
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>Note that these <code>inline</code> index expressions are currently not supported on the left-hand-side of an assignment, i.e. <code>cache[inline i] = 12;</code> doesn't work.</p>
+<h2 id="inline-functions"><a class="header" href="#inline-functions">Inline functions</a></h2>
+<p>You can mark functions <code>inline</code> to make the compiler inline them:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn inline manhattanDistance(a: MapLocation, b: MapLocation): i32 {
+    abs(a.x - b.x) + abs(a.y - b.y)
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>If the arguments are constant, they will be propagated throughout the function body, so you can e.g. access static arrays with indices that depend on the function arguments as long as the function is only ever called with constant arguments (e.g. in unrolled loops is fine).</p>
+<p><strong>Warning!</strong> <code>return</code> has strange behavior in inline functions. Specifically, the type checker treats it as if it's returning from the inline function, but it will actually return from the enclosing function. Usually getting this wrong results in a type error either in ByteC or the Java compiler, but it's important to keep in mind especially with <code>()</code>-returning functions. Please don't rely on this behavior, as it will hopefully be fixed in the future.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="interacting-with-the-battlecode-api"><a class="header" href="#interacting-with-the-battlecode-api">Interacting with the Battlecode API</a></h1>
+<h2 id="overview-of-java-interop-in-general"><a class="header" href="#overview-of-java-interop-in-general">Overview of Java interop in general</a></h2>
+<p>Java interop is done with the <code>extern</code> keyword, which can be used in many contexts with roughly the same meaning of &quot;the thing following this is a Java thing&quot;.
+The simplest way is <code>extern</code> blocks, which can be at the top level (e.g. for imports) or in blocks, and can be multiline with braces or single line with quotes:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>extern {
+    import battlecode.common.*;
+}
+
+fn doStuff() {
+    extern &quot;System.out.print(\&quot;Hello, \&quot;);&quot;;
+    extern {
+        System.out.println(&quot;world!&quot;);
+    }
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>You can mark almost any ByteC name as <code>pub</code> to make it visible from Java, as long as it has a type that exists in Java:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn pub makeGreeting(x: str): str = &quot;Hello, &quot; + x;
+fn greet(pub name: str) {
+    extern {
+        String greeting = makeGreeting(name);
+        System.out.println(greeting);
+    }
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>However, actually writing inline Java code is very rarely necessary. Usually, you'll define the Java API to interact with and then interact with it.
+This uses <code>extern</code> classes, enums, and functions, which are generally written just like their non-<code>extern</code> variants, but without function bodies. There's also the <code>constructor</code> keyword for class constructor prototypes, although only one can be used for a given class. The names of extern functions can be changed by adding an <code>= &quot;&lt;name&gt;&quot;</code>, which is especially important for static methods and overloading (neither of which is natively supported by ByteC).</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>extern class MapLocation {
+    constructor(x: i32, y: i32);
+    let x: i32;
+    let y: i32;
+
+    fn add(dir: Direction): MapLocation;
+    fn distanceSquaredTo(loc: MapLocation): i32;
+}
+
+extern enum RobotType {
+    ARCHON,
+    BUILDER,
+    LABORATORY,
+    MINER,
+    SAGE,
+    SOLDIER,
+    WATCHTOWER;
+
+    let damage: i32;
+    let health: i32;
+
+    fn canAttack(): bool;
+    fn canMine(): bool;
+}
+
+extern fn bytecodeNum(): i32 = &quot;Clock.getBytecodeNum&quot;;
+<span class="boring">}
+</span></code></pre></pre>
+<h2 id="interacting-with-the-battlecode-api-1"><a class="header" href="#interacting-with-the-battlecode-api-1">Interacting with the Battlecode API</a></h2>
 <p>You'll need to use the Battlecode API to do anything useful, and unfortunately this is a little bit harder than in Java, because ByteC isn't smart enough to find and read the API by itself. You'll probably have a file called something like <code>Common.bt</code> or <code>API.bt</code> shared by all your bots, which has a bunch of <code>extern</code> declarations for the entire Battlecode API - an example is at the end of this page. My API bindings were 300 lines of code in 2022, and automatically generating this from the Javadoc isn't too hard; I may write a dedicated script to do this and include it with ByteC at some point.</p>
+<p>Also, most functions will probably require <code>throws GameActionException</code>. The <code>throws</code> clause is actually entirely ignored by ByteC and just passed on to the Java code, but the Java compiler will complain if you leave these out (that does mean you don't need them for inline functions, though).</p>
 <p>You'll also need the RobotPlayer class, but this is actually easier than in Java, since every ByteC file (&quot;module&quot;) turns into a Java class with static members. Just make sure you have a file called <code>RobotPlayer.bt</code>, with something like this:</p>
 <pre><pre class="playground"><code class="language-rust">
 <span class="boring">#![allow(unused)]
@@ -293,119 +684,6 @@ extern class RobotController {
 
     // etc.
 }
-<span class="boring">}
-</span></code></pre></pre>
-<div style="break-before: page; page-break-before: always;"></div><h1 id="language-tour"><a class="header" href="#language-tour">Language Tour</a></h1>
-<p>ByteC is syntactically similar to Rust: functions are declared with <code>fn</code> and variables with <code>let</code> and type inference.</p>
-<pre><pre class="playground"><code class="language-rust">
-<span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>fn triple(x: i32): i32 {
-    let y = x + x;
-    x + y // the last statement in a block is returned automatically
-}
-<span class="boring">}
-</span></code></pre></pre>
-<p>Functions can be written in a single-expression style as well:</p>
-<pre><pre class="playground"><code class="language-rust">
-<span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>fn triple2(x: i32): i32 = x * 3;
-<span class="boring">}
-</span></code></pre></pre>
-<p><code>if-else</code> and <code>match</code> (the equivalent to Java <code>switch</code>) are expressions, and can return a value from each branch:</p>
-<pre><pre class="playground"><code class="language-rust">
-<span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>fn do_stuff(cond: bool, ty: RobotType): i32 {
-    let a = if cond {
-        // this is just a normal block, we can put statements here too
-        let tmp = 12 + 3;
-        tmp + 4
-    } else {
-        22
-    };
-    let b = match ty {
-        ARCHON =&gt; 27,
-        MINER =&gt; 2 + {
-            // a block can be used in expression position
-            // this variable is unrelated to the last one, blocks create their own scopes
-            let tmp = 9 + 8;
-            tmp * 2
-        },
-        // this is the `default` case
-        // it's not necessary if we handle all possible variants
-        else =&gt; 0,
-    };
-    a * b
-}
-<span class="boring">}
-</span></code></pre></pre>
-<p>Loops are not expressions, and there are about three types:</p>
-<pre><pre class="playground"><code class="language-rust">
-<span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// The simplest kind of loop, loops infinitely until a `break`
-let a = 0;
-loop {
-    a += 1;
-    if a &gt; 12 {
-        break;
-    }
-}
-
-// A while loop, this is just like other procedural languages
-while a &lt; 24 {
-    a += 1;
-}
-
-// There are actually three kinds of four loop:
-// A range for loop - this can be unrolled by adding the `unroll` keyword before the start of the range:
-for i in 0..10 {
-    a += i;
-}
-// A loop over a static array - this is guaranteed to be unrolled:
-let sArr: [i32; 3] = [1, 2, 3];
-for i in sArr {
-    a += i;
-}
-// A loop over a dynamic array - this is never unrolled:
-let dArr: [i32] = [1, 2, 3];
-for i in dArr {
-    a += i;
-}
-<span class="boring">}
-</span></code></pre></pre>
-<p>The two types of arrays, static and dynamic, are a concept that doesn't exist in Java so they deserve some explanation.
-A static array has a constant length known at compile time, and it becomes a bunch of separate variables in Java.
-Any loop over a static array is unrolled, and indexing the array must either use an index that the compiler can figure out is constant, or use the <code>inline</code> keyword to be turned into a <code>switch</code>.</p>
-<p>A dynamic array, on the other hand, doesn't have a length known at compile time. In fact, the length of the array can change at any moment.
-It's similar to a Java <code>ArrayList</code>, but all the logic is inlined, so any operations that normal Java arrays support (indexing, index assignment, looping over the array) are exactly as fast, and <code>push</code> and <code>pop</code> are pretty fast as well and don't involve method calls. Java arrays returned by <code>extern</code> functions are automatically converted to ByteC dynamic arrays. Here's an example of the operations supported by dynamic arrays:</p>
-<pre><pre class="playground"><code class="language-rust">
-<span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// This initializes an array of five zeros
-let x: [i32] = [; 5];
-
-// The length of the array can be accessed with .len(); there is currently no way to access the capacity.
-// This is also supported by static arrays
-println(&quot;length: &quot; + x.len());
-
-// Note that there isn't actually bounds checking in array indexes for performance
-// So if ByteC has allocated 8 elements but the length of the array is only 5, accessing x[6] has an undefined result
-// (in practice it will return 0 or the last element to occupy that slot, or throw an exception if the space isn't allocated)
-x[0] = 2;
-let y = x[4];
-
-// adds 12 to the end of the array, reallocating if there isn't enough space
-x.push(12);
-
-// pops the last element off the end of the array, leaving the space to be used by future push() calls
-let twelve = x.pop();
-
-// clears all elements from the array, setting the length to 0 and leaving the capacity allocated
-// note that this only costs 2 bytecode, no matter the array capacity!
-x.clear();
 <span class="boring">}
 </span></code></pre></pre>
 
