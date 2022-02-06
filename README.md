@@ -5,6 +5,8 @@
 The language (also called "bytec" for lack of a better name) has a few features Java doesn't, like zero-overhead dynamic arrays and tuples,
 and it's fully interoperable with Java so it can be used for the performance-critical parts of a Java bot.
 
+[Read the guide here!](https://tolziplohu.github.io/bytec)
+
 ## Language tour
 
 Here's a simple player for Battlecode 2021. Compile it with something like `bytec <input directory>/RobotPlayer.bt <output directory>/testplayer/RobotPlayer.java`. (First instally it with `cargo install --path .`, and make sure the cargo install directory is on your path (`~/.cargo/bin` on Linux)).
