@@ -7,6 +7,10 @@ and it's fully interoperable with Java so it can be used for the performance-cri
 
 [Read the guide here!](https://tolziplohu.github.io/bytec)
 
+### VSCode extension
+
+There's a simple VSCode extension for ByteC syntax highlighting in the `vscode` folder in this repository. The easiest way to enable it is to symlink it to `[VSCODE-DIRECTIORY]/extensions/bytec-basic` - the VSCode directory is `~/.vscode-oss` on Linux, I'm not sure about other operating systems.
+
 ## Language tour
 
 Here's a simple player for Battlecode 2021. Compile it with something like `bytec <input directory>/RobotPlayer.bt <output directory>/testplayer/RobotPlayer.java`. (First instally it with `cargo install --path .`, and make sure the cargo install directory is on your path (`~/.cargo/bin` on Linux)).
