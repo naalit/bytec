@@ -2,7 +2,7 @@
 
 ByteC can be installed by cloning this repository and then running `cargo install --path .`; make sure you have cargo's output directory on your `PATH` (this is `~/.cargo/bin` on Linux). After that, you can use the `bytec` command to run the compiler.
 
-The project structure for a ByteC-based Battlecode bot should look something like this:
+The project structure for a ByteC-based Battlecode bot should look something like this (see an [example Battlecode 2022 bot here](https://github.com/tolziplohu/battlecode22)):
 
 - `battlecode22` - the Git repository for this year's bots, a clone of `battlecode22-scaffold`
     - `bytec` - this is the directory that all ByteC source files go in; it would be called `src`, but that must be the output directory because it's hardcoded into the Battlecode engine.

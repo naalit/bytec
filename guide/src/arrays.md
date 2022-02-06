@@ -2,7 +2,14 @@
 
 The two types of arrays, static and dynamic, are a concept that doesn't exist in Java so they deserve some explanation.
 A static array has a constant length known at compile time, and it becomes a bunch of separate variables in Java.
-Any loop over a static array is unrolled, and indexing the array must either use an index that the compiler can figure out is constant, or use the `inline` keyword to be turned into a `switch`.
+Any loop over a static array is unrolled, and indexing the array must either use an index that the compiler can figure out is constant, or use the `inline` keyword to be turned into a `switch`:
+
+```rust
+let arr: [i32; 16];
+fn getArr(i: i32): i32 {
+    arr[inline i]
+}
+```
 
 A dynamic array, on the other hand, doesn't have a length known at compile time. In fact, the length of the array can change at any moment.
 It's similar to a Java `ArrayList`, but all the logic is inlined, so any operations that normal Java arrays support (indexing, index assignment, looping over the array) are exactly as fast, and `push` and `pop` are pretty fast as well and don't involve method calls. Java arrays returned by `extern` functions are automatically converted to ByteC dynamic arrays. Here's an example of the operations supported by dynamic arrays:
