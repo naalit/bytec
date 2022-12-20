@@ -6,7 +6,7 @@ use crate::term::*;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum Predef {
-    /// java.util.Arrays.copyOf
+    /// System.arraycopy
     ArrayCopy,
 }
 
@@ -115,7 +115,8 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
                     mappings.push((item.0, cxt.bindings.fn_name(f.id), !f.public));
 
                     if f.inline {
-                        cxt.inline_fns.insert(item, (f.args.clone(), f.body.cloned(cxt.bindings)));
+                        cxt.inline_fns
+                            .insert(item, (f.args.clone(), f.body.cloned(cxt.bindings)));
                     }
                 }
                 for (s, t, _) in members {
@@ -161,7 +162,8 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
                         mappings.push((item.0, cxt.bindings.fn_name(f.id), !f.public));
 
                         if f.inline {
-                            cxt.inline_fns.insert(item, (f.args.clone(), f.body.cloned(cxt.bindings)));
+                            cxt.inline_fns
+                                .insert(item, (f.args.clone(), f.body.cloned(cxt.bindings)));
                         }
                     }
                 }
@@ -2282,7 +2284,11 @@ impl Item {
                         }
                     })
                     .collect();
-                let methods = methods.iter().filter(|x| !x.inline).map(|x| x.lower(cxt)).collect();
+                let methods = methods
+                    .iter()
+                    .filter(|x| !x.inline)
+                    .map(|x| x.lower(cxt))
+                    .collect();
 
                 cxt.items.push(JItem::Class(class, members, methods));
             }
@@ -3070,6 +3076,7 @@ impl JLVal {
         }
     }
 
+    // Should really be `&'a mut self` but that only works if references can outlive their referents
     fn get_mut<'a>(&mut self, env: &'a mut Env) -> Option<&'a mut CVal> {
         match self {
             JLVal::Var(v) => env.env.get_mut(v),
@@ -3391,8 +3398,7 @@ impl BinOp {
                 let a = a.to_term_partial()?;
                 let b = b.to_term_partial()?;
                 Some(CVal::Term(JTerm::BinOp(self, Box::new(a), Box::new(b))))
-            }
-            // _ => None,
+            } // _ => None,
         }
     }
 }

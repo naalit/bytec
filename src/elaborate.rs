@@ -303,6 +303,8 @@ impl<'b> Cxt<'b> {
         }
     }
 
+    // Again, the only error unifying these lifetimes creates would be fixed with GC
+    // (and same for below functions)
     fn var(&self, s: &RawPath) -> Option<(Sym, &Type)> {
         if s.len() == 1 {
             self.vars.get(*s.stem())

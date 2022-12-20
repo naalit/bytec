@@ -1,3 +1,5 @@
+use ropey::RopeSlice;
+
 use crate::term::*;
 use std::{collections::HashMap, str::FromStr};
 
@@ -148,20 +150,20 @@ pub enum Tok {
     DotDot,
 }
 struct Lexer<'a> {
-    input: &'a str,
+    input: RopeSlice<'a>,
     pos: usize,
     bindings: &'a mut Bindings,
 }
 impl<'a> Lexer<'a> {
     fn peek(&self) -> Option<char> {
-        self.input.as_bytes().get(self.pos).copied().map(char::from)
+        self.peekn(0)
     }
     fn peekn(&self, n: usize) -> Option<char> {
-        self.input
-            .as_bytes()
-            .get(self.pos + n)
-            .copied()
-            .map(char::from)
+        if self.pos + n < self.input.len_bytes() {
+            Some(self.input.byte(self.pos + n).into())
+        } else {
+            None
+        }
     }
     fn nextc(&mut self) -> Option<char> {
         let c = self.peek()?;
@@ -178,8 +180,8 @@ impl<'a> Lexer<'a> {
         while self.peek().map_or(false, Lexer::is_ident_char) {
             self.pos += 1;
         }
-        let name = &self.input[start..self.pos];
-        let tok = match name {
+        let name = self.input.byte_slice(start..self.pos).to_string();
+        let tok = match &*name {
             "fn" => Tok::Fn,
             "i32" => Tok::I32,
             "i64" => Tok::I64,
@@ -231,7 +233,7 @@ impl<'a> Lexer<'a> {
                         Some('}') => {
                             nbrackets -= 1;
                             if nbrackets == 0 {
-                                let java = &self.input[start_java..self.pos - 1];
+                                let java = self.input.byte_slice(start_java..self.pos - 1);
                                 return Ok(Spanned::new(
                                     Tok::ExternBlock(self.bindings.raw(java)),
                                     Span(start, self.pos),
@@ -439,7 +441,7 @@ impl<'a> Iterator for Lexer<'a> {
     }
 }
 
-pub fn lex_one(input: &str, bindings: &mut Bindings) -> Option<Tok> {
+pub fn lex_one(input: RopeSlice, bindings: &mut Bindings) -> Option<Tok> {
     let mut lexer = Lexer {
         input,
         bindings,
@@ -477,7 +479,7 @@ pub struct Parser<'a> {
 }
 impl<'a> Parser<'a> {
     pub fn new(
-        input: &'a str,
+        input: RopeSlice<'a>,
         bindings: &'a mut Bindings,
         defs: &'a mut HashMap<RawSym, Option<Tok>>,
     ) -> Self {

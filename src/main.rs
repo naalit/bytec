@@ -1,8 +1,10 @@
 mod backend;
 mod binding;
+mod driver;
 mod elaborate;
 mod parser;
 mod pretty;
+mod server;
 mod term;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,7 +13,19 @@ use std::{fs::File, io::Read};
 use crate::parser::Parser;
 use crate::pretty::{Doc, Style};
 
+use ropey::Rope;
+use term::*;
+
+use driver::Driver;
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("server") {
+        let mut server = server::Server::start();
+        server.main_loop();
+        server.shutdown();
+        return;
+    }
+
     let mut args = std::env::args();
     let _exe = args.next();
     let mut paths = Vec::new();
@@ -22,16 +36,17 @@ fn main() {
             if let Some(idx) = i.find('=') {
                 let k = &i[2..idx];
                 let v = &i[idx + 1..];
-                let v = crate::parser::lex_one(&v, &mut bindings).unwrap_or_else(|| {
-                    Doc::start("error")
-                        .style(Style::BoldRed)
-                        .add(": Invalid token is definition argument: '")
-                        .add(v)
-                        .add("'")
-                        .style(Style::Bold)
-                        .emit();
-                    std::process::exit(1)
-                });
+                let v = crate::parser::lex_one(Rope::from(v).slice(..), &mut bindings)
+                    .unwrap_or_else(|| {
+                        Doc::start("error")
+                            .style(Style::BoldRed)
+                            .add(": Invalid token is definition argument: '")
+                            .add(v)
+                            .add("'")
+                            .style(Style::Bold)
+                            .emit();
+                        std::process::exit(1)
+                    });
                 defs.insert(bindings.raw(k), Some(v));
             } else {
                 defs.insert(bindings.raw(&i[2..]), None);
@@ -76,9 +91,8 @@ fn main() {
     .unwrap();
 
     let mut nfiles = 0;
-    let mut mods = Vec::new();
-    let mut p1 = Vec::new();
     let mut had_err = false;
+    let mut parsed = Vec::new();
     for input in files {
         let mut file = File::open(&input).unwrap_or_else(|_| {
             Doc::start("error")
@@ -94,29 +108,23 @@ fn main() {
 
         let file_id = term::FileId(nfiles, mod_name);
         nfiles += 1;
-        let mut buf = String::new();
-        file.read_to_string(&mut buf).unwrap();
+        let rope = Rope::from_reader(file).unwrap();
         {
             term::INPUT_SOURCE
                 .write()
                 .unwrap()
-                .insert(file_id, buf.clone());
+                .insert(file_id, rope.clone());
             term::INPUT_PATH
                 .write()
                 .unwrap()
                 .insert(file_id, input.clone());
         }
 
-        let mut parser = Parser::new(&buf, &mut bindings, &mut defs);
+        let mut parser = Parser::new(rope.slice(..), &mut bindings, &mut defs);
         let v = parser.top_level();
-        let v = v.and_then(|v| {
-            let (t, i) = crate::elaborate::declare_mod_p1(&v, &mut bindings, file_id)?;
-            Ok((t, i, v))
-        });
         match v {
-            Ok((t, items, v)) => {
-                mods.push((file_id.1, t.clone()));
-                p1.push((v, t, items, file_id, input));
+            Ok(v) => {
+                parsed.push((file_id, v, input));
             }
             Err(x) => {
                 had_err = true;
@@ -127,71 +135,11 @@ fn main() {
     if had_err {
         std::process::exit(1)
     }
-    let mut p2 = Vec::new();
-    let mut mods2 = Vec::new();
-    for (v, t, items, file_id, input_path) in p1 {
-        let (t, items) =
-            match crate::elaborate::declare_mod_p2(&v, t, &mods, items, &mut bindings, file_id) {
-                Ok(x) => x,
-                Err(x) => {
-                    had_err = true;
-                    x.emit(term::Severity::Error, file_id);
-                    continue;
-                }
-            };
-        mods2.push((file_id.1, t.clone()));
-        p2.push((v, t, items, file_id, input_path));
-    }
-    if had_err {
-        std::process::exit(1)
-    }
-    let mut p3 = Vec::new();
-    let mut mods3 = Vec::new();
-    for (v, t, items, file_id, input_path) in p2 {
-        let (t, items) =
-            match crate::elaborate::declare_mod_p3(&v, t, &mods2, items, &mut bindings, file_id) {
-                Ok(x) => x,
-                Err(x) => {
-                    had_err = true;
-                    x.emit(term::Severity::Error, file_id);
-                    continue;
-                }
-            };
-        mods3.push((file_id.1, t.clone()));
-        p3.push((v, t, items, file_id, input_path));
-    }
-    if had_err {
-        std::process::exit(1)
-    }
-    let mut p4 = Vec::new();
-    let mut mods4 = Vec::new();
-    for (v, t, items, file_id, input_path) in p3 {
-        let (t, items) =
-            match crate::elaborate::declare_mod_p4(&v, t, &mods3, items, &mut bindings, file_id) {
-                Ok(x) => x,
-                Err(x) => {
-                    had_err = true;
-                    x.emit(term::Severity::Error, file_id);
-                    continue;
-                }
-            };
-        mods4.push((file_id.1, t.clone()));
-        p4.push((v, t, items, file_id, input_path));
-    }
-    if had_err {
-        std::process::exit(1)
-    }
-    let mut elabed = Vec::new();
-    for (v, t, items, file_id, input_path) in p4 {
-        let v = match crate::elaborate::elab_mod(&v, t, &mods4, items, &mut bindings, file_id) {
-            Ok(v) => v,
-            Err(x) => {
-                had_err = true;
-                x.emit(term::Severity::Error, file_id);
-                continue;
-            }
-        };
 
+    let mut driver = Driver::new(parsed);
+    driver.run_all(&mut bindings);
+    let mut elabed = Vec::new();
+    for module in driver.mods {
         if output.ends_with(".java") {
             output.parent().map(|p| std::fs::create_dir_all(p).unwrap());
         } else if !output.exists() {
@@ -213,19 +161,22 @@ fn main() {
         } else {
             output.join(format!(
                 "{}.java",
-                input_path.file_stem().unwrap().to_str().unwrap()
+                module.input_path.file_stem().unwrap().to_str().unwrap()
             ))
         };
 
         eprintln!(
             "Compiling {} to {}",
-            input_path.to_str().unwrap(),
+            module.input_path.to_str().unwrap(),
             out_path.to_str().unwrap()
         );
 
-        elabed.push((v, out_path))
+        elabed.push((module.items, out_path))
     }
-    if had_err {
+    if !driver.errors.is_empty() {
+        for (e, file) in driver.errors {
+            e.emit(Severity::Error, file);
+        }
         std::process::exit(1)
     }
     let mut ir_mods = Vec::new();

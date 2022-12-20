@@ -1,5 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, sync::RwLock};
 
+use ropey::Rope;
+
 pub use crate::binding::*;
 pub use crate::pretty::Doc;
 use crate::pretty::{Prec, Style};
@@ -11,6 +13,26 @@ pub struct FileId(pub usize, pub RawSym);
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Span(pub usize, pub usize);
+impl Span {
+    pub fn lsp_range(&self, text: &ropey::Rope) -> lsp_types::Range {
+        let start = text.byte_to_char(self.0) as u32;
+        let end = text.byte_to_char(self.0) as u32;
+        let start_line = text.char_to_line(start as usize);
+        let start_line_start = text.line_to_char(start_line);
+        let end_line = text.char_to_line(end as usize);
+        let end_line_start = text.line_to_char(end_line);
+        lsp_types::Range {
+            start: lsp_types::Position {
+                line: start_line as u32,
+                character: start - start_line_start as u32,
+            },
+            end: lsp_types::Position {
+                line: end_line as u32,
+                character: end - end_line_start as u32,
+            },
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Spanned<T> {
@@ -105,7 +127,7 @@ pub enum Literal {
 
 lazy_static::lazy_static! {
     pub static ref INPUT_PATH: RwLock<HashMap<FileId, PathBuf>> = RwLock::new(Default::default());
-    pub static ref INPUT_SOURCE: RwLock<HashMap<FileId, String>> = RwLock::new(Default::default());
+    pub static ref INPUT_SOURCE: RwLock<HashMap<FileId, Rope>> = RwLock::new(Default::default());
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -126,6 +148,13 @@ impl Severity {
             Severity::Warning => Style::BoldYellow,
         }
     }
+
+    pub fn lsp(self) -> lsp_types::DiagnosticSeverity {
+        match self {
+            Severity::Error => lsp_types::DiagnosticSeverity::ERROR,
+            Severity::Warning => lsp_types::DiagnosticSeverity::WARNING,
+        }
+    }
 }
 
 impl Error {
@@ -137,18 +166,18 @@ impl Error {
         let (mut line, mut col) = (1, self.span.0);
         let mut line_str = None;
         for l in source.lines() {
-            if col <= l.len() {
+            if col <= l.len_bytes() {
                 line_str = Some(l);
                 break;
             } else {
                 line += 1;
-                col -= l.len() + 1;
+                col -= l.len_bytes() + 1;
             }
         }
-        let line_str = line_str.unwrap_or("");
+        let line_str = line_str.unwrap_or("".into());
         let mut end = col + self.span.1 - self.span.0;
-        if end > line_str.len() {
-            end = line_str.len();
+        if end > line_str.len_bytes() {
+            end = line_str.len_bytes();
         }
         let caret_str: String = std::iter::repeat('^').take(end - col).collect();
         severity
@@ -198,7 +227,7 @@ impl Error {
 
 // Syntax
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ModType {
     pub vars: Vec<(RawSym, Sym, Type)>,
     pub fns: Vec<(RawSym, FnId, FnType)>,
@@ -642,7 +671,9 @@ impl LValue {
     fn cloned_(&self, cln: &mut Cloner) -> LValue {
         match self {
             LValue::Var(x) => LValue::Var(*x),
-            LValue::Idx(a, b, s) => LValue::Idx(Box::new(a.cloned_(cln)), Box::new(b.cloned_(cln)), *s),
+            LValue::Idx(a, b, s) => {
+                LValue::Idx(Box::new(a.cloned_(cln)), Box::new(b.cloned_(cln)), *s)
+            }
             LValue::Member(a, b) => LValue::Member(Box::new(a.cloned_(cln)), *b),
         }
     }
@@ -1025,10 +1056,7 @@ impl LValue {
     pub fn pretty(&self, cxt: &Bindings) -> Doc {
         match self {
             LValue::Var(x) => Doc::start(cxt.resolve_local(*x)),
-            LValue::Idx(arr, i, _) => arr.pretty(cxt)
-                .add('[')
-                .chain(i.pretty(cxt))
-                .add(']'),
+            LValue::Idx(arr, i, _) => arr.pretty(cxt).add('[').chain(i.pretty(cxt)).add(']'),
             LValue::Member(x, m) => x.pretty(cxt).add('.').chain(cxt.sym_path(*m).pretty(cxt)),
         }
     }
