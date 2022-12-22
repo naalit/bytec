@@ -171,7 +171,7 @@ fn main() {
             out_path.to_str().unwrap()
         );
 
-        elabed.push((module.items, out_path))
+        elabed.push((module.items, out_path, module.file))
     }
     if !driver.errors.is_empty() {
         for (e, file) in driver.errors {
@@ -181,23 +181,30 @@ fn main() {
     }
     let mut ir_mods = Vec::new();
     let mut cxt = backend::Cxt::new(&mut bindings, package);
-    for (v, _) in &elabed {
+    for (v, _, _) in &elabed {
         crate::backend::declare_p1(v, &mut cxt);
     }
-    for (v, out_path) in elabed {
+    for (v, out_path, file) in elabed {
         ir_mods.push((
             crate::backend::declare_p2(
                 v,
                 &mut cxt,
                 out_path.file_stem().unwrap().to_str().unwrap(),
-            ),
-            out_path,
+            )
+            .unwrap_or_else(|e| {
+                e.emit(Severity::Error, file);
+                std::process::exit(1);
+            }),
+            (out_path, file),
         ));
     }
-    for (m, out_path) in &ir_mods {
+    for (m, (out_path, file)) in &ir_mods {
         use std::io::Write;
 
-        let java = m.codegen(&mut cxt, &ir_mods);
+        let java = m.codegen(&mut cxt, &ir_mods).unwrap_or_else(|e| {
+            e.emit(Severity::Error, *file);
+            std::process::exit(1);
+        });
         let mut out_file = File::create(out_path).unwrap();
         write!(out_file, "{}", java).unwrap();
     }

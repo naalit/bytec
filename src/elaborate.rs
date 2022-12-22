@@ -456,6 +456,7 @@ enum TypeError {
     NotLValue(Span),
     TypeNeeded(Span),
     SelfOutsideClass(Span),
+    NonRefNull(Span, Type),
 }
 impl TypeError {
     fn to_error(self, bindings: &Bindings) -> Error {
@@ -534,6 +535,13 @@ impl TypeError {
                 Doc::start("'self' can't be used outside of class or enum"),
                 span,
             ),
+            TypeError::NonRefNull(span, ty) => Spanned::new(
+                Doc::start(
+                    "null only applies to reference types - classes, enums, and str - not type ",
+                )
+                .chain(ty.pretty(bindings)),
+                span,
+            ),
         }
     }
 }
@@ -562,7 +570,7 @@ impl<'b> Cxt<'b> {
 
     fn declare_item_p1(&mut self, item: &PreItem) -> Result<(), TypeError> {
         match item {
-            PreItem::InlineJava(_) => Ok(()),
+            PreItem::InlineJava(_, _) => Ok(()),
             PreItem::Fn(_) => Ok(()),
             PreItem::ExternFn(_) => Ok(()),
             PreItem::Let(_, _, _, _) => Ok(()),
@@ -624,6 +632,7 @@ impl<'b> Cxt<'b> {
                                     ret_ty: rty,
                                     args: args2,
                                     mapping: f.mapping,
+                                    span: f.name.span,
                                 }));
 
                                 Ok((*f.name, id, ty))
@@ -721,7 +730,7 @@ impl<'b> Cxt<'b> {
 
     fn declare_item_p3(&mut self, item: &PreItem) -> Result<(), TypeError> {
         match item {
-            PreItem::InlineJava(_) => Ok(()),
+            PreItem::InlineJava(_, _) => Ok(()),
             PreItem::Fn(f) => {
                 let mut args = Vec::new();
                 for (_s, t, _) in &f.args {
@@ -843,7 +852,7 @@ impl<'b> Cxt<'b> {
         FnType(atys, rty): FnType,
     ) -> Result<Fn, TypeError> {
         let PreFn {
-            name: _,
+            name,
             ret_ty: _,
             args,
             body,
@@ -869,12 +878,13 @@ impl<'b> Cxt<'b> {
             body,
             throws: throws.clone(),
             inline: *inline,
+            span: name.span,
         })
     }
 
     fn check_item(&mut self, item: &PreItem) -> Result<Vec<Item>, TypeError> {
         match item {
-            PreItem::InlineJava(s) => Ok(vec![Item::InlineJava(*s)]),
+            PreItem::InlineJava(s, span) => Ok(vec![Item::InlineJava(*s, *span)]),
             PreItem::Fn(f) => {
                 let (fid, fty) = self.fun(&lpath(f.name)).unwrap();
                 let fty = fty.clone();
@@ -907,13 +917,14 @@ impl<'b> Cxt<'b> {
                     ret_ty: rty,
                     args: args2,
                     mapping: *mapping,
+                    span: name.span,
                 })])
             }
             PreItem::Let(name, _, x, _) => {
                 let (s, t) = self.var(&lpath(*name)).unwrap();
                 let t = t.clone();
                 let x = x.as_ref().map(|x| self.check(x, t.clone())).transpose()?;
-                Ok(vec![Item::Let(s, t, x)])
+                Ok(vec![Item::Let(s, t, x, name.span)])
             }
             PreItem::Class {
                 path,
@@ -935,6 +946,7 @@ impl<'b> Cxt<'b> {
                             Ok((*s, t))
                         })
                         .collect::<Result<_, _>>()?,
+                    path.1.span,
                 )])
             }
             PreItem::Class {
@@ -974,6 +986,7 @@ impl<'b> Cxt<'b> {
                             }
                         })
                         .collect::<Result<_, _>>()?,
+                    path.1.span,
                 )]);
                 self.in_classes.pop();
                 r
@@ -1030,6 +1043,7 @@ impl<'b> Cxt<'b> {
                         self.in_classes.pop();
                         r
                     },
+                    path.1.span,
                 )])
             }
             PreItem::Use(path, wildcard) => {
@@ -1052,6 +1066,7 @@ impl<'b> Cxt<'b> {
                                         v,
                                         ty.clone(),
                                         Some(Term::Variant(c, i, Vec::new())),
+                                        path.span(),
                                     ));
                                 }
                             }
@@ -1082,7 +1097,7 @@ impl<'b> Cxt<'b> {
                 }
                 Ok(None)
             }
-            PreStatement::Item(PreItem::InlineJava(s)) => Ok(Some(Statement::InlineJava(*s))),
+            PreStatement::Item(PreItem::InlineJava(s, _)) => Ok(Some(Statement::InlineJava(*s))),
             PreStatement::Item(PreItem::Let(name, ty, value, public)) => {
                 let value = value.as_ref().expect("statement let must have a value");
                 let (x, t) = match ty {
@@ -1564,7 +1579,13 @@ impl<'b> Cxt<'b> {
             }
             (Pre::Lit(l @ Literal::Int(_), None), Type::I32 | Type::I64) => Ok(Term::Lit(*l, ty)),
 
-            (Pre::Null, _) => Ok(Term::Null(ty)),
+            (Pre::Null, _) => {
+                if ty.has_null() {
+                    Ok(Term::Null(ty))
+                } else {
+                    Err(TypeError::NonRefNull(pre.span, ty))
+                }
+            }
 
             (Pre::Tuple(a), Type::Tuple(b)) => a
                 .iter()

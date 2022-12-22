@@ -605,6 +605,12 @@ impl<'a> Parser<'a> {
             .unwrap_or(Span(self.lexer.pos - 1, self.lexer.pos))
     }
 
+    fn next_span(&mut self) -> Span {
+        self.next()
+            .map(|x| x.span)
+            .unwrap_or(Span(self.lexer.pos - 1, self.lexer.pos))
+    }
+
     fn expect(&mut self, tok: Tok, msg: &str) -> Result<(), Error> {
         if self.peek().as_deref() == Some(&tok) {
             self.next();
@@ -810,9 +816,10 @@ impl<'a> Parser<'a> {
                 let zero = Box::new(Spanned::new(Pre::Lit(Literal::Int(0), None), self.span()));
                 self.next();
                 let x = self.method()?.ok_or(self.err("expected expression"))?;
+                let span = Span(zero.span.0, x.span.1);
                 return Ok(Some(Box::new(Spanned::new(
                     Pre::BinOp(BinOp::Sub, zero, x),
-                    self.span(),
+                    span,
                 ))));
             }
             _ => None,
@@ -895,13 +902,10 @@ impl<'a> Parser<'a> {
     fn atom(&mut self) -> Result<Option<SPre>, Error> {
         match self.peek().as_deref() {
             None => return Ok(None),
-            Some(Tok::LitI(i)) => {
-                self.next();
-                Ok(Some(Box::new(Spanned::new(
-                    Pre::Lit(Literal::Int(*i), None),
-                    self.span(),
-                ))))
-            }
+            Some(Tok::LitI(i)) => Ok(Some(Box::new(Spanned::new(
+                Pre::Lit(Literal::Int(*i), None),
+                self.next_span(),
+            )))),
             Some(Tok::LitS(s)) => {
                 let q = self.next().unwrap();
                 Ok(Some(Box::new(Spanned::new(
@@ -909,40 +913,26 @@ impl<'a> Parser<'a> {
                     q.span,
                 ))))
             }
-            Some(Tok::True) => {
-                self.next();
-                Ok(Some(Box::new(Spanned::new(
-                    Pre::Lit(Literal::Bool(true), None),
-                    self.span(),
-                ))))
-            }
-            Some(Tok::False) => {
-                self.next();
-                Ok(Some(Box::new(Spanned::new(
-                    Pre::Lit(Literal::Bool(false), None),
-                    self.span(),
-                ))))
-            }
-            Some(Tok::Null) => {
-                self.next();
-                Ok(Some(Box::new(Spanned::new(Pre::Null, self.span()))))
-            }
-            Some(Tok::Selph) => {
-                self.next();
-                Ok(Some(Box::new(Spanned::new(Pre::Selph, self.span()))))
-            }
-            Some(Tok::Break) => {
-                self.next();
-                Ok(Some(Box::new(Spanned::new(Pre::Break, self.span()))))
-            }
-            Some(Tok::Continue) => {
-                self.next();
-                Ok(Some(Box::new(Spanned::new(Pre::Continue, self.span()))))
-            }
+            Some(Tok::True) => Ok(Some(Box::new(Spanned::new(
+                Pre::Lit(Literal::Bool(true), None),
+                self.next_span(),
+            )))),
+            Some(Tok::False) => Ok(Some(Box::new(Spanned::new(
+                Pre::Lit(Literal::Bool(false), None),
+                self.next_span(),
+            )))),
+            Some(Tok::Null) => Ok(Some(Box::new(Spanned::new(Pre::Null, self.next_span())))),
+            Some(Tok::Selph) => Ok(Some(Box::new(Spanned::new(Pre::Selph, self.next_span())))),
+            Some(Tok::Break) => Ok(Some(Box::new(Spanned::new(Pre::Break, self.next_span())))),
+            Some(Tok::Continue) => Ok(Some(Box::new(Spanned::new(
+                Pre::Continue,
+                self.next_span(),
+            )))),
             Some(Tok::Return) => {
-                self.next();
+                let ret_span = self.next_span();
                 let x = self.term()?;
-                Ok(Some(Box::new(Spanned::new(Pre::Return(x), self.span()))))
+                let span = Span(ret_span.0, x.as_ref().map(|s| s.span).unwrap_or(ret_span).1);
+                Ok(Some(Box::new(Spanned::new(Pre::Return(x), span))))
             }
             Some(Tok::If) => {
                 let start = self.lexer.pos;
@@ -1018,8 +1008,7 @@ impl<'a> Parser<'a> {
                             n
                         }
                         Some(Tok::Else) => {
-                            let espan = self.span();
-                            self.next();
+                            let espan = self.next_span();
                             self.expect(Tok::WideArrow, "'=>'")?;
                             let term = self.term()?.ok_or(self.err("expected expression"))?;
                             let n = term.needs_semicolon();
@@ -1559,10 +1548,7 @@ impl<'a> Parser<'a> {
         let ifdef = self.ifdef()?;
         let i = match self.peek().as_deref() {
             None => Ok(None),
-            Some(Tok::ExternBlock(s)) => {
-                self.next();
-                Ok(Some(PreItem::InlineJava(*s)))
-            }
+            Some(Tok::ExternBlock(s)) => Ok(Some(PreItem::InlineJava(*s, self.next_span()))),
             Some(Tok::Let) => {
                 self.next();
 
@@ -1611,7 +1597,10 @@ impl<'a> Parser<'a> {
                         Some(Tok::Enum) => return self.enum_dec(true).map(Some),
                         Some(Tok::LitS(s)) => {
                             self.expect(Tok::Semicolon, "';'")?;
-                            return Ok(Some(PreItem::InlineJava(self.lexer.bindings.raw(s))));
+                            return Ok(Some(PreItem::InlineJava(
+                                self.lexer.bindings.raw(s),
+                                self.span(),
+                            )));
                         }
                         Some(Tok::Class) => return self.class(true),
                         _ => return Err(self.err("expected 'fn', 'enum', or inline Java string")),

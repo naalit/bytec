@@ -16,7 +16,7 @@ pub struct Span(pub usize, pub usize);
 impl Span {
     pub fn lsp_range(&self, text: &ropey::Rope) -> lsp_types::Range {
         let start = text.byte_to_char(self.0) as u32;
-        let end = text.byte_to_char(self.0) as u32;
+        let end = text.byte_to_char(self.1) as u32;
         let start_line = text.char_to_line(start as usize);
         let start_line_start = text.line_to_char(start_line);
         let end_line = text.char_to_line(end as usize);
@@ -171,7 +171,7 @@ impl Error {
                 break;
             } else {
                 line += 1;
-                col -= l.len_bytes() + 1;
+                col -= l.len_bytes();
             }
         }
         let line_str = line_str.unwrap_or("".into());
@@ -313,8 +313,8 @@ pub enum Statement {
 pub enum Item {
     Fn(Fn),
     ExternFn(ExternFn),
-    ExternClass(TypeId, Vec<(Sym, Type)>),
-    InlineJava(RawSym),
+    ExternClass(TypeId, Vec<(Sym, Type)>, Span),
+    InlineJava(RawSym, Span),
     /// If the bool is true, it's extern and shouldn't be generated
     Enum(
         TypeId,
@@ -322,9 +322,10 @@ pub enum Item {
         bool,
         Vec<(Sym, Type)>,
         Vec<Fn>,
+        Span,
     ),
-    Class(TypeId, Vec<(Sym, Type, Option<Term>)>, Vec<Fn>),
-    Let(Sym, Type, Option<Term>),
+    Class(TypeId, Vec<(Sym, Type, Option<Term>)>, Vec<Fn>, Span),
+    Let(Sym, Type, Option<Term>, Span),
 }
 pub struct Fn {
     pub id: FnId,
@@ -334,12 +335,14 @@ pub struct Fn {
     pub body: Term,
     pub throws: Vec<RawSym>,
     pub inline: bool,
+    pub span: Span,
 }
 pub struct ExternFn {
     pub id: FnId,
     pub ret_ty: Type,
     pub args: Vec<(Sym, Type)>,
     pub mapping: RawSym,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -353,6 +356,14 @@ pub enum Type {
     Tuple(Vec<Type>),
     Array(Box<Type>),
     SArray(Box<Type>, usize),
+}
+impl Type {
+    pub fn has_null(&self) -> bool {
+        match self {
+            Type::Class(_) | Type::Str => true,
+            _ => false,
+        }
+    }
 }
 
 impl Term {
@@ -475,7 +486,7 @@ pub enum PreFnEither {
 pub enum PreItem {
     Fn(PreFn),
     ExternFn(PreEFn),
-    InlineJava(RawSym),
+    InlineJava(RawSym, Span),
     Class {
         ext: bool,
         path: RawPath,
@@ -913,7 +924,7 @@ impl Item {
                         .style(Style::Literal),
                 )
                 .add(";"),
-            Item::Enum(id, variants, ext, members, methods) => {
+            Item::Enum(id, variants, ext, members, methods, span) => {
                 let mut doc = Doc::none();
                 if *ext {
                     doc = Doc::keyword("extern").space();
@@ -945,9 +956,11 @@ impl Item {
                     .line()
                     .add('}')
             }
-            Item::Class(tid, _, _) => Doc::keyword("class").chain(cxt.type_name(*tid).pretty(cxt)),
-            Item::ExternClass(c, _) => cxt.type_name(*c).pretty(cxt),
-            Item::InlineJava(s) => Doc::keyword("extern")
+            Item::Class(tid, _, _, _) => {
+                Doc::keyword("class").chain(cxt.type_name(*tid).pretty(cxt))
+            }
+            Item::ExternClass(c, _, _) => cxt.type_name(*c).pretty(cxt),
+            Item::InlineJava(s, _) => Doc::keyword("extern")
                 .space()
                 .chain(
                     Doc::start('"')
@@ -956,7 +969,7 @@ impl Item {
                         .style(Style::Literal),
                 )
                 .add(';'),
-            Item::Let(n, t, x) => Doc::keyword("let")
+            Item::Let(n, t, x, _) => Doc::keyword("let")
                 .space()
                 .add(cxt.resolve_local(*n))
                 .add(":")

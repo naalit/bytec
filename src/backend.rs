@@ -23,19 +23,19 @@ pub struct IRMod {
 pub fn declare_p1(code: &[Item], cxt: &mut Cxt) {
     for i in code {
         match i {
-            Item::ExternClass(c, _) => {
+            Item::ExternClass(c, _, _) => {
                 let class = cxt.fresh_class();
                 cxt.types.push((*c, class));
 
                 continue;
             }
-            Item::Class(c, _, _) => {
+            Item::Class(c, _, _, _) => {
                 let class = cxt.fresh_class();
                 cxt.types.push((*c, class));
 
                 continue;
             }
-            Item::Enum(c, v, _, _, _) => {
+            Item::Enum(c, v, _, _, _, _) => {
                 let class = cxt.fresh_class();
                 cxt.types.push((*c, class));
                 if v.iter().any(|(_, v)| !v.is_empty()) {
@@ -50,7 +50,7 @@ pub fn declare_p1(code: &[Item], cxt: &mut Cxt) {
     }
 }
 
-pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
+pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRMod, Error> {
     // Declare items
     let mut mappings = Vec::new();
     let mut java = Vec::new();
@@ -65,7 +65,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
     }
 
     for i in &code {
-        let (name, ret, m, public, ext, inline) = match i {
+        let (name, ret, m, public, ext, inline, span) = match i {
             Item::Fn(f) => (
                 f.id,
                 &f.ret_ty,
@@ -77,6 +77,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
                 } else {
                     None
                 },
+                f.span,
             ),
             Item::ExternFn(f) => (
                 f.id,
@@ -85,8 +86,9 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
                 true,
                 true,
                 None,
+                f.span,
             ),
-            Item::ExternClass(c, members) => {
+            Item::ExternClass(c, members, span) => {
                 let class = cxt.class(*c).unwrap();
                 mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
                 for (s, t) in members {
@@ -103,7 +105,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
 
                 continue;
             }
-            Item::Class(c, members, methods) => {
+            Item::Class(c, members, methods, span) => {
                 let class = cxt.class(*c).unwrap();
                 mappings.push((class.0, cxt.bindings.type_name(*c), true));
                 for f in methods {
@@ -133,7 +135,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
 
                 continue;
             }
-            Item::Enum(c, _, ext, members, methods) => {
+            Item::Enum(c, _, ext, members, methods, span) => {
                 let class = cxt.class(*c).unwrap();
                 if *ext {
                     mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
@@ -170,11 +172,11 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
 
                 continue;
             }
-            Item::InlineJava(s) => {
+            Item::InlineJava(s, _) => {
                 java.push(*s);
                 continue;
             }
-            Item::Let(s, t, _) => {
+            Item::Let(s, t, _, _) => {
                 let t = t.lower(&cxt);
                 let mut vars = Vec::new();
                 for t in t {
@@ -208,7 +210,10 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
                     }
                 }
                 if !fixed {
-                    panic!("Extern function can't return tuple");
+                    return Err(Spanned::new(
+                        Doc::start("Extern function cannot return a tuple"),
+                        span,
+                    ));
                 }
             }
         }
@@ -216,17 +221,17 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> IRMod {
         mappings.push((item.0, m, !public));
     }
 
-    IRMod {
+    Ok(IRMod {
         name: cxt.bindings.raw(out_class),
         code,
         mappings,
         java,
         out_class: out_class.to_string(),
-    }
+    })
 }
 
 impl IRMod {
-    pub fn codegen<T>(&self, cxt: &mut Cxt, mods: &[(IRMod, T)]) -> String {
+    pub fn codegen<T>(&self, cxt: &mut Cxt, mods: &[(IRMod, T)]) -> Result<String, Error> {
         for i in &self.code {
             i.lower(cxt);
         }
@@ -256,11 +261,15 @@ impl IRMod {
         }
         write!(s, "\npublic class {} {{\n\n", self.out_class).unwrap();
         for i in cxt.items.drain(..) {
-            s.push_str(&i.gen(&mut gen));
+            s.push_str(
+                &i.gen(&mut gen).map_err(|e| {
+                    Spanned::new(Doc::start("In this item: ").chain(e.inner), e.span)
+                })?,
+            );
         }
         s.push_str("\n}");
 
-        s
+        Ok(s)
     }
 }
 
@@ -512,6 +521,9 @@ impl<'a> Gen<'a> {
             s.to_string()
         }
     }
+    fn name_span(&self, v: JVar) -> Span {
+        self.names[&v.0].0 .1.span
+    }
     fn fn_str(&self, v: JFnId) -> String {
         let (i, b) = &self.names[&v.0];
         let s = self.bindings.resolve_path(i);
@@ -521,6 +533,9 @@ impl<'a> Gen<'a> {
             s.to_string()
         }
     }
+    fn fn_span(&self, v: JFnId) -> Span {
+        self.names[&v.0].0 .1.span
+    }
     fn class_str(&self, v: JClass) -> String {
         let (i, b) = &self.names[&v.0];
         let s = self.bindings.resolve_path(i);
@@ -529,6 +544,9 @@ impl<'a> Gen<'a> {
         } else {
             s.to_string()
         }
+    }
+    fn class_span(&self, v: JClass) -> Span {
+        self.names[&v.0].0 .1.span
     }
 }
 
@@ -541,9 +559,9 @@ impl Prop {
     }
 }
 impl JTerm {
-    fn gen(&self, cxt: &Gen) -> String {
-        match self {
-            JTerm::Not(x) => format!("!({})", x.gen(cxt)),
+    fn gen(&self, cxt: &Gen) -> Result<String, Doc> {
+        Ok(match self {
+            JTerm::Not(x) => format!("!({})", x.gen(cxt)?),
             JTerm::Var(v, _) => cxt.name_str(*v),
             JTerm::Null(_) => "null".to_string(),
             JTerm::This(_) => "this".to_string(),
@@ -565,14 +583,14 @@ impl JTerm {
                     }
                     first = false;
 
-                    buf.push_str(&i.gen(cxt));
+                    buf.push_str(&i.gen(cxt)?);
                 }
                 buf.push(')');
 
                 buf
             }
             JTerm::Call(Some(obj), f, a, _) => {
-                let mut buf = format!("({}).", obj.gen(cxt));
+                let mut buf = format!("({}).", obj.gen(cxt)?);
                 buf.push_str(&cxt.fn_str(*f));
                 buf.push('(');
 
@@ -583,17 +601,17 @@ impl JTerm {
                     }
                     first = false;
 
-                    buf.push_str(&i.gen(cxt));
+                    buf.push_str(&i.gen(cxt)?);
                 }
                 buf.push(')');
 
                 buf
             }
             JTerm::Prop(obj, prop, _) => {
-                format!("{}.{}", obj.gen(cxt), prop.gen(cxt))
+                format!("{}.{}", obj.gen(cxt)?, prop.gen(cxt))
             }
             JTerm::BinOp(BinOp::Sub, a, b) if **a == JTerm::Lit(JLit::Int(0)) => {
-                format!("(-{})", b.gen(cxt))
+                format!("(-{})", b.gen(cxt)?)
             }
             JTerm::BinOp(op @ (BinOp::Eq | BinOp::Neq), a, b)
                 if !a.ty().primitive()
@@ -604,14 +622,14 @@ impl JTerm {
                 if *op == BinOp::Neq {
                     buf.push('!');
                 }
-                write!(buf, "({}).equals({})", a.gen(cxt), b.gen(cxt)).unwrap();
+                write!(buf, "({}).equals({})", a.gen(cxt)?, b.gen(cxt)?).unwrap();
                 buf
             }
             JTerm::BinOp(op, a, b) => {
                 let mut buf = String::new();
-                write!(buf, "({}) ", a.gen(cxt)).unwrap();
+                write!(buf, "({}) ", a.gen(cxt)?).unwrap();
                 buf.push_str(op.repr());
-                write!(buf, " ({})", b.gen(cxt)).unwrap();
+                write!(buf, " ({})", b.gen(cxt)?).unwrap();
                 buf
             }
             JTerm::Variant(class, variant) => {
@@ -633,7 +651,7 @@ impl JTerm {
             JTerm::Array(v, t) => {
                 let mut buf = format!("new {}{{ ", t.gen(cxt));
                 for i in v {
-                    buf.push_str(&i.gen(cxt));
+                    buf.push_str(&i.gen(cxt)?);
                     buf.push_str(", ");
                 }
                 buf.push('}');
@@ -644,7 +662,7 @@ impl JTerm {
                     JTy::Array(t) => &**t,
                     _ => unreachable!(),
                 };
-                format!("new {}[{}]", t.gen(cxt), len.gen(cxt))
+                format!("new {}[{}]", t.gen(cxt), len.gen(cxt)?)
             }
             JTerm::ClassNew(class, a) => {
                 let mut buf = "new ".to_string();
@@ -658,43 +676,79 @@ impl JTerm {
                     }
                     first = false;
 
-                    buf.push_str(&i.gen(cxt));
+                    buf.push_str(&i.gen(cxt)?);
                 }
                 buf.push(')');
 
                 buf
             }
             JTerm::Index(arr, i, _) => {
-                format!("{}[{}]", arr.gen(cxt), i.gen(cxt))
+                format!("{}[{}]", arr.gen(cxt)?, i.gen(cxt)?)
             }
             JTerm::SIndex(arr, i) => match &**i {
-                JTerm::Lit(JLit::Int(i)) => arr[*i as usize].gen(cxt),
-                _ => panic!("expected literal in static index, got {}", i.gen(cxt)),
+                JTerm::Lit(JLit::Int(i)) => arr
+                    .get(*i as usize)
+                    .ok_or(
+                        Doc::start("Index ")
+                            .add(i)
+                            .add(" out of bounds to static array with size ")
+                            .add(arr.len()),
+                    )?
+                    .gen(cxt)?,
+                _ => return Err(Doc::start(
+                    "Indexing a static array requires a statically known number, got ",
+                )
+                .add(i.gen(cxt)?)
+                .hardline()
+                .chain(
+                    Doc::start(
+                        "help: to generate a large switch statement, add `inline` before the index",
+                    )
+                    .style(crate::pretty::Style::Special),
+                )),
             },
             JTerm::InlineJava(raw, _) => cxt.bindings.resolve_raw(*raw).to_string(),
-        }
+        })
     }
 }
 impl JLVal {
-    fn gen(&self, cxt: &mut Gen) -> String {
-        match self {
+    fn gen(&self, cxt: &mut Gen) -> Result<String, Doc> {
+        Ok(match self {
             JLVal::Var(v) => cxt.name_str(*v),
-            JLVal::Idx(l, i) => format!("{}[{}]", l.gen(cxt), i.gen(cxt)),
+            JLVal::Idx(l, i) => format!("{}[{}]", l.gen(cxt)?, i.gen(cxt)?),
             JLVal::SIdx(arr, i) => match i {
-                JTerm::Lit(JLit::Int(i)) => arr[*i as usize].gen(cxt),
-                _ => panic!("expected literal in static index set, got {:?}", i),
+                JTerm::Lit(JLit::Int(i)) => arr
+                    .get(*i as usize)
+                    .ok_or(
+                        Doc::start("Index ")
+                            .add(i)
+                            .add(" out of bounds to static array with size ")
+                            .add(arr.len()),
+                    )?
+                    .gen(cxt)?,
+                _ => return Err(Doc::start(
+                    "Indexing a static array requires a statically known number, got ",
+                )
+                .add(i.gen(cxt)?)
+                .hardline()
+                .chain(
+                    Doc::start(
+                        "help: to generate a large switch statement, add `inline` before the index",
+                    )
+                    .style(crate::pretty::Style::Special),
+                )),
             },
-            JLVal::Prop(a, b) => format!("{}.{}", a.gen(cxt), b.gen(cxt)),
-        }
+            JLVal::Prop(a, b) => format!("{}.{}", a.gen(cxt)?, b.gen(cxt)),
+        })
     }
 }
 impl JStmt {
-    fn gen(&self, cxt: &mut Gen) -> String {
-        match self {
+    fn gen(&self, cxt: &mut Gen) -> Result<String, Doc> {
+        Ok(match self {
             JStmt::Multi(v) => {
                 let mut s = String::new();
                 for i in v {
-                    s.push_str(&i.gen(cxt));
+                    s.push_str(&i.gen(cxt)?);
                 }
                 s
             }
@@ -715,28 +769,28 @@ impl JStmt {
                     cxt.indent(),
                     t.gen(cxt),
                     cxt.name_str(*v),
-                    x.gen(cxt)
+                    x.gen(cxt)?
                 )
             }
             JStmt::Set(v, op, x) => {
                 format!(
                     "\n{}{} {}= {};",
                     cxt.indent(),
-                    v.gen(cxt),
+                    v.gen(cxt)?,
                     op.map_or("", |op| op.repr()),
-                    x.gen(cxt)
+                    x.gen(cxt)?
                 )
             }
             JStmt::Term(x) => {
-                let mut s = x.gen(cxt);
+                let mut s = x.gen(cxt)?;
                 s.push(';');
                 s
             }
             JStmt::While(k, cond, block) => {
-                let mut s = format!("\n{}b${}: while ({}) {{", cxt.indent(), k.0, cond.gen(cxt));
+                let mut s = format!("\n{}b${}: while ({}) {{", cxt.indent(), k.0, cond.gen(cxt)?);
                 cxt.push();
                 for i in block {
-                    s.push_str(&i.gen(cxt));
+                    s.push_str(&i.gen(cxt)?);
                 }
                 cxt.pop();
 
@@ -748,10 +802,12 @@ impl JStmt {
             }
             JStmt::RangeFor(k, n, var, a, b, block, unroll) => {
                 if *unroll {
-                    panic!(
-                        "Couldn't unroll range-for loop! Ends are {:?} .. {:?}",
-                        a, b
-                    );
+                    return Err(Doc::start(
+                        "Unrolled for loop requires statically known endpoints, got ",
+                    )
+                    .add(a.gen(cxt)?)
+                    .add(" and ")
+                    .add(b.gen(cxt)?));
                 }
 
                 cxt.names.insert(var.0, (lpath(Spanned::hack(*n)), !var.1));
@@ -761,9 +817,9 @@ impl JStmt {
                     cxt.indent(),
                     k.0,
                     i,
-                    a.gen(cxt),
+                    a.gen(cxt)?,
                     k.0,
-                    b.gen(cxt),
+                    b.gen(cxt)?,
                     i,
                     k.0,
                     i
@@ -771,7 +827,7 @@ impl JStmt {
 
                 cxt.push();
                 for i in block {
-                    s.push_str(&i.gen(cxt));
+                    s.push_str(&i.gen(cxt)?);
                 }
                 cxt.pop();
 
@@ -785,7 +841,7 @@ impl JStmt {
             JStmt::Break(k) => format!("\n{}break b${};", cxt.indent(), k.0),
             JStmt::Ret(_, v) if v.is_empty() => format!("\n{}return;", cxt.indent()),
             JStmt::Ret(_, v) if v.len() == 1 => {
-                format!("\n{}return {};", cxt.indent(), v[0].gen(cxt))
+                format!("\n{}return {};", cxt.indent(), v[0].gen(cxt)?)
             }
             JStmt::Ret(f, v) => {
                 let mut s = String::new();
@@ -793,7 +849,7 @@ impl JStmt {
                 for (i, t) in v.iter().enumerate() {
                     s.push('\n');
                     s.push_str(cxt.indent());
-                    write!(s, "{}$_ret{}$S = {};", cxt.fn_str(*f), i, t.gen(cxt)).unwrap();
+                    write!(s, "{}$_ret{}$S = {};", cxt.fn_str(*f), i, t.gen(cxt)?).unwrap();
                 }
 
                 s.push('\n');
@@ -802,10 +858,10 @@ impl JStmt {
                 s
             }
             JStmt::If(cond, a, b) => {
-                let mut s = format!("\n{}if ({}) {{", cxt.indent(), cond.gen(cxt));
+                let mut s = format!("\n{}if ({}) {{", cxt.indent(), cond.gen(cxt)?);
                 cxt.push();
                 for i in a {
-                    s.push_str(&i.gen(cxt));
+                    s.push_str(&i.gen(cxt)?);
                 }
                 cxt.pop();
 
@@ -818,7 +874,7 @@ impl JStmt {
 
                     s.push_str(" else {");
                     for i in b {
-                        s.push_str(&i.gen(cxt));
+                        s.push_str(&i.gen(cxt)?);
                     }
                     cxt.pop();
 
@@ -830,7 +886,7 @@ impl JStmt {
                 s
             }
             JStmt::Switch(k, x, branches, default) => {
-                let mut s = format!("\n{}b${}: switch ({}) {{", cxt.indent(), k.0, x.gen(cxt));
+                let mut s = format!("\n{}b${}: switch ({}) {{", cxt.indent(), k.0, x.gen(cxt)?);
                 for (sym, block) in branches {
                     // case Variant:
                     s.push('\n');
@@ -841,7 +897,7 @@ impl JStmt {
 
                     cxt.push();
                     for i in block {
-                        s.push_str(&i.gen(cxt));
+                        s.push_str(&i.gen(cxt)?);
                     }
                     s.push('\n');
                     s.push_str(cxt.indent());
@@ -854,7 +910,7 @@ impl JStmt {
                 s.push_str("default:");
                 cxt.push();
                 for i in default {
-                    s.push_str(&i.gen(cxt));
+                    s.push_str(&i.gen(cxt)?);
                 }
                 cxt.pop();
 
@@ -868,10 +924,11 @@ impl JStmt {
                 let buf = o
                     .as_ref()
                     .map(|x| {
-                        let mut s = x.gen(cxt);
+                        let mut s = x.gen(cxt)?;
                         s.push('.');
-                        s
+                        Ok(s)
                     })
+                    .transpose()?
                     .unwrap_or_default();
                 let mut buf = format!("\n{}{}", cxt.indent(), buf);
                 buf.push_str(&cxt.fn_str(*f));
@@ -884,7 +941,7 @@ impl JStmt {
                     }
                     first = false;
 
-                    buf.push_str(&i.gen(cxt));
+                    buf.push_str(&i.gen(cxt)?);
                 }
                 buf.push_str(");");
 
@@ -920,7 +977,7 @@ impl JStmt {
                 cxt.indent(),
                 cxt.bindings.resolve_raw(*s).to_string()
             ),
-        }
+        })
     }
 }
 impl JTy {
@@ -950,7 +1007,7 @@ impl JTy {
     }
 }
 impl JFn {
-    fn gen(&self, cxt: &mut Gen, is_static: bool) -> String {
+    fn gen(&self, cxt: &mut Gen, is_static: bool) -> Result<String, Doc> {
         let mut buf = String::new();
 
         if self.ret_tys.len() != 1 {
@@ -1011,7 +1068,7 @@ impl JFn {
         for i in &self.body {
             buf.push('\n');
             buf.push_str(cxt.indent());
-            buf.push_str(&i.gen(cxt));
+            buf.push_str(&i.gen(cxt)?);
         }
 
         cxt.names = names;
@@ -1021,14 +1078,17 @@ impl JFn {
         buf.push_str(cxt.indent());
         buf.push_str("}\n");
         buf.push_str(cxt.indent());
-        buf
+        Ok(buf)
     }
 }
 impl JItem {
-    fn gen(&self, cxt: &mut Gen) -> String {
+    fn gen(&self, cxt: &mut Gen) -> Result<String, Error> {
         match self {
-            JItem::Fn(f) => f.gen(cxt, true),
+            JItem::Fn(f) => f
+                .gen(cxt, true)
+                .map_err(|e| Spanned::new(e, cxt.fn_span(f.fn_id))),
             JItem::Class(tid, members, methods) => {
+                let span = cxt.class_span(*tid);
                 let mut buf = String::new();
 
                 write!(buf, "public static class {} {{", cxt.class_str(*tid)).unwrap();
@@ -1050,7 +1110,7 @@ impl JItem {
                 cxt.push();
                 for (vars, block) in members {
                     for stmt in block {
-                        buf.push_str(&stmt.gen(cxt));
+                        buf.push_str(&stmt.gen(cxt).map_err(|e| Spanned::new(e, span))?);
                         buf.push_str("\n");
                         buf.push_str(cxt.indent());
                     }
@@ -1062,7 +1122,7 @@ impl JItem {
                                 "\n{}{} = {};",
                                 cxt.indent(),
                                 cxt.name_str(*r),
-                                x.gen(cxt)
+                                x.gen(cxt).map_err(|e| Spanned::new(e, span))?
                             )
                             .unwrap();
                         }
@@ -1073,7 +1133,7 @@ impl JItem {
                 buf.push('\n');
                 buf.push_str(cxt.indent());
                 for f in methods {
-                    buf.push_str(&f.gen(cxt, false));
+                    buf.push_str(&f.gen(cxt, false).map_err(|e| Spanned::new(e, span))?);
                 }
 
                 cxt.pop();
@@ -1082,9 +1142,10 @@ impl JItem {
                 buf.push_str("}\n");
                 buf.push_str(cxt.indent());
 
-                buf
+                Ok(buf)
             }
             JItem::Enum(tid, variants, wrapper, methods) => {
+                let span = cxt.class_span(*tid);
                 let mut buf = String::new();
                 write!(buf, "public static enum {} {{", cxt.class_str(*tid)).unwrap();
                 cxt.push();
@@ -1100,7 +1161,7 @@ impl JItem {
                     buf.pop();
                     buf.push(';');
                     for f in methods {
-                        buf.push_str(&f.gen(cxt, false));
+                        buf.push_str(&f.gen(cxt, false).map_err(|e| Spanned::new(e, span))?);
                     }
                 }
 
@@ -1140,7 +1201,7 @@ impl JItem {
                     buf.push('\n');
                     buf.push_str(cxt.indent());
                     for f in methods {
-                        buf.push_str(&f.gen(cxt, false));
+                        buf.push_str(&f.gen(cxt, false).map_err(|e| Spanned::new(e, span))?);
                     }
 
                     cxt.pop();
@@ -1149,9 +1210,14 @@ impl JItem {
                     buf.push_str("}\n");
                     buf.push_str(cxt.indent());
                 }
-                buf
+                Ok(buf)
             }
             JItem::Let(vars, block) => {
+                let span = vars
+                    .iter()
+                    .next()
+                    .map(|x| cxt.name_span(x.0))
+                    .unwrap_or(Span(0, 0));
                 let mut buf = String::new();
                 for (var, ty, _term) in vars {
                     write!(
@@ -1168,7 +1234,7 @@ impl JItem {
                     cxt.push();
                     buf.push_str(cxt.indent());
                     for stmt in block {
-                        buf.push_str(&stmt.gen(cxt));
+                        buf.push_str(&stmt.gen(cxt).map_err(|e| Spanned::new(e, span))?);
                         buf.push_str("\n");
                         buf.push_str(cxt.indent());
                     }
@@ -1178,7 +1244,7 @@ impl JItem {
                                 buf,
                                 "{} = {};\n{}",
                                 cxt.name_str(*var),
-                                value.gen(cxt),
+                                value.gen(cxt).map_err(|e| Spanned::new(e, span))?,
                                 cxt.indent(),
                             )
                             .unwrap();
@@ -1190,7 +1256,7 @@ impl JItem {
                     cxt.pop();
                     buf.push_str(cxt.indent());
                 }
-                buf
+                Ok(buf)
             }
         }
     }
@@ -2228,14 +2294,14 @@ impl Item {
     fn lower(&self, cxt: &mut Cxt) {
         match self {
             // Module-level inline java is handled by codegen()
-            Item::InlineJava(_) => (),
+            Item::InlineJava(_, _) => (),
             Item::Fn(f) => {
                 if !f.inline {
                     let f = f.lower(cxt);
                     cxt.items.push(JItem::Fn(f));
                 }
             }
-            Item::Enum(tid, variants, ext, _members, methods) => {
+            Item::Enum(tid, variants, ext, _members, methods, _) => {
                 if !ext {
                     let class = cxt.class(*tid).unwrap();
                     let variants = variants
@@ -2253,7 +2319,7 @@ impl Item {
                     ));
                 }
             }
-            Item::Class(tid, members, methods) => {
+            Item::Class(tid, members, methods, _) => {
                 let class = cxt.class(*tid).unwrap();
                 let members = members
                     .iter()
@@ -2293,8 +2359,8 @@ impl Item {
                 cxt.items.push(JItem::Class(class, members, methods));
             }
             Item::ExternFn(_) => (),
-            Item::ExternClass(_, _) => (),
-            Item::Let(name, ty, None) => {
+            Item::ExternClass(_, _, _) => (),
+            Item::Let(name, ty, None, _) => {
                 let var = cxt.var(*name).unwrap();
                 let ty = ty.lower(cxt);
                 assert_eq!(var.len(), ty.len());
@@ -2303,7 +2369,7 @@ impl Item {
                     Vec::new(),
                 ));
             }
-            Item::Let(name, ty, Some(x)) => {
+            Item::Let(name, ty, Some(x), _) => {
                 cxt.push_block();
                 let var = cxt.var(*name).unwrap();
                 let ty = ty.lower(cxt);
@@ -2711,8 +2777,8 @@ impl JLVal {
             JLVal::Var(v) => Some(*v),
             JLVal::Idx(l, _) => l.root_var(),
             JLVal::SIdx(l, i) => match i {
-                JTerm::Lit(JLit::Int(i)) => l[*i as usize].root_var(),
-                _ => None, //panic!("expected int literal in static index root_var but got {:?}", i),
+                JTerm::Lit(JLit::Int(i)) => l.get(*i as usize)?.root_var(),
+                _ => None,
             },
             JLVal::Prop(JTerm::Var(v, _), _) => Some(*v),
             JLVal::Prop(_, _) => None,
@@ -3103,7 +3169,7 @@ impl JLVal {
         }
     }
 
-    fn set(&mut self, env: &mut Env, val: Option<CVal>) {
+    fn set(&mut self, env: &mut Env, val: Option<CVal>) -> Result<(), Doc> {
         match self {
             JLVal::Var(v) => {
                 env.not_modified.remove(v);
@@ -3124,10 +3190,20 @@ impl JLVal {
                 }
             }
             JLVal::SIdx(arr, idx) => match idx.prop(env) {
-                Some(CVal::Int(i)) => arr[i as usize].set(env, val),
+                Some(CVal::Int(i)) => {
+                    let len = arr.len();
+                    arr.get_mut(i as usize)
+                        .ok_or(
+                            Doc::start("Index ")
+                                .add(i)
+                                .add(" out of bounds to static array with size ")
+                                .add(len),
+                        )?
+                        .set(env, val)?
+                }
                 _ => {
                     for i in arr {
-                        i.set(env, None);
+                        i.set(env, None)?;
                     }
                 }
             },
@@ -3148,7 +3224,7 @@ impl JLVal {
                         if let Some(CVal::Array { mut idxs, end, len }) = l.get(env) {
                             idxs.insert(i as usize, val);
                             l.set(env, Some(CVal::Array { idxs, end, len }));
-                            return;
+                            return Ok(());
                         }
                     }
                 }
@@ -3156,10 +3232,11 @@ impl JLVal {
                 l.set(env, None);
             }
         }
+        Ok(())
     }
 }
 impl JStmt {
-    fn prop(&mut self, env: &mut Env) {
+    fn prop(&mut self, env: &mut Env) -> Result<(), Doc> {
         match self {
             JStmt::Let(_, _, v, x) => {
                 let x = x.as_mut().map(|x| x.prop(env)).flatten();
@@ -3183,7 +3260,7 @@ impl JStmt {
                                 l.set(env, None);
                             }
                         }
-                        None => l.set(env, Some(x)),
+                        None => l.set(env, Some(x))?,
                     }
                 } else {
                     l.set(env, None);
@@ -3334,6 +3411,7 @@ impl JStmt {
                 }
             }
         }
+        Ok(())
     }
 }
 impl BinOp {
@@ -3496,6 +3574,9 @@ impl JTerm {
             }
             JTerm::SIndex(arr, idx) => match idx.prop(env) {
                 Some(CVal::Int(i)) => {
+                    if i as usize > arr.len() || i < 0 {
+                        return None;
+                    }
                     *self = arr.swap_remove(i as usize);
                     self.prop(env)
                 }
