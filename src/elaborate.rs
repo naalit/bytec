@@ -457,6 +457,7 @@ enum TypeError {
     TypeNeeded(Span),
     SelfOutsideClass(Span),
     NonRefNull(Span, Type),
+    ArrayExternArg(Span),
 }
 impl TypeError {
     fn to_error(self, bindings: &Bindings) -> Error {
@@ -537,9 +538,13 @@ impl TypeError {
             ),
             TypeError::NonRefNull(span, ty) => Spanned::new(
                 Doc::start(
-                    "null only applies to reference types - classes, enums, and str - not type ",
+                    "`null` only applies to reference types - classes, enums, and `str` - not type ",
                 )
                 .chain(ty.pretty(bindings)),
+                span,
+            ),
+            TypeError::ArrayExternArg(span) => Spanned::new(
+                Doc::start("Dynamic arrays are not currently supported as extern function arguments"),
                 span,
             ),
         }
@@ -618,6 +623,9 @@ impl<'b> Cxt<'b> {
                                 let mut args2 = Vec::new();
                                 for (s, t, _) in &f.args {
                                     let t = self.elab_type(t)?;
+                                    if let Type::Array(_) = t {
+                                        return Err(TypeError::ArrayExternArg(s.span));
+                                    }
                                     args.push(t.clone());
                                     args2.push((self.bindings.create(lpath(*s), true), t));
                                 }
@@ -743,8 +751,11 @@ impl<'b> Cxt<'b> {
             }
             PreItem::ExternFn(f) => {
                 let mut args = Vec::new();
-                for (_s, t, _) in &f.args {
+                for (s, t, _) in &f.args {
                     let t = self.elab_type(t)?;
+                    if let Type::Array(_) = t {
+                        return Err(TypeError::ArrayExternArg(s.span));
+                    }
                     args.push(t);
                 }
                 let rty = self.elab_type(&f.ret_ty)?;

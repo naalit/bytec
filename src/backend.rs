@@ -211,7 +211,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
                 }
                 if !fixed {
                     return Err(Spanned::new(
-                        Doc::start("Extern function cannot return a tuple"),
+                        Doc::start("Extern function cannot return a tuple or static array"),
                         span,
                     ));
                 }
