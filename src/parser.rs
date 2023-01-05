@@ -630,15 +630,18 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn path(&mut self) -> Option<RawPath> {
-        let mut name = self.ident()?;
+    fn path(&mut self) -> Result<Option<RawPath>, Error> {
+        let mut name = match self.ident() {
+            Some(name) => name,
+            None => return Ok(None),
+        };
         let mut v = Vec::new();
         while self.peek().as_deref() == Some(&Tok::DoubleColon) {
             self.next();
             v.push(name);
-            name = self.ident().unwrap();
+            name = self.ident().ok_or(self.err("expected name"))?;
         }
-        Some(RawPath(v, name))
+        Ok(Some(RawPath(v, name)))
     }
 
     fn term(&mut self) -> Result<Option<SPre>, Error> {
@@ -1041,7 +1044,7 @@ impl<'a> Parser<'a> {
             }
             // variable or function or method call
             Some(Tok::Name(_)) => {
-                let name = self.path().unwrap();
+                let name = self.path()?.unwrap();
                 let var = Box::new(Spanned::new(Pre::Var(name.clone()), name.span()));
                 match self.peek().as_deref() {
                     Some(Tok::OpenParen) => {
@@ -1246,7 +1249,7 @@ impl<'a> Parser<'a> {
                 }
             }
             Some(Tok::Name(_)) => {
-                let path = self.path().unwrap();
+                let path = self.path()?.unwrap();
                 Ok(Some(PreType::Class(path)))
             }
             _ => Ok(None),
@@ -1303,7 +1306,7 @@ impl<'a> Parser<'a> {
 
     /// Parses an enum declaration, starting right after the `enum` keyword
     fn enum_dec(&mut self, ext: bool) -> Result<PreItem, Error> {
-        let name = self.path().ok_or(self.err("expected enum name"))?;
+        let name = self.path()?.ok_or(self.err("expected enum name"))?;
         self.expect(Tok::OpenBrace, "'{'")?;
 
         let mut v = Vec::new();
@@ -1512,7 +1515,7 @@ impl<'a> Parser<'a> {
     }
 
     fn class(&mut self, ext: bool) -> Result<Option<PreItem>, Error> {
-        let path = self.path().ok_or(self.err("expected class name"))?;
+        let path = self.path()?.ok_or(self.err("expected class name"))?;
         match self.peek().as_deref() {
             Some(Tok::Semicolon) => {
                 self.next();
@@ -1803,7 +1806,7 @@ impl<'a> Parser<'a> {
                                 Doc::start("Unexpected ")
                                     .debug(self.peek().unwrap().inner)
                                     .add(", expected statement"),
-                                Span(self.lexer.pos, self.lexer.pos + 1),
+                                self.peek().unwrap().span,
                             ));
                         }
                     }

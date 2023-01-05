@@ -200,9 +200,17 @@ impl Server {
         eprintln!("Starting diagnostic publishing...");
 
         if !self.file_ids.contains_key(&file_changed) {
-            let mod_name = self
-                .bindings
-                .raw(file_changed.path_segments().unwrap().nth_back(1).unwrap());
+            let mod_name = self.bindings.raw(
+                file_changed
+                    .path_segments()
+                    .unwrap()
+                    .next_back()
+                    .unwrap()
+                    .split('.')
+                    .next()
+                    .unwrap(),
+            );
+            eprintln!("module {}", self.bindings.resolve_raw(mod_name));
             self.file_ids
                 .insert(file_changed.clone(), FileId(self.file_ids.len(), mod_name));
             INPUT_PATH.write().unwrap().insert(
