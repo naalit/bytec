@@ -176,7 +176,7 @@ pub fn elab_mod(
     extra_items: Vec<Item>,
     bindings: &mut Bindings,
     file_id: FileId,
-) -> Result<Vec<Item>, Error> {
+) -> (Vec<Item>, Vec<Error>) {
     let mut cxt = Cxt::from_type(
         t,
         mods.into_iter().cloned().collect(),
@@ -188,19 +188,20 @@ pub fn elab_mod(
 
     // Define
     for i in m {
-        match cxt.check_item(i) {
-            Ok(x) => {
-                for x in x {
-                    v.push(x);
-                }
-            }
-            Err(e) => return Err(e.to_error(bindings)),
+        for x in cxt.check_item(i) {
+            v.push(x);
         }
     }
 
     v.append(&mut cxt.extra_items);
 
-    Ok(v)
+    let errors = cxt
+        .errors
+        .into_iter()
+        .map(|e| e.to_error(bindings))
+        .collect();
+
+    (v, errors)
 }
 
 /// Implements scoping with a Vec instead of a HashMap. We search from the back, so we can use it like a stack.
@@ -249,7 +250,7 @@ impl<S: Copy, T> Env<S, T> {
     }
 }
 
-struct Cxt<'b> {
+pub struct Cxt<'b> {
     vars: Env<Sym, Type>,
     fns: Env<FnId, FnType>,
     local_classes: HashMap<RawSym, TypeId>,
@@ -260,9 +261,10 @@ struct Cxt<'b> {
     mods: HashMap<RawSym, ModType>,
     extra_items: Vec<Item>,
     file_id: FileId,
+    errors: Vec<TypeError>,
 }
 impl<'b> Cxt<'b> {
-    fn new(bindings: &'b mut Bindings, file_id: FileId) -> Self {
+    pub fn new(bindings: &'b mut Bindings, file_id: FileId) -> Self {
         Cxt {
             vars: Env::new(),
             fns: Env::new(),
@@ -274,10 +276,11 @@ impl<'b> Cxt<'b> {
             mods: HashMap::new(),
             extra_items: Vec::new(),
             file_id,
+            errors: Vec::new(),
         }
     }
 
-    fn from_type(
+    pub fn from_type(
         ModType {
             vars,
             fns,
@@ -300,6 +303,7 @@ impl<'b> Cxt<'b> {
             mods,
             extra_items,
             file_id,
+            errors: Vec::new(),
         }
     }
 
@@ -353,7 +357,7 @@ impl<'b> Cxt<'b> {
     fn module(&self, s: RawSym) -> Option<&ModType> {
         self.mods.get(&s)
     }
-    fn class_info(&self, class: TypeId) -> &ClassInfo {
+    pub fn class_info(&self, class: TypeId) -> &ClassInfo {
         self.classes
             .values()
             .find(|(x, _)| *x == class)
@@ -893,7 +897,17 @@ impl<'b> Cxt<'b> {
         })
     }
 
-    fn check_item(&mut self, item: &PreItem) -> Result<Vec<Item>, TypeError> {
+    fn check_item(&mut self, item: &PreItem) -> Vec<Item> {
+        match self.check_item_(item) {
+            Ok(v) => v,
+            Err(e) => {
+                self.errors.push(e);
+                Vec::new()
+            }
+        }
+    }
+
+    fn check_item_(&mut self, item: &PreItem) -> Result<Vec<Item>, TypeError> {
         match item {
             PreItem::InlineJava(s, span) => Ok(vec![Item::InlineJava(*s, *span)]),
             PreItem::Fn(f) => {
@@ -1091,7 +1105,17 @@ impl<'b> Cxt<'b> {
         }
     }
 
-    fn check_stmt(&mut self, stmt: &PreStatement) -> Result<Option<Statement>, TypeError> {
+    fn check_stmt(&mut self, stmt: &PreStatement) -> Option<Statement> {
+        match self.check_stmt_(stmt) {
+            Ok(s) => s,
+            Err(e) => {
+                self.errors.push(e);
+                None
+            }
+        }
+    }
+
+    fn check_stmt_(&mut self, stmt: &PreStatement) -> Result<Option<Statement>, TypeError> {
         match stmt {
             PreStatement::Item(
                 item @ (PreItem::Fn(_)
@@ -1103,7 +1127,7 @@ impl<'b> Cxt<'b> {
                 self.declare_item_p2(item)?;
                 self.declare_item_p3(item)?;
                 self.declare_item_p4(item)?;
-                for item in self.check_item(item)? {
+                for item in self.check_item(item) {
                     self.extra_items.push(item);
                 }
                 Ok(None)
@@ -1128,7 +1152,7 @@ impl<'b> Cxt<'b> {
                 let mut block2 = Vec::new();
                 self.push(None);
                 for i in block {
-                    self.check_stmt(i)?.map(|x| block2.push(x));
+                    self.check_stmt(i).map(|x| block2.push(x));
                 }
                 self.pop();
 
@@ -1156,7 +1180,7 @@ impl<'b> Cxt<'b> {
                 let n = self.create(*s, t, *public);
                 let mut block2 = Vec::new();
                 for i in block {
-                    self.check_stmt(i)?.map(|x| block2.push(x));
+                    self.check_stmt(i).map(|x| block2.push(x));
                 }
                 self.pop();
                 Ok(Some(Statement::For(n, iter, block2)))
@@ -1297,12 +1321,21 @@ impl<'b> Cxt<'b> {
             Pre::Member(px, m) => {
                 let (x, t) = self.infer(px)?;
                 match t {
-                    Type::Class(t) => {
-                        let info = self.class_info(t);
+                    Type::Class(tid) => {
+                        let info = self.class_info(tid);
                         if let Some((_, s, t)) = info.members.iter().find(|(s, _, _)| *s == **m) {
-                            Ok((Term::Member(Box::new(x), *s), t.clone()))
+                            Ok((
+                                Term::Member(Box::new(x), tid, Spanned::new(*s, m.span)),
+                                t.clone(),
+                            ))
                         } else {
-                            Err(TypeError::NotFound(lpath(*m)))
+                            let s = self.bindings.create(lpath(*m), false);
+                            let s = Spanned::new(s, m.span);
+                            self.errors.push(TypeError::NotFound(lpath(*m)));
+                            Ok((
+                                Term::Member(Box::new(x), tid, Spanned::new(*s, m.span)),
+                                Type::Unit,
+                            ))
                         }
                     }
                     t => Err(TypeError::NoMembers(px.span, t)),
@@ -1457,7 +1490,7 @@ impl<'b> Cxt<'b> {
 
                 let mut v2 = Vec::new();
                 for i in v {
-                    for x in self.check_stmt(i)? {
+                    for x in self.check_stmt(i) {
                         v2.push(x);
                     }
                 }
@@ -1639,7 +1672,8 @@ impl<'b> Cxt<'b> {
                 if ty == ity {
                     Ok(term)
                 } else {
-                    Err(TypeError::Unify(pre.span, ity, ty))
+                    self.errors.push(TypeError::Unify(pre.span, ity, ty));
+                    Ok(term)
                 }
             }
         }

@@ -1482,6 +1482,7 @@ impl LValue {
 impl Term {
     fn lower(&self, cxt: &mut Cxt) -> JTerms {
         JTerms::One(match self {
+            Term::Error => panic!("type error reached backend!"),
             Term::Var(s) => {
                 let var = cxt.var(*s).unwrap();
                 return var.map(|var| JTerm::Var(var, cxt.tys.get(&var).unwrap().clone()));
@@ -1562,10 +1563,10 @@ impl Term {
                 let x = x.lower(cxt);
                 x.to_vec().swap_remove(*i)
             }
-            Term::Member(x, m) => {
+            Term::Member(x, _, m) => {
                 let mut x = x.lower(cxt).one();
                 // TODO get actual type somehow
-                let m = cxt.var(*m).unwrap();
+                let m = cxt.var(**m).unwrap();
                 if m.len() > 1 {
                     if !x.simple() {
                         let raw = cxt.bindings.raw("$_class");

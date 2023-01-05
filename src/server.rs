@@ -20,6 +20,8 @@ pub struct Server {
     source: HashMap<Url, Rope>,
     parsed: HashMap<Url, Vec<PreItem>>,
     bindings: Bindings,
+    last_mods: Vec<crate::driver::ModStatus>,
+    last_mod_tys: HashMap<RawSym, crate::term::ModType>,
     // db: DatabaseImpl,
 }
 impl Server {
@@ -38,6 +40,10 @@ impl Server {
             )),
             definition_provider: Some(OneOf::Left(true)),
             hover_provider: Some(HoverProviderCapability::Simple(true)),
+            completion_provider: Some(CompletionOptions {
+                trigger_characters: Some(vec!['.'.into()]),
+                ..CompletionOptions::default()
+            }),
             ..Default::default()
         })
         .unwrap();
@@ -53,6 +59,8 @@ impl Server {
             connection,
             initialization_params,
             bindings: Default::default(),
+            last_mods: Vec::new(),
+            last_mod_tys: Default::default(),
             // db: DatabaseImpl::default(),
         }
     }
@@ -132,6 +140,75 @@ impl Server {
                 //     error: None,
                 // };
                 // self.connection.sender.send(lsp::Message::Response(resp))?;
+            }
+            request::Completion::METHOD => {
+                let (id, params): (_, lsp_types::CompletionParams) =
+                    msg.extract(request::Completion::METHOD)?;
+                let url = &params.text_document_position.text_document.uri;
+                let file = self.file_ids[&params.text_document_position.text_document.uri];
+                let pos = params.text_document_position.position;
+                let source = self.source.get(url).unwrap();
+                let pos = source
+                    .char_to_byte(source.line_to_char(pos.line as usize) + pos.character as usize);
+                if let Some(module) = self.last_mods.iter().find(|m| m.file == file) {
+                    if let Some(item) = module
+                        .items
+                        .iter()
+                        .enumerate()
+                        .find(|(_, m)| m.span().0 > pos)
+                        .and_then(|(i, _)| module.items.get(i - 1))
+                        .or_else(|| module.items.last())
+                    {
+                        let mut found = None;
+                        item.visit(&mut |x| match x {
+                            Term::Member(_, t, m) if m.span.0 <= pos + 1 && m.span.1 + 1 >= pos => {
+                                found = Some(*t)
+                            }
+                            _ => (),
+                        });
+                        if let Some(found) = found {
+                            let info = crate::elaborate::Cxt::from_type(
+                                module.ty.clone(),
+                                self.last_mod_tys.clone(),
+                                Vec::new(),
+                                &mut self.bindings,
+                                file,
+                            )
+                            .class_info(found)
+                            .clone();
+                            let members = info.members.iter().map(|(s, _, t)| CompletionItem {
+                                label: self.bindings.resolve_raw(*s).into(),
+                                kind: Some(CompletionItemKind::PROPERTY),
+                                detail: Some(t.pretty(&self.bindings).raw_string()),
+                                ..Default::default()
+                            });
+                            let methods = info.methods.iter().map(|(s, _, t)| CompletionItem {
+                                label: format!("{}(...)", self.bindings.resolve_raw(*s)),
+                                kind: Some(CompletionItemKind::METHOD),
+                                detail: Some(t.pretty(&self.bindings).raw_string()),
+                                insert_text: Some(format!("{}($0)", self.bindings.resolve_raw(*s))),
+                                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                                ..Default::default()
+                            });
+                            let result =
+                                CompletionResponse::Array(members.chain(methods).collect());
+                            let result = serde_json::to_value(&result)?;
+                            let resp = lsp::Response {
+                                id,
+                                result: Some(result),
+                                error: None,
+                            };
+                            self.connection.sender.send(lsp::Message::Response(resp))?;
+                            return Ok(());
+                        }
+                    }
+                }
+                let resp = lsp::Response {
+                    id,
+                    result: Some(serde_json::Value::Null),
+                    error: None,
+                };
+                self.connection.sender.send(lsp::Message::Response(resp))?;
             }
             GotoDefinition::METHOD => {
                 eprintln!("Handling GoToDefinition");
@@ -229,14 +306,12 @@ impl Server {
             &mut self.bindings,
             &mut defs,
         );
-        match parser.top_level() {
-            Ok(v) => {
-                self.parsed.insert(file_changed.clone(), v);
-            }
-            Err(e) => {
-                diagnostics.push(self.lsp_error(e, Severity::Error, &file_changed));
-            }
-        }
+        let (v, e) = parser.top_level();
+        self.parsed.insert(file_changed.clone(), v);
+        diagnostics.extend(
+            e.into_iter()
+                .map(|e| self.lsp_error(e, Severity::Error, &file_changed)),
+        );
         let mut driver = Driver::new(
             self.parsed
                 .iter()
@@ -263,6 +338,8 @@ impl Server {
             .sender
             .send(lsp::Message::Notification(message))
             .unwrap();
+        self.last_mods = driver.mods;
+        self.last_mod_tys = driver.mods_pre.into_iter().collect();
         eprintln!("Published diagnostics!");
     }
 

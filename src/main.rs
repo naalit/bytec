@@ -121,19 +121,14 @@ fn main() {
         }
 
         let mut parser = Parser::new(rope.slice(..), &mut bindings, &mut defs);
-        let v = parser.top_level();
-        match v {
-            Ok(v) => {
-                parsed.push((file_id, v, input));
-            }
-            Err(x) => {
-                had_err = true;
+        let (v, e) = parser.top_level();
+        parsed.push((file_id, v, input));
+        if !e.is_empty() {
+            had_err = true;
+            for x in e {
                 x.emit(term::Severity::Error, file_id)
             }
         }
-    }
-    if had_err {
-        std::process::exit(1)
     }
 
     let mut driver = Driver::new(parsed);
@@ -173,7 +168,7 @@ fn main() {
 
         elabed.push((module.items, out_path, module.file))
     }
-    if !driver.errors.is_empty() {
+    if !driver.errors.is_empty() || had_err {
         for (e, file) in driver.errors {
             e.emit(Severity::Error, file);
         }

@@ -295,7 +295,7 @@ pub enum Term {
     // (len, ty)
     ArrayNew(Box<Term>, Type),
     ArrayMethod(Box<Term>, ArrayMethod),
-    Member(Box<Term>, Sym),
+    Member(Box<Term>, TypeId, Spanned<Sym>),
     Constructor(TypeId, Vec<Term>),
     Set(LValue, Option<BinOp>, Box<Term>),
     Match(
@@ -306,6 +306,7 @@ pub enum Term {
     Not(Box<Term>),
     Null(Type),
     Selph(TypeId),
+    Error,
 }
 pub enum Statement {
     Term(Term),
@@ -331,6 +332,19 @@ pub enum Item {
     ),
     Class(TypeId, Vec<(Sym, Type, Option<Term>)>, Vec<Fn>, Span),
     Let(Sym, Type, Option<Term>, Span),
+}
+impl Item {
+    pub fn span(&self) -> Span {
+        match self {
+            Item::Fn(f) => f.span,
+            Item::ExternFn(f) => f.span,
+            Item::ExternClass(_, _, s) => *s,
+            Item::InlineJava(_, s) => *s,
+            Item::Enum(_, _, _, _, _, s) => *s,
+            Item::Class(_, _, _, s) => *s,
+            Item::Let(_, _, _, s) => *s,
+        }
+    }
 }
 pub struct Fn {
     pub id: FnId,
@@ -379,7 +393,7 @@ impl Term {
                 let b = b.to_lval()?;
                 Some(LValue::Idx(Box::new(b), i, sta))
             }
-            Term::Member(a, b) => Some(LValue::Member(a, b)),
+            Term::Member(a, _, b) => Some(LValue::Member(a, *b)),
             _ => None,
         }
     }
@@ -543,6 +557,111 @@ impl Pre {
     }
 }
 
+// Visitors
+
+impl Item {
+    pub fn visit(&self, f: &mut impl FnMut(&Term)) {
+        match self {
+            Item::Fn(x) => x.body.visit(f),
+            Item::ExternFn(_) | Item::ExternClass(_, _, _) | Item::InlineJava(_, _) => (),
+            Item::Enum(_, _, _, _, v, _) => v.iter().for_each(|x| x.body.visit(f)),
+            Item::Class(_, a, b, _) => {
+                a.iter()
+                    .filter_map(|(_, _, x)| x.as_ref())
+                    .for_each(|x| x.visit(f));
+                b.iter().for_each(|x| x.body.visit(f));
+            }
+            Item::Let(_, _, x, _) => x.iter().for_each(|x| x.visit(f)),
+        }
+    }
+}
+
+impl Term {
+    fn visit(&self, f: &mut impl FnMut(&Term)) {
+        f(self);
+        match self {
+            Term::Call(a, _, c) => {
+                a.iter().for_each(|x| x.visit(f));
+                c.iter().for_each(|x| x.visit(f));
+            }
+            Term::BinOp(_, a, b) => {
+                a.visit(f);
+                b.visit(f);
+            }
+            Term::Block(a, b) => {
+                a.iter().for_each(|x| x.visit(f));
+                b.iter().for_each(|x| x.visit(f));
+            }
+            Term::If(a, b, c) => {
+                a.visit(f);
+                b.visit(f);
+                c.iter().for_each(|x| x.visit(f));
+            }
+            Term::Return(a) => a.iter().for_each(|x| x.visit(f)),
+            Term::Variant(_, _, a) => a.iter().for_each(|x| x.visit(f)),
+            Term::Tuple(a) => a.iter().for_each(|x| x.visit(f)),
+            Term::TupleIdx(x, _) => x.visit(f),
+            Term::Array(a, _, _) => a.iter().for_each(|x| x.visit(f)),
+            Term::ArrayIdx(a, b, _, _, _) => {
+                a.visit(f);
+                b.visit(f);
+            }
+            Term::ArrayNew(x, _) => x.visit(f),
+            Term::ArrayMethod(x, _) => x.visit(f),
+            Term::Member(x, _, _) => x.visit(f),
+            Term::Constructor(_, a) => a.iter().for_each(|x| x.visit(f)),
+            Term::Set(a, _, b) => {
+                a.visit(f);
+                b.visit(f);
+            }
+            Term::Match(_, x, v) => {
+                x.visit(f);
+                v.iter().for_each(|(_, _, x)| x.visit(f));
+            }
+            Term::Not(_) => todo!(),
+            _ => (),
+        }
+    }
+}
+
+impl LValue {
+    fn visit(&self, f: &mut impl FnMut(&Term)) {
+        match self {
+            LValue::Var(_) => (),
+            LValue::Idx(l, x, _) => {
+                l.visit(f);
+                x.visit(f);
+            }
+            LValue::Member(x, _) => x.visit(f),
+        }
+    }
+}
+
+impl Statement {
+    fn visit(&self, f: &mut impl FnMut(&Term)) {
+        match self {
+            Statement::Term(x) => x.visit(f),
+            Statement::Let(_, _, x) => x.visit(f),
+            Statement::While(x, v) => {
+                x.visit(f);
+                v.iter().for_each(|x| x.visit(f));
+            }
+            Statement::For(_, i, v) => {
+                match i {
+                    ForIter::Range(a, b, _) => {
+                        a.visit(f);
+                        b.visit(f);
+                    }
+                    ForIter::Array(x) => x.visit(f),
+                    ForIter::SArray(x, _) => x.visit(f),
+                }
+                v.iter().for_each(|x| x.visit(f));
+            }
+            Statement::InlineJava(_) => (),
+        }
+    }
+}
+
 // Cloning logic
 
 struct Cloner<'a> {
@@ -597,6 +716,7 @@ impl Term {
 
     fn cloned_(&self, cln: &mut Cloner) -> Term {
         match self {
+            Term::Error => Term::Error,
             Term::Var(s) => Term::Var(cln.get(*s)),
             Term::Lit(l, t) => Term::Lit(*l, t.clone()),
             Term::Variant(tid, s, xs) => {
@@ -646,7 +766,7 @@ impl Term {
             Term::Break => Term::Break,
             Term::Continue => Term::Continue,
             Term::Return(x) => Term::Return(x.as_ref().map(|x| Box::new(x.cloned_(cln)))),
-            Term::Member(a, b) => Term::Member(Box::new(a.cloned_(cln)), *b),
+            Term::Member(a, t, b) => Term::Member(Box::new(a.cloned_(cln)), *t, *b),
             Term::Constructor(f, a) => {
                 Term::Constructor(*f, a.iter().map(|x| x.cloned_(cln)).collect())
             }
@@ -738,6 +858,7 @@ impl BinOp {
 impl Term {
     pub fn pretty(&self, cxt: &Bindings) -> Doc {
         match self {
+            Term::Error => Doc::start("<error>"),
             Term::Var(x) => Doc::start(cxt.resolve_local(*x)),
             Term::Lit(l, t) => match l {
                 Literal::Int(i) => Doc::start(i).add(match t {
@@ -859,7 +980,7 @@ impl Term {
             Term::Continue => Doc::keyword("continue"),
             Term::Return(None) => Doc::keyword("return"),
             Term::Return(Some(x)) => Doc::keyword("return").space().chain(x.pretty(cxt)),
-            Term::Member(x, m) => x.pretty(cxt).add('.').chain(cxt.sym_path(*m).pretty(cxt)),
+            Term::Member(x, _, m) => x.pretty(cxt).add('.').chain(cxt.sym_path(**m).pretty(cxt)),
             Term::Constructor(f, a) => cxt
                 .type_name(*f)
                 .pretty(cxt)
@@ -1068,6 +1189,17 @@ impl Type {
                 .add(u)
                 .add(']'),
         }
+    }
+}
+impl FnType {
+    pub fn pretty(&self, cxt: &Bindings) -> Doc {
+        Doc::start("fn(")
+            .chain(Doc::intersperse(
+                self.0.iter().map(|t| t.pretty(cxt)),
+                Doc::start(", "),
+            ))
+            .add("): ")
+            .chain(self.1.pretty(cxt))
     }
 }
 impl LValue {

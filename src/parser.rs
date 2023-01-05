@@ -472,7 +472,8 @@ impl IfDef {
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
     next: Option<Spanned<Tok>>,
-    next_err: Option<Error>,
+    errors: Vec<Error>,
+    had_lex_error: bool,
     is_real: bool,
     in_ifdef: bool,
     defs: &'a mut HashMap<RawSym, Option<Tok>>,
@@ -490,7 +491,8 @@ impl<'a> Parser<'a> {
                 pos: 0,
             },
             next: None,
-            next_err: None,
+            errors: Vec::new(),
+            had_lex_error: false,
             in_ifdef: false,
             is_real: true,
             defs,
@@ -501,7 +503,7 @@ impl<'a> Parser<'a> {
         match &self.next {
             Some(x) => Some(x.clone()),
             None => {
-                if self.next_err.is_some() {
+                if self.had_lex_error {
                     return None;
                 }
                 if let Some(x) = self.lexer.next() {
@@ -525,7 +527,8 @@ impl<'a> Parser<'a> {
                             Some(x)
                         }
                         Err(e) => {
-                            self.next_err = Some(e);
+                            self.errors.push(e);
+                            self.had_lex_error = true;
                             None
                         }
                     }
@@ -843,7 +846,14 @@ impl<'a> Parser<'a> {
                         let span = Span(t.span.0, self.lexer.pos);
                         t = Box::new(Spanned::new(Pre::TupleIdx(t, *i as usize), span));
                     } else {
-                        let name = self.ident().ok_or(self.err("expected method name"))?;
+                        let name = self.ident().unwrap_or_else(|| {
+                            let err = self.err("expected method name");
+                            self.errors.push(err);
+                            Spanned::new(
+                                self.lexer.bindings.raw("??"),
+                                Span(self.lexer.pos, self.lexer.pos),
+                            )
+                        });
                         if self.peek().as_deref() == Some(&Tok::OpenParen) {
                             let args = self.call_args()?;
                             let span = Span(t.span.0, self.lexer.pos);
@@ -1785,37 +1795,28 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn top_level(&mut self) -> Result<Vec<PreItem>, Error> {
+    pub fn top_level(&mut self) -> (Vec<PreItem>, Vec<Error>) {
         let mut v = Vec::new();
+        let mut errors = self.errors.split_off(0);
         while self.peek().is_some() {
             match self.item() {
                 Ok(Some(x)) => v.push(x),
                 Err(e) => {
-                    if let Some(x) = self.next_err.take() {
-                        return Err(x);
-                    } else {
-                        return Err(e);
-                    }
+                    errors.push(e);
                 }
                 Ok(None) => {
                     if self.peek().is_some() {
-                        if let Some(x) = self.next_err.take() {
-                            return Err(x);
-                        } else {
-                            return Err(Spanned::new(
-                                Doc::start("Unexpected ")
-                                    .debug(self.peek().unwrap().inner)
-                                    .add(", expected statement"),
-                                self.peek().unwrap().span,
-                            ));
-                        }
+                        errors.push(Spanned::new(
+                            Doc::start("Unexpected ")
+                                .debug(self.peek().unwrap().inner)
+                                .add(", expected statement"),
+                            self.peek().unwrap().span,
+                        ));
+                        return (v, errors);
                     }
                 }
             }
         }
-        match self.next_err.take() {
-            Some(x) => Err(x),
-            None => Ok(v),
-        }
+        (v, errors)
     }
 }

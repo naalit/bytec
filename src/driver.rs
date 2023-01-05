@@ -15,11 +15,22 @@ pub trait Pass {
         mods: &[(RawSym, ModType)],
         bindings: &mut Bindings,
         module: ModStatus,
+    ) -> (Option<ModStatus>, Vec<Error>) {
+        match self.run_raw(mods, bindings, module) {
+            Ok(m) => (Some(m), Vec::new()),
+            Err(e) => (None, vec![e]),
+        }
+    }
+    fn run_raw(
+        &self,
+        mods: &[(RawSym, ModType)],
+        bindings: &mut Bindings,
+        module: ModStatus,
     ) -> Result<ModStatus, Error>;
 }
 struct DeclareP1;
 impl Pass for DeclareP1 {
-    fn run(
+    fn run_raw(
         &self,
         _mods: &[(RawSym, ModType)],
         bindings: &mut Bindings,
@@ -36,7 +47,7 @@ impl Pass for DeclareP1 {
 }
 struct DeclareP2;
 impl Pass for DeclareP2 {
-    fn run(
+    fn run_raw(
         &self,
         mods: &[(RawSym, ModType)],
         bindings: &mut Bindings,
@@ -59,7 +70,7 @@ impl Pass for DeclareP2 {
 }
 struct DeclareP3;
 impl Pass for DeclareP3 {
-    fn run(
+    fn run_raw(
         &self,
         mods: &[(RawSym, ModType)],
         bindings: &mut Bindings,
@@ -82,7 +93,7 @@ impl Pass for DeclareP3 {
 }
 struct DeclareP4;
 impl Pass for DeclareP4 {
-    fn run(
+    fn run_raw(
         &self,
         mods: &[(RawSym, ModType)],
         bindings: &mut Bindings,
@@ -110,25 +121,36 @@ impl Pass for ElabPass {
         mods: &[(RawSym, ModType)],
         bindings: &mut Bindings,
         module: ModStatus,
-    ) -> Result<ModStatus, Error> {
-        let items = crate::elaborate::elab_mod(
+    ) -> (Option<ModStatus>, Vec<Error>) {
+        let (items, errors) = crate::elaborate::elab_mod(
             &module.pre_items,
             module.ty.clone(),
             mods,
             module.items,
             bindings,
             module.file,
-        )?;
-        Ok(ModStatus {
-            pre_items: Vec::new(),
-            items,
-            ..module
-        })
+        );
+        (
+            Some(ModStatus {
+                pre_items: Vec::new(),
+                items,
+                ..module
+            }),
+            errors,
+        )
+    }
+    fn run_raw(
+        &self,
+        mods: &[(RawSym, ModType)],
+        bindings: &mut Bindings,
+        module: ModStatus,
+    ) -> Result<ModStatus, Error> {
+        unimplemented!()
     }
 }
 
 pub struct Driver {
-    mods_pre: Vec<(RawSym, ModType)>,
+    pub mods_pre: Vec<(RawSym, ModType)>,
     pub mods: Vec<ModStatus>,
     pub errors: Vec<(Error, FileId)>,
 }
@@ -150,15 +172,12 @@ impl Driver {
         }
     }
     fn run_pass(&mut self, bindings: &mut Bindings, pass: &dyn Pass) {
-        let mut mods2 = Vec::new();
         for i in self.mods.split_off(0) {
             let file = i.file;
-            match pass.run(&self.mods_pre, bindings, i) {
-                Ok(m) => mods2.push(m),
-                Err(e) => self.errors.push((e, file)),
-            }
+            let (m, e) = pass.run(&self.mods_pre, bindings, i);
+            self.mods.extend(m);
+            self.errors.extend(e.into_iter().map(|e| (e, file)));
         }
-        self.mods = mods2;
         self.mods_pre = self.mods.iter().map(|m| (m.file.1, m.ty.clone())).collect();
     }
     pub fn run_all(&mut self, bindings: &mut Bindings) {
