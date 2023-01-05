@@ -1,4 +1,3 @@
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
@@ -88,7 +87,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
                 None,
                 f.span,
             ),
-            Item::ExternClass(c, members, span) => {
+            Item::ExternClass(c, members, _span) => {
                 let class = cxt.class(*c).unwrap();
                 mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
                 for (s, t) in members {
@@ -105,7 +104,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
 
                 continue;
             }
-            Item::Class(c, members, methods, span) => {
+            Item::Class(c, members, methods, _span) => {
                 let class = cxt.class(*c).unwrap();
                 mappings.push((class.0, cxt.bindings.type_name(*c), true));
                 for f in methods {
@@ -135,7 +134,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
 
                 continue;
             }
-            Item::Enum(c, _, ext, members, methods, span) => {
+            Item::Enum(c, _, ext, members, methods, _span) => {
                 let class = cxt.class(*c).unwrap();
                 if *ext {
                     mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
@@ -1276,7 +1275,7 @@ pub struct Cxt<'a> {
     block: Vec<JStmt>,
     blocks: Vec<(Option<JBlock>, usize)>,
     current_fn: JFnId,
-    items: Vec<JItem>,
+    items: Vec<Spanned<JItem>>,
     predefs: Vec<(Predef, JFnId)>,
     enum_wrappers: HashMap<JClass, JClass>,
     next: u64,
@@ -2297,11 +2296,12 @@ impl Item {
             Item::InlineJava(_, _) => (),
             Item::Fn(f) => {
                 if !f.inline {
+                    let span = f.span;
                     let f = f.lower(cxt);
-                    cxt.items.push(JItem::Fn(f));
+                    cxt.items.push(Spanned::new(JItem::Fn(f), span));
                 }
             }
-            Item::Enum(tid, variants, ext, _members, methods, _) => {
+            Item::Enum(tid, variants, ext, _members, methods, span) => {
                 if !ext {
                     let class = cxt.class(*tid).unwrap();
                     let variants = variants
@@ -2311,15 +2311,18 @@ impl Item {
 
                     let methods = methods.iter().map(|x| x.lower(cxt)).collect();
 
-                    cxt.items.push(JItem::Enum(
-                        class,
-                        variants,
-                        cxt.enum_wrappers.get(&class).copied(),
-                        methods,
+                    cxt.items.push(Spanned::new(
+                        JItem::Enum(
+                            class,
+                            variants,
+                            cxt.enum_wrappers.get(&class).copied(),
+                            methods,
+                        ),
+                        *span,
                     ));
                 }
             }
-            Item::Class(tid, members, methods, _) => {
+            Item::Class(tid, members, methods, span) => {
                 let class = cxt.class(*tid).unwrap();
                 let members = members
                     .iter()
@@ -2356,20 +2359,24 @@ impl Item {
                     .map(|x| x.lower(cxt))
                     .collect();
 
-                cxt.items.push(JItem::Class(class, members, methods));
+                cxt.items
+                    .push(Spanned::new(JItem::Class(class, members, methods), *span));
             }
             Item::ExternFn(_) => (),
             Item::ExternClass(_, _, _) => (),
-            Item::Let(name, ty, None, _) => {
+            Item::Let(name, ty, None, span) => {
                 let var = cxt.var(*name).unwrap();
                 let ty = ty.lower(cxt);
                 assert_eq!(var.len(), ty.len());
-                cxt.items.push(JItem::Let(
-                    var.into_iter().zip(ty).map(|(v, t)| (v, t, None)).collect(),
-                    Vec::new(),
+                cxt.items.push(Spanned::new(
+                    JItem::Let(
+                        var.into_iter().zip(ty).map(|(v, t)| (v, t, None)).collect(),
+                        Vec::new(),
+                    ),
+                    *span,
                 ));
             }
-            Item::Let(name, ty, Some(x), _) => {
+            Item::Let(name, ty, Some(x), span) => {
                 cxt.push_block();
                 let var = cxt.var(*name).unwrap();
                 let ty = ty.lower(cxt);
@@ -2377,13 +2384,16 @@ impl Item {
                 assert_eq!(var.len(), ty.len());
                 assert_eq!(ty.len(), x.len());
                 let block = cxt.pop_block();
-                cxt.items.push(JItem::Let(
-                    var.into_iter()
-                        .zip(ty)
-                        .zip(x)
-                        .map(|((v, t), x)| (v, t, Some(x)))
-                        .collect(),
-                    block,
+                cxt.items.push(Spanned::new(
+                    JItem::Let(
+                        var.into_iter()
+                            .zip(ty)
+                            .zip(x)
+                            .map(|((v, t), x)| (v, t, Some(x)))
+                            .collect(),
+                        block,
+                    ),
+                    *span,
                 ));
             }
         }
@@ -2719,13 +2729,15 @@ impl<'a> Cxt<'a> {
         }
     }
 
-    fn opt(&mut self) {
+    fn opt(&mut self) -> Result<(), Error> {
         // Constant propagation
         for item in &mut self.items {
+            let span = item.span;
             for block in item.blocks() {
                 let mut env = Env::new(self.bindings, self.next);
                 for s in block {
-                    s.prop(&mut env);
+                    s.prop(&mut env)
+                        .map_err(|e| Spanned::new(Doc::start("In this item: ").chain(e), span))?;
                 }
                 self.next = env.next;
             }
@@ -2769,6 +2781,7 @@ impl<'a> Cxt<'a> {
                 _ => (),
             }));
         }
+        Ok(())
     }
 }
 impl JLVal {
@@ -3223,13 +3236,13 @@ impl JLVal {
                     if let Some(CVal::Int(i)) = i.prop(env) {
                         if let Some(CVal::Array { mut idxs, end, len }) = l.get(env) {
                             idxs.insert(i as usize, val);
-                            l.set(env, Some(CVal::Array { idxs, end, len }));
+                            l.set(env, Some(CVal::Array { idxs, end, len }))?;
                             return Ok(());
                         }
                     }
                 }
 
-                l.set(env, None);
+                l.set(env, None)?;
             }
         }
         Ok(())
@@ -3252,18 +3265,18 @@ impl JStmt {
                         Some(op) => {
                             if let Some(y) = l.get(env) {
                                 if let Some(x) = op.prop(x, y.clone()) {
-                                    l.set(env, Some(x));
+                                    l.set(env, Some(x))?;
                                 } else {
-                                    l.set(env, None);
+                                    l.set(env, None)?;
                                 }
                             } else {
-                                l.set(env, None);
+                                l.set(env, None)?;
                             }
                         }
                         None => l.set(env, Some(x))?,
                     }
                 } else {
-                    l.set(env, None);
+                    l.set(env, None)?;
                 }
             }
             JStmt::Term(x) => {
@@ -3276,18 +3289,18 @@ impl JStmt {
                     let mut block = Vec::new();
                     std::mem::swap(tmp, &mut block);
                     for b in &mut block {
-                        b.prop(env);
+                        b.prop(env)?;
                     }
                     *self = JStmt::Multi(block);
                 } else {
                     let mut env2 = env.clone();
                     for b in a {
-                        b.prop(&mut env2);
+                        b.prop(&mut env2)?;
                     }
                     env.union(&env2);
                     let mut env3 = env.clone();
                     for b in b {
-                        b.prop(&mut env3);
+                        b.prop(&mut env3)?;
                     }
                     env.union(&env3);
                 }
@@ -3303,20 +3316,20 @@ impl JStmt {
                     let mut block = Vec::new();
                     std::mem::swap(tmp, &mut block);
                     for b in &mut block {
-                        b.prop(env);
+                        b.prop(env)?;
                     }
                     *self = JStmt::Multi(block);
                 } else {
                     for (_, c) in cases {
                         let mut env2 = env.clone();
                         for i in c {
-                            i.prop(&mut env2);
+                            i.prop(&mut env2)?;
                         }
                         env.union(&env2);
                     }
                     let mut env2 = env.clone();
                     for i in other {
-                        i.prop(&mut env2);
+                        i.prop(&mut env2)?;
                     }
                     env.union(&env2);
                 }
@@ -3332,7 +3345,7 @@ impl JStmt {
                 }
                 cond.prop(env);
                 for i in block {
-                    i.prop(env);
+                    i.prop(env)?;
                 }
             }
             JStmt::RangeFor(_, raw, v, a, b, block, unroll) => {
@@ -3384,7 +3397,7 @@ impl JStmt {
                     env.not_modified.remove(&i);
                 }
                 for i in block {
-                    i.prop(env);
+                    i.prop(env)?;
                 }
             }
             JStmt::Continue(_) => (),
@@ -3407,7 +3420,7 @@ impl JStmt {
             JStmt::InlineJava(_) => env.clobber_public(),
             JStmt::Multi(v) => {
                 for i in v {
-                    i.prop(env);
+                    i.prop(env)?;
                 }
             }
         }

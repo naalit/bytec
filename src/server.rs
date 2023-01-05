@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 use std::error::Error;
-use std::hash::Hash;
-use std::io::Read;
 
 use lsp_server as lsp;
 use lsp_types::notification::{Notification, PublishDiagnostics};

@@ -7,8 +7,8 @@ mod pretty;
 mod server;
 mod term;
 use std::collections::HashMap;
+use std::fs::File;
 use std::path::PathBuf;
-use std::{fs::File, io::Read};
 
 use crate::parser::Parser;
 use crate::pretty::{Doc, Style};
@@ -94,7 +94,7 @@ fn main() {
     let mut had_err = false;
     let mut parsed = Vec::new();
     for input in files {
-        let mut file = File::open(&input).unwrap_or_else(|_| {
+        let file = File::open(&input).unwrap_or_else(|_| {
             Doc::start("error")
                 .style(Style::BoldRed)
                 .add(": File not found: ")

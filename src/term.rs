@@ -56,6 +56,11 @@ impl<T> std::ops::Deref for Spanned<T> {
         &self.inner
     }
 }
+impl<T> std::ops::DerefMut for Spanned<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
 impl<T: PartialEq> PartialEq for Spanned<T> {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
