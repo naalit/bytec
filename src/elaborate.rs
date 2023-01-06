@@ -255,7 +255,8 @@ pub struct Cxt<'b> {
     fns: Env<FnId, FnType>,
     local_classes: HashMap<RawSym, TypeId>,
     classes: HashMap<RawPath, (TypeId, ClassInfo)>,
-    ret_tys: Vec<Option<Type>>,
+    // (ret type, fn is inline)
+    ret_tys: Vec<Option<(Type, bool)>>,
     in_classes: Vec<TypeId>,
     bindings: &'b mut Bindings,
     mods: HashMap<RawSym, ModType>,
@@ -402,17 +403,16 @@ impl<'b> Cxt<'b> {
     }
 
     /// Returns the return type of the innermost function
-    fn ret_ty(&self) -> Type {
+    fn ret_ty(&self) -> Option<(Type, bool)> {
         self.ret_tys
             .iter()
             .rfind(|x| x.is_some())
-            .unwrap()
-            .clone()
-            .unwrap()
+            .cloned()
+            .flatten()
     }
 
     /// Start a new scope
-    fn push(&mut self, rty: Option<Type>) {
+    fn push(&mut self, rty: Option<(Type, bool)>) {
         self.vars.push();
         self.fns.push();
         self.ret_tys.push(rty);
@@ -473,6 +473,8 @@ enum TypeError {
     ArrayExternArg(Span),
     StatementLetDec(Span),
     ImmutableAssign(Sym, Span),
+    InlineReturn(Span),
+    ReturnOutOfFunction(Span),
 }
 impl TypeError {
     fn to_error(self, bindings: &Bindings) -> Error {
@@ -568,6 +570,14 @@ impl TypeError {
             ),
             TypeError::ImmutableAssign(sym, span) => Spanned::new(
                 Doc::start("Cannot assign to immutable variable '").add(bindings.resolve_spath(sym)).add('\''),
+                span,
+            ),
+            TypeError::InlineReturn(span) => Spanned::new(
+                Doc::start("`return` is not allowed in inline functions"),
+                span,
+            ),
+            TypeError::ReturnOutOfFunction(span) => Spanned::new(
+                Doc::start("`return` used outside of a function"),
                 span,
             ),
         }
@@ -902,7 +912,7 @@ impl<'b> Cxt<'b> {
             inline,
         } = f;
 
-        self.push(Some(rty.clone()));
+        self.push(Some((rty.clone(), *inline)));
         let mut args2 = Vec::new();
         for ((a, _, public), t) in args.iter().zip(atys) {
             let a = self.create(*a, (t.clone(), true), *public);
@@ -954,7 +964,7 @@ impl<'b> Cxt<'b> {
                 let (fid, fty) = self.fun(&lpath(*name)).unwrap();
                 let FnType(atys, rty) = fty.clone();
 
-                self.push(Some(rty.clone()));
+                self.push(Some((rty.clone(), false)));
                 let mut args2 = Vec::new();
                 for ((a, _, public), t) in args.iter().zip(atys) {
                     let a = self.create(*a, (t.clone(), true), *public);
@@ -1276,15 +1286,22 @@ impl<'b> Cxt<'b> {
             Pre::Continue => Ok((Term::Continue, Type::Unit)),
             Pre::Return(x) => {
                 let rty = self.ret_ty();
-                if x.is_none() && rty != Type::Unit {
-                    return Err(TypeError::Unify(pre.span, Type::Unit, rty));
+                if let Some((rty, inline)) = rty {
+                    if inline {
+                        return Err(TypeError::InlineReturn(pre.span));
+                    }
+                    if x.is_none() && rty != Type::Unit {
+                        return Err(TypeError::Unify(pre.span, Type::Unit, rty));
+                    }
+                    let x = x
+                        .as_ref()
+                        .map(|x| self.check(x, rty))
+                        .transpose()?
+                        .map(Box::new);
+                    Ok((Term::Return(x), Type::Unit))
+                } else {
+                    Err(TypeError::ReturnOutOfFunction(pre.span))
                 }
-                let x = x
-                    .as_ref()
-                    .map(|x| self.check(x, rty))
-                    .transpose()?
-                    .map(Box::new);
-                Ok((Term::Return(x), Type::Unit))
             }
             Pre::Tuple(v) => {
                 let mut terms = Vec::new();
@@ -1690,15 +1707,22 @@ impl<'b> Cxt<'b> {
             (Pre::Continue, _) => Ok(Term::Continue),
             (Pre::Return(x), _) => {
                 let rty = self.ret_ty();
-                if x.is_none() && rty != Type::Unit {
-                    return Err(TypeError::Unify(pre.span, Type::Unit, rty));
+                if let Some((rty, inline)) = rty {
+                    if inline {
+                        return Err(TypeError::InlineReturn(pre.span));
+                    }
+                    if x.is_none() && rty != Type::Unit {
+                        return Err(TypeError::Unify(pre.span, Type::Unit, rty));
+                    }
+                    let x = x
+                        .as_ref()
+                        .map(|x| self.check(x, rty))
+                        .transpose()?
+                        .map(Box::new);
+                    Ok(Term::Return(x))
+                } else {
+                    Err(TypeError::ReturnOutOfFunction(pre.span))
                 }
-                let x = x
-                    .as_ref()
-                    .map(|x| self.check(x, rty))
-                    .transpose()?
-                    .map(Box::new);
-                Ok(Term::Return(x))
             }
 
             _ => {
