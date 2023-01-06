@@ -310,7 +310,7 @@ pub enum Term {
 }
 pub enum Statement {
     Term(Term),
-    Let(Sym, Type, Term),
+    Let(Sym, bool, Type, Term),
     While(Term, Vec<Statement>),
     For(Sym, ForIter, Vec<Statement>),
     InlineJava(RawSym),
@@ -331,7 +331,7 @@ pub enum Item {
         Span,
     ),
     Class(TypeId, Vec<(Sym, Type, Option<Term>)>, Vec<Fn>, Span),
-    Let(Sym, Type, Option<Term>, Span),
+    Let(Sym, bool, Type, Option<Term>, Span),
 }
 impl Item {
     pub fn span(&self) -> Span {
@@ -342,7 +342,7 @@ impl Item {
             Item::InlineJava(_, s) => *s,
             Item::Enum(_, _, _, _, _, s) => *s,
             Item::Class(_, _, _, s) => *s,
-            Item::Let(_, _, _, s) => *s,
+            Item::Let(_, _, _, _, s) => *s,
         }
     }
 }
@@ -514,7 +514,7 @@ pub enum PreItem {
         members: Vec<(Spanned<RawSym>, bool, PreType, Option<SPre>)>,
         constructor: Option<Vec<PreType>>,
     },
-    Let(Spanned<RawSym>, Option<PreType>, Option<SPre>, bool),
+    Let(Spanned<RawSym>, bool, Option<PreType>, Option<SPre>, bool),
     // use a::b; the bool is true if it's a wildcard a::b::*
     Use(RawPath, bool),
 }
@@ -571,7 +571,7 @@ impl Item {
                     .for_each(|x| x.visit(f));
                 b.iter().for_each(|x| x.body.visit(f));
             }
-            Item::Let(_, _, x, _) => x.iter().for_each(|x| x.visit(f)),
+            Item::Let(_, _, _, x, _) => x.iter().for_each(|x| x.visit(f)),
         }
     }
 }
@@ -641,7 +641,7 @@ impl Statement {
     fn visit(&self, f: &mut impl FnMut(&Term)) {
         match self {
             Statement::Term(x) => x.visit(f),
-            Statement::Let(_, _, x) => x.visit(f),
+            Statement::Let(_, _, _, x) => x.visit(f),
             Statement::While(x, v) => {
                 x.visit(f);
                 v.iter().for_each(|x| x.visit(f));
@@ -780,7 +780,7 @@ impl Statement {
     fn cloned_(&self, cln: &mut Cloner) -> Statement {
         match self {
             Statement::Term(t) => Statement::Term(t.cloned_(cln)),
-            Statement::Let(n, t, x) => Statement::Let(*n, t.clone(), x.cloned_(cln)),
+            Statement::Let(n, c, t, x) => Statement::Let(*n, *c, t.clone(), x.cloned_(cln)),
             Statement::While(a, b) => {
                 Statement::While(a.cloned_(cln), b.iter().map(|x| x.cloned_(cln)).collect())
             }
@@ -1095,7 +1095,7 @@ impl Item {
                         .style(Style::Literal),
                 )
                 .add(';'),
-            Item::Let(n, t, x, _) => Doc::keyword("let")
+            Item::Let(n, c, t, x, _) => Doc::keyword(if *c { "const" } else { "let" })
                 .space()
                 .add(cxt.resolve_local(*n))
                 .add(":")
@@ -1114,7 +1114,7 @@ impl Statement {
     pub fn pretty(&self, cxt: &Bindings) -> Doc {
         match self {
             Statement::Term(x) => x.pretty(cxt).add(";"),
-            Statement::Let(n, t, x) => Doc::keyword("let")
+            Statement::Let(n, c, t, x) => Doc::keyword(if *c { "const" } else { "let" })
                 .space()
                 .add(cxt.resolve_local(*n))
                 .add(":")

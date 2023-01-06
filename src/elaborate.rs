@@ -582,7 +582,7 @@ impl<'b> Cxt<'b> {
             PreItem::InlineJava(_, _) => Ok(()),
             PreItem::Fn(_) => Ok(()),
             PreItem::ExternFn(_) => Ok(()),
-            PreItem::Let(_, _, _, _) => Ok(()),
+            PreItem::Let { .. } => Ok(()),
             PreItem::Class { path, .. } => {
                 self.create_class(path.clone(), ClassInfo::default());
                 Ok(())
@@ -766,7 +766,7 @@ impl<'b> Cxt<'b> {
                 self.create_fn(f.name, FnType(args, rty))?;
                 Ok(())
             }
-            PreItem::Let(name, ty, x, public) => {
+            PreItem::Let(name, _const, ty, x, public) => {
                 if self.var(&lpath(*name)).is_some() {
                     return Err(TypeError::Duplicate(name.span, **name));
                 }
@@ -945,11 +945,11 @@ impl<'b> Cxt<'b> {
                     span: name.span,
                 })])
             }
-            PreItem::Let(name, _, x, _) => {
+            PreItem::Let(name, constant, _, x, _) => {
                 let (s, t) = self.var(&lpath(*name)).unwrap();
                 let t = t.clone();
                 let x = x.as_ref().map(|x| self.check(x, t.clone())).transpose()?;
-                Ok(vec![Item::Let(s, t, x, name.span)])
+                Ok(vec![Item::Let(s, *constant, t, x, name.span)])
             }
             PreItem::Class {
                 path,
@@ -1089,6 +1089,7 @@ impl<'b> Cxt<'b> {
                                     let (v, _) = self.var(&lpath(Spanned::hack(i))).unwrap();
                                     block.push(Item::Let(
                                         v,
+                                        true,
                                         ty.clone(),
                                         Some(Term::Variant(c, i, Vec::new())),
                                         path.span(),
@@ -1133,7 +1134,7 @@ impl<'b> Cxt<'b> {
                 Ok(None)
             }
             PreStatement::Item(PreItem::InlineJava(s, _)) => Ok(Some(Statement::InlineJava(*s))),
-            PreStatement::Item(PreItem::Let(name, ty, value, public)) => {
+            PreStatement::Item(PreItem::Let(name, constant, ty, value, public)) => {
                 let value = value.as_ref().expect("statement let must have a value");
                 let (x, t) = match ty {
                     Some(t) => {
@@ -1144,7 +1145,7 @@ impl<'b> Cxt<'b> {
                     None => self.infer(value)?,
                 };
                 let n = self.create(*name, t.clone(), *public);
-                Ok(Some(Statement::Let(n, t, x)))
+                Ok(Some(Statement::Let(n, *constant, t, x)))
             }
             PreStatement::Term(t) => self.infer(t).map(|(x, _)| Some(Statement::Term(x))),
             PreStatement::While(cond, block) => {

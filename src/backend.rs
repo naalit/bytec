@@ -175,7 +175,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
                 java.push(*s);
                 continue;
             }
-            Item::Let(s, t, _, _) => {
+            Item::Let(s, false, t, _, _) => {
                 let t = t.lower(&cxt);
                 let mut vars = Vec::new();
                 for t in t {
@@ -185,6 +185,11 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
                     vars.push(var);
                 }
                 cxt.vars.push((*s, JVars::Tuple(vars)));
+                continue;
+            }
+            Item::Let(s, true, _, body, _) => {
+                cxt.inline_vars
+                    .insert(*s, body.as_ref().unwrap().cloned(cxt.bindings));
                 continue;
             }
         };
@@ -1271,6 +1276,7 @@ pub struct Cxt<'a> {
     fn_ids: Vec<(FnId, JFnId)>,
     fn_ret_tys: HashMap<JFnId, JTys>,
     inline_fns: HashMap<JFnId, (Vec<(Sym, Type)>, Term)>,
+    inline_vars: HashMap<Sym, Term>,
     types: Vec<(TypeId, JClass)>,
     block: Vec<JStmt>,
     blocks: Vec<(Option<JBlock>, usize)>,
@@ -1291,6 +1297,7 @@ impl<'a> Cxt<'a> {
             fn_ids: Vec::new(),
             fn_ret_tys: HashMap::new(),
             inline_fns: HashMap::new(),
+            inline_vars: HashMap::new(),
             types: Vec::new(),
             block: Vec::new(),
             blocks: Vec::new(),
@@ -1484,8 +1491,12 @@ impl Term {
         JTerms::One(match self {
             Term::Error => panic!("type error reached backend!"),
             Term::Var(s) => {
-                let var = cxt.var(*s).unwrap();
-                return var.map(|var| JTerm::Var(var, cxt.tys.get(&var).unwrap().clone()));
+                if let Some(t) = cxt.inline_vars.get(s) {
+                    return t.cloned(cxt.bindings).lower(cxt);
+                } else {
+                    let var = cxt.var(*s).unwrap();
+                    return var.map(|var| JTerm::Var(var, cxt.tys.get(&var).unwrap().clone()));
+                }
             }
             Term::Null(t) => JTerm::Null(t.lower(cxt).one()),
             Term::Selph(t) => {
@@ -2089,7 +2100,7 @@ impl Statement {
                     cxt.block.push(JStmt::Term(i));
                 }
             }
-            Statement::Let(n, t, x) => {
+            Statement::Let(n, false, t, x) => {
                 let x = x.lower(cxt);
                 let t = t.lower(cxt);
                 let mut vars = Vec::new();
@@ -2107,6 +2118,9 @@ impl Statement {
                 }
 
                 cxt.vars.push((*n, JVars::Tuple(vars)));
+            }
+            Statement::Let(n, true, t, x) => {
+                cxt.inline_vars.insert(*n, x.cloned(cxt.bindings));
             }
             Statement::While(cond, block) => {
                 let cond = cond.lower(cxt).one();
@@ -2365,7 +2379,7 @@ impl Item {
             }
             Item::ExternFn(_) => (),
             Item::ExternClass(_, _, _) => (),
-            Item::Let(name, ty, None, span) => {
+            Item::Let(name, _, ty, None, span) => {
                 let var = cxt.var(*name).unwrap();
                 let ty = ty.lower(cxt);
                 assert_eq!(var.len(), ty.len());
@@ -2377,7 +2391,10 @@ impl Item {
                     *span,
                 ));
             }
-            Item::Let(name, ty, Some(x), span) => {
+            Item::Let(name, c, ty, Some(x), span) => {
+                if *c {
+                    return;
+                }
                 cxt.push_block();
                 let var = cxt.var(*name).unwrap();
                 let ty = ty.lower(cxt);

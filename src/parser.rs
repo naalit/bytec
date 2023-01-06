@@ -28,6 +28,8 @@ pub enum Tok {
     Str,
     // let
     Let,
+    // const
+    Const,
     // extern
     Extern,
     // pub
@@ -187,6 +189,7 @@ impl<'a> Lexer<'a> {
             "i64" => Tok::I64,
             "str" => Tok::Str,
             "let" => Tok::Let,
+            "const" => Tok::Const,
             "extern" => Tok::Extern,
             "pub" => Tok::Pub,
             "if" => Tok::If,
@@ -1562,7 +1565,8 @@ impl<'a> Parser<'a> {
         let i = match self.peek().as_deref() {
             None => Ok(None),
             Some(Tok::ExternBlock(s)) => Ok(Some(PreItem::InlineJava(*s, self.next_span()))),
-            Some(Tok::Let) => {
+            Some(Tok::Let) | Some(Tok::Const) => {
+                let constant = self.peek().as_deref() == Some(&Tok::Const);
                 self.next();
 
                 let public = if self.peek().as_deref() == Some(&Tok::Pub) {
@@ -1588,7 +1592,7 @@ impl<'a> Parser<'a> {
 
                 self.expect(Tok::Semicolon, "';'")?;
 
-                Ok(Some(PreItem::Let(name, ty, value, public)))
+                Ok(Some(PreItem::Let(name, constant, ty, value, public)))
             }
             Some(Tok::Class) => {
                 self.next();
@@ -1712,7 +1716,13 @@ impl<'a> Parser<'a> {
         let ifdef = self.ifdef()?;
         let i = match self.peek().as_deref() {
             Some(
-                Tok::Fn | Tok::Extern | Tok::ExternBlock(_) | Tok::Let | Tok::Enum | Tok::Class,
+                Tok::Fn
+                | Tok::Extern
+                | Tok::ExternBlock(_)
+                | Tok::Let
+                | Tok::Const
+                | Tok::Enum
+                | Tok::Class,
             ) => Ok(self.item()?.map(PreStatement::Item)),
             Some(Tok::While | Tok::Loop) => {
                 let cond = match &*self.next().unwrap() {
