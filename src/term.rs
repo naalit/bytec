@@ -234,7 +234,7 @@ impl Error {
 
 #[derive(Clone, Default)]
 pub struct ModType {
-    pub vars: Vec<(RawSym, Sym, Type)>,
+    pub vars: Vec<(RawSym, Sym, MType)>,
     pub fns: Vec<(RawSym, FnId, FnType)>,
     pub classes: HashMap<RawPath, (TypeId, ClassInfo)>,
     pub local_classes: HashMap<RawSym, TypeId>,
@@ -267,6 +267,22 @@ pub enum LValue {
     Idx(Box<LValue>, Box<Term>, bool),
     // a.b = x
     Member(Box<Term>, Sym),
+}
+impl LValue {
+    pub fn check_mutability(&self, cxt: &crate::elaborate::Cxt) -> Result<(), Sym> {
+        match self {
+            LValue::Var(s) => {
+                if !cxt.is_mutable(*s) {
+                    return Err(*s);
+                }
+            }
+            LValue::Idx(l, _, _) => l.check_mutability(cxt)?,
+            // This is Java, objects are always mutable
+            // (and that's not something we can change without a more powerful type system)
+            LValue::Member(_, _) => (),
+        }
+        Ok(())
+    }
 }
 
 #[derive(PartialEq)]
@@ -389,6 +405,9 @@ impl Type {
         }
     }
 }
+
+/// A type with mutability information
+pub type MType = (Type, bool);
 
 impl Term {
     pub fn to_lval(self) -> Option<LValue> {

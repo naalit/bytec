@@ -251,7 +251,7 @@ impl<S: Copy, T> Env<S, T> {
 }
 
 pub struct Cxt<'b> {
-    vars: Env<Sym, Type>,
+    vars: Env<Sym, MType>,
     fns: Env<FnId, FnType>,
     local_classes: HashMap<RawSym, TypeId>,
     classes: HashMap<RawPath, (TypeId, ClassInfo)>,
@@ -309,7 +309,7 @@ impl<'b> Cxt<'b> {
 
     // Again, the only error unifying these lifetimes creates would be fixed with GC
     // (and same for below functions)
-    fn var(&self, s: &RawPath) -> Option<(Sym, &Type)> {
+    fn var(&self, s: &RawPath) -> Option<(Sym, &MType)> {
         if s.len() == 1 {
             self.vars.get(*s.stem())
         } else if s.len() == 2 {
@@ -392,6 +392,15 @@ impl<'b> Cxt<'b> {
             .unwrap()
     }
 
+    pub fn is_mutable(&self, s: Sym) -> bool {
+        for (_, i, (_, m)) in &self.vars.symbols {
+            if *i == s {
+                return *m;
+            }
+        }
+        panic!("Not found: {}", self.bindings.resolve_spath(s))
+    }
+
     /// Returns the return type of the innermost function
     fn ret_ty(&self) -> Type {
         self.ret_tys
@@ -420,7 +429,7 @@ impl<'b> Cxt<'b> {
     }
 
     /// Creates a new binding with a name
-    fn create(&mut self, k: Spanned<RawSym>, ty: Type, public: bool) -> Sym {
+    fn create(&mut self, k: Spanned<RawSym>, ty: MType, public: bool) -> Sym {
         let s = self.bindings.create(self.path(k), public);
         self.vars.add(*k, s, ty);
         s
@@ -463,6 +472,7 @@ enum TypeError {
     NonRefNull(Span, Type),
     ArrayExternArg(Span),
     StatementLetDec(Span),
+    ImmutableAssign(Sym, Span),
 }
 impl TypeError {
     fn to_error(self, bindings: &Bindings) -> Error {
@@ -554,6 +564,10 @@ impl TypeError {
             ),
             TypeError::StatementLetDec(span) => Spanned::new(
                 Doc::start("Let used in statement position must have a value"),
+                span,
+            ),
+            TypeError::ImmutableAssign(sym, span) => Spanned::new(
+                Doc::start("Cannot assign to immutable variable '").add(bindings.resolve_spath(sym)).add('\''),
                 span,
             ),
         }
@@ -774,7 +788,7 @@ impl<'b> Cxt<'b> {
                 self.create_fn(f.name, FnType(args, rty))?;
                 Ok(())
             }
-            PreItem::Let(name, _const, ty, x, public) => {
+            PreItem::Let(name, constant, ty, x, public) => {
                 if self.var(&lpath(*name)).is_some() {
                     return Err(TypeError::Duplicate(name.span, **name));
                 }
@@ -785,7 +799,7 @@ impl<'b> Cxt<'b> {
                             .1
                     }
                 };
-                self.create(*name, ty, *public);
+                self.create(*name, (ty, !constant), *public);
                 Ok(())
             }
             PreItem::Class { .. } => Ok(()),
@@ -851,7 +865,11 @@ impl<'b> Cxt<'b> {
                             for (i, tys) in v {
                                 // TODO import non-empty variants as functions
                                 if tys.is_empty() {
-                                    self.create(Spanned::new(i, path.span()), ty.clone(), false);
+                                    self.create(
+                                        Spanned::new(i, path.span()),
+                                        (ty.clone(), false),
+                                        false,
+                                    );
                                 }
                             }
                         } else {
@@ -887,7 +905,7 @@ impl<'b> Cxt<'b> {
         self.push(Some(rty.clone()));
         let mut args2 = Vec::new();
         for ((a, _, public), t) in args.iter().zip(atys) {
-            let a = self.create(*a, t.clone(), *public);
+            let a = self.create(*a, (t.clone(), true), *public);
             args2.push((a, t));
         }
         let body = self.check(body, rty.clone())?;
@@ -939,7 +957,7 @@ impl<'b> Cxt<'b> {
                 self.push(Some(rty.clone()));
                 let mut args2 = Vec::new();
                 for ((a, _, public), t) in args.iter().zip(atys) {
-                    let a = self.create(*a, t.clone(), *public);
+                    let a = self.create(*a, (t.clone(), true), *public);
                     args2.push((a, t));
                 }
                 // let body = self.check(body, rty.clone())?;
@@ -955,7 +973,7 @@ impl<'b> Cxt<'b> {
             }
             PreItem::Let(name, constant, _, x, _) => {
                 let (s, t) = self.var(&lpath(*name)).unwrap();
-                let t = t.clone();
+                let (t, _) = t.clone();
                 let x = x.as_ref().map(|x| self.check(x, t.clone())).transpose()?;
                 Ok(vec![Item::Let(s, *constant, t, x, name.span)])
             }
@@ -1154,7 +1172,7 @@ impl<'b> Cxt<'b> {
                     }
                     None => self.infer(value)?,
                 };
-                let n = self.create(*name, t.clone(), *public);
+                let n = self.create(*name, (t.clone(), !constant), *public);
                 Ok(Some(Statement::Let(n, *constant, t, x)))
             }
             PreStatement::Term(t) => self.infer(t).map(|(x, _)| Some(Statement::Term(x))),
@@ -1188,7 +1206,7 @@ impl<'b> Cxt<'b> {
                     }
                 };
                 self.push(None);
-                let n = self.create(*s, t, *public);
+                let n = self.create(*s, (t, false), *public);
                 let mut block2 = Vec::new();
                 for i in block {
                     self.check_stmt(i).map(|x| block2.push(x));
@@ -1215,7 +1233,7 @@ impl<'b> Cxt<'b> {
             }
             Pre::Var(raw) => self
                 .var(raw)
-                .map(|(s, t)| (Term::Var(s), t.clone()))
+                .map(|(s, (t, _))| (Term::Var(s), t.clone()))
                 .ok_or(TypeError::NotFound(raw.clone()))
                 .or_else(|e| {
                     if raw.len() > 1 {
@@ -1231,7 +1249,7 @@ impl<'b> Cxt<'b> {
 
                             return Ok((Term::Variant(class, *b, Vec::new()), Type::Class(class)));
                         } else if let Some(ty) = self.module(*a.stem()) {
-                            let (_, s, t) = ty
+                            let (_, s, (t, _)) = ty
                                 .vars
                                 .iter()
                                 .rfind(|(s, _, _)| *s == *b)
@@ -1358,6 +1376,8 @@ impl<'b> Cxt<'b> {
             Pre::Set(pl, op, x) => {
                 let (l, t) = self.infer(pl)?;
                 let l = l.to_lval().ok_or(TypeError::NotLValue(pl.span))?;
+                l.check_mutability(self)
+                    .map_err(|s| TypeError::ImmutableAssign(s, pl.span))?;
                 let x = self.check(x, t)?;
 
                 Ok((Term::Set(l, *op, Box::new(x)), Type::Unit))
@@ -1574,7 +1594,7 @@ impl<'b> Cxt<'b> {
                                 ));
                             } else {
                                 for (&(raw, public), ty) in captures.iter().zip(atys) {
-                                    let s = self.create(raw, ty.clone(), public);
+                                    let s = self.create(raw, (ty.clone(), true), public);
                                     captures2.push((s, ty.clone()));
                                 }
                             }
