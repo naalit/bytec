@@ -19,6 +19,7 @@ pub struct Server {
     file_ids: HashMap<Url, FileId>,
     source: HashMap<Url, Rope>,
     parsed: HashMap<Url, Vec<PreItem>>,
+    parse_errors: HashMap<FileId, Vec<lsp_types::Diagnostic>>,
     bindings: Bindings,
     last_mods: Vec<crate::driver::ModStatus>,
     last_mod_tys: HashMap<RawSym, crate::term::ModType>,
@@ -39,7 +40,6 @@ impl Server {
                 TextDocumentSyncKind::INCREMENTAL,
             )),
             definition_provider: Some(OneOf::Left(true)),
-            hover_provider: Some(HoverProviderCapability::Simple(true)),
             completion_provider: Some(CompletionOptions {
                 trigger_characters: Some(vec!['.'.into()]),
                 ..CompletionOptions::default()
@@ -55,6 +55,7 @@ impl Server {
             source: HashMap::new(),
             file_ids: HashMap::new(),
             parsed: HashMap::new(),
+            parse_errors: HashMap::new(),
             io_threads,
             connection,
             initialization_params,
@@ -95,52 +96,6 @@ impl Server {
         }
 
         match &*msg.method {
-            request::HoverRequest::METHOD => {
-                let (id, params): (_, lsp_types::HoverParams) =
-                    msg.extract(request::HoverRequest::METHOD)?;
-                // let file = self.db.file_id(FileLoc::Url(
-                //     params.text_document_position_params.text_document.uri,
-                // ));
-                // let pos = params.text_document_position_params.position;
-                // let source = self.source.get(&file).unwrap();
-                // let pos = source
-                //     .char_to_byte(source.line_to_char(pos.line as usize) + pos.character as usize)
-                //     as u32;
-                // if let Some(split) = self.db.split_at(file, pos) {
-                //     let aspan = self.db.split_span(file, split).unwrap();
-                //     if let Some((ty, span)) = crate::elab::ide_support::hover_type(
-                //         &self.db,
-                //         file,
-                //         split,
-                //         pos - aspan.1.start,
-                //     ) {
-                //         let range = aspan.add(span).lsp_range(&self.source);
-                //         let result = Hover {
-                //             contents: HoverContents::Scalar(MarkedString::LanguageString(
-                //                 LanguageString {
-                //                     language: "pika".into(),
-                //                     value: ty.to_string(false),
-                //                 },
-                //             )),
-                //             range: Some(range),
-                //         };
-                //         let result = serde_json::to_value(&result)?;
-                //         let resp = lsp::Response {
-                //             id,
-                //             result: Some(result),
-                //             error: None,
-                //         };
-                //         self.connection.sender.send(lsp::Message::Response(resp))?;
-                //         return Ok(());
-                //     }
-                // }
-                // let resp = lsp::Response {
-                //     id,
-                //     result: Some(serde_json::Value::Null),
-                //     error: None,
-                // };
-                // self.connection.sender.send(lsp::Message::Response(resp))?;
-            }
             request::Completion::METHOD => {
                 let (id, params): (_, lsp_types::CompletionParams) =
                     msg.extract(request::Completion::METHOD)?;
@@ -156,7 +111,13 @@ impl Server {
                         .iter()
                         .enumerate()
                         .find(|(_, m)| m.span().0 > pos)
-                        .and_then(|(i, _)| module.items.get(i - 1))
+                        .and_then(|(i, m)| {
+                            if i == 0 {
+                                Some(m)
+                            } else {
+                                module.items.get(i - 1)
+                            }
+                        })
                         .or_else(|| module.items.last())
                     {
                         let mut found = None;
@@ -292,13 +253,59 @@ impl Server {
                 self.file_ids[&file_changed],
                 file_changed.to_file_path().unwrap(),
             );
+
+            // If this was the first file in this session, look for other neighboring bytec files in the file system
+            // We add them to the hashmaps with their url, so when they're opened in the editor it will automatically override them
+            if self.file_ids.len() == 1 {
+                let path = file_changed.to_file_path().unwrap().canonicalize().unwrap();
+                let folder = path.parent().unwrap();
+                for i in folder.read_dir().unwrap() {
+                    let i = i.unwrap();
+                    if i.file_name().to_str().unwrap().ends_with(".bt") {
+                        let path = i.path();
+                        let url = Url::from_file_path(&path).unwrap();
+                        if url == file_changed {
+                            continue;
+                        }
+
+                        let mod_name = self
+                            .bindings
+                            .raw(path.file_stem().unwrap().to_string_lossy());
+                        let file = FileId(self.file_ids.len(), mod_name);
+                        eprintln!("Adding neighboring file {}", url);
+
+                        self.file_ids.insert(url.clone(), file);
+                        self.source.insert(
+                            url.clone(),
+                            Rope::from_reader(std::fs::File::open(&path).unwrap()).unwrap(),
+                        );
+                        INPUT_PATH.write().unwrap().insert(file, path);
+                        INPUT_SOURCE
+                            .write()
+                            .unwrap()
+                            .insert(file, self.source[&url].clone());
+
+                        // Parse it and add the items, but skip errors - we don't need errors in other files
+                        let mut defs = Default::default();
+                        let mut parser =
+                            Parser::new(self.source[&url].slice(..), &mut self.bindings, &mut defs);
+                        let (v, e) = parser.top_level();
+                        self.parse_errors.insert(
+                            file,
+                            e.into_iter()
+                                .map(|e| self.lsp_error(e, Severity::Error, &url))
+                                .collect(),
+                        );
+                        self.parsed.insert(url, v);
+                    }
+                }
+            }
         }
+
         INPUT_SOURCE.write().unwrap().insert(
             self.file_ids[&file_changed],
             self.source[&file_changed].clone(),
         );
-
-        let mut diagnostics = Vec::new();
 
         let mut defs = Default::default();
         let mut parser = Parser::new(
@@ -308,10 +315,18 @@ impl Server {
         );
         let (v, e) = parser.top_level();
         self.parsed.insert(file_changed.clone(), v);
-        diagnostics.extend(
+        self.parse_errors.insert(
+            self.file_ids[&file_changed],
             e.into_iter()
-                .map(|e| self.lsp_error(e, Severity::Error, &file_changed)),
+                .map(|e| self.lsp_error(e, Severity::Error, &file_changed))
+                .collect(),
         );
+
+        self.publish_diagnostics();
+    }
+
+    fn publish_diagnostics(&mut self) {
+        let mut diagnostics = self.parse_errors.clone();
         let mut driver = Driver::new(
             self.parsed
                 .iter()
@@ -320,24 +335,34 @@ impl Server {
         );
         driver.run_all(&mut self.bindings);
         for (error, file) in driver.errors {
-            if file == self.file_ids[&file_changed] {
-                diagnostics.push(self.lsp_error(error, Severity::Error, &file_changed));
-            }
+            diagnostics.entry(file).or_default().push(self.lsp_error(
+                error,
+                Severity::Error,
+                self.file_ids.iter().find(|(_, v)| **v == file).unwrap().0,
+            ));
         }
         // TODO only send diagnostics if they changed
-        let message = lsp::Notification {
-            method: PublishDiagnostics::METHOD.to_string(),
-            params: serde_json::to_value(&PublishDiagnosticsParams {
-                uri: file_changed,
-                version: None,
-                diagnostics,
-            })
-            .unwrap(),
-        };
-        self.connection
-            .sender
-            .send(lsp::Message::Notification(message))
-            .unwrap();
+        for (file, diagnostics) in diagnostics {
+            let message = lsp::Notification {
+                method: PublishDiagnostics::METHOD.to_string(),
+                params: serde_json::to_value(&PublishDiagnosticsParams {
+                    uri: self
+                        .file_ids
+                        .iter()
+                        .find(|(_, v)| **v == file)
+                        .unwrap()
+                        .0
+                        .clone(),
+                    version: None,
+                    diagnostics,
+                })
+                .unwrap(),
+            };
+            self.connection
+                .sender
+                .send(lsp::Message::Notification(message))
+                .unwrap();
+        }
         self.last_mods = driver.mods;
         self.last_mod_tys = driver.mods_pre.into_iter().collect();
         eprintln!("Published diagnostics!");
