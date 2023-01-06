@@ -25,4 +25,4 @@ Then, the CLI syntax for `bytec` looks like `bytec source-path1 source-path2... 
 bytec bytec/common bytec/bot_one src/bot_one
 ```
 
-This is intended to make it easy to test against alternate versions of your bot - simply compile to a certain output package (the names don't need to match, `bytec` will insert the necessary `package` declarations), make a change, and then compile it again to a different output package and run them against each other. A simplified form of C `define`s can also help with this, and you can pass those as `-DSOME_FLAG` or `-DSOME_CONST=12` on the command line.
+This is intended to make it easy to test against alternate versions of your bot - simply compile to a certain output package (the names don't need to match, `bytec` will insert the necessary `package` declarations), make a change, and then compile it again to a different output package and run them against each other. The ability to override [constants](./constants.md) from the command line (`-CModule::SOME_CONST=12`, along the lines of C's `-DSOME_CONST=12`) also helps with that, especially with scripts that might test many possible parameters automatically.
