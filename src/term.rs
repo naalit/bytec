@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::RwLock};
+use std::{collections::HashMap, path::PathBuf, rc::Rc, sync::RwLock};
 
 use ropey::Rope;
 
@@ -240,7 +240,7 @@ pub struct ModType {
     pub local_classes: HashMap<RawSym, TypeId>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FnType(pub Vec<Type>, pub Type);
 
 #[derive(Clone, Default)]
@@ -251,6 +251,7 @@ pub struct ClassInfo {
     pub constructor: Option<Vec<Type>>,
 }
 
+#[derive(PartialEq)]
 pub enum ArrayMethod {
     Len,
     Pop,
@@ -258,6 +259,7 @@ pub enum ArrayMethod {
     Push(Box<Term>),
 }
 
+#[derive(PartialEq)]
 pub enum LValue {
     // v = x
     Var(Sym),
@@ -267,6 +269,7 @@ pub enum LValue {
     Member(Box<Term>, Sym),
 }
 
+#[derive(PartialEq)]
 pub enum ForIter {
     // for i in [unroll] 0..10 (note: only i32)
     Range(Box<Term>, Box<Term>, bool),
@@ -275,6 +278,7 @@ pub enum ForIter {
     SArray(Box<Term>, Type),
 }
 
+#[derive(PartialEq)]
 pub enum Term {
     Var(Sym),
     Lit(Literal, Type),
@@ -308,6 +312,7 @@ pub enum Term {
     Selph(TypeId),
     Error,
 }
+#[derive(PartialEq)]
 pub enum Statement {
     Term(Term),
     Let(Sym, bool, Type, Term),
@@ -364,7 +369,7 @@ pub struct ExternFn {
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Type {
     I32,
     I64,
@@ -374,7 +379,7 @@ pub enum Type {
     Class(TypeId),
     Tuple(Vec<Type>),
     Array(Box<Type>),
-    SArray(Box<Type>, usize),
+    SArray(Box<Type>, Rc<Term>),
 }
 impl Type {
     pub fn has_null(&self) -> bool {
@@ -544,7 +549,7 @@ pub enum PreType {
     Class(RawPath),
     Tuple(Vec<PreType>),
     Array(Box<PreType>),
-    SArray(Box<PreType>, usize),
+    SArray(Box<PreType>, SPre),
 }
 
 impl Pre {
@@ -1186,7 +1191,7 @@ impl Type {
             Type::SArray(t, u) => Doc::start('[')
                 .chain(t.pretty(cxt))
                 .add("; ")
-                .add(u)
+                .chain(u.pretty(cxt))
                 .add(']'),
         }
     }

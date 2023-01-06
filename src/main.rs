@@ -6,7 +6,7 @@ mod parser;
 mod pretty;
 mod server;
 mod term;
-use std::collections::HashMap;
+
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -30,26 +30,44 @@ fn main() {
     let _exe = args.next();
     let mut paths = Vec::new();
     let mut bindings = crate::binding::Bindings::default();
-    let mut defs = HashMap::new();
+    let mut consts = Vec::new();
     for i in args {
-        if i.starts_with("-D") {
+        if i.starts_with("-C") {
             if let Some(idx) = i.find('=') {
                 let k = &i[2..idx];
                 let v = &i[idx + 1..];
-                let v = crate::parser::lex_one(Rope::from(v).slice(..), &mut bindings)
-                    .unwrap_or_else(|| {
+                let split: Vec<_> = k.split("::").collect();
+                if split.len() != 2 {
+                    Doc::start("error")
+                        .style(Style::BoldRed)
+                        .add(": Invalid path for overriden constant: '")
+                        .add(k)
+                        .add("'")
+                        .style(Style::Bold)
+                        .emit();
+                    std::process::exit(1)
+                }
+                consts.push((
+                    bindings.raw(split[0]),
+                    bindings.raw(split[1]),
+                    crate::parser::quick_parse_term(v, &mut bindings).unwrap_or_else(|| {
                         Doc::start("error")
                             .style(Style::BoldRed)
-                            .add(": Invalid token is definition argument: '")
+                            .add(": Invalid value for overriden constant: '")
                             .add(v)
                             .add("'")
                             .style(Style::Bold)
                             .emit();
                         std::process::exit(1)
-                    });
-                defs.insert(bindings.raw(k), Some(v));
+                    }),
+                ));
             } else {
-                defs.insert(bindings.raw(&i[2..]), None);
+                Doc::start("error")
+                    .style(Style::BoldRed)
+                    .add(": Constant override must have a value (e.g. `-CMain::MAX_VALUE=4`)")
+                    .style(Style::Bold)
+                    .emit();
+                std::process::exit(1)
             }
         } else {
             paths.push(i);
@@ -120,7 +138,7 @@ fn main() {
                 .insert(file_id, input.clone());
         }
 
-        let mut parser = Parser::new(rope.slice(..), &mut bindings, &mut defs);
+        let mut parser = Parser::new(rope.slice(..), &mut bindings);
         let (v, e) = parser.top_level();
         parsed.push((file_id, v, input));
         if !e.is_empty() {
@@ -128,6 +146,46 @@ fn main() {
             for x in e {
                 x.emit(term::Severity::Error, file_id)
             }
+        }
+    }
+    for (a, b, c) in consts {
+        let mut found_mod = false;
+        for (file, items, _) in &mut parsed {
+            if file.1 == a {
+                let mut found_item = false;
+                for i in items {
+                    if let PreItem::Let(n, true, _, body, _) = i {
+                        if **n == b {
+                            *body = Some(c);
+                            found_item = true;
+                            break;
+                        }
+                    }
+                }
+                if !found_item {
+                    Doc::start("error")
+                        .style(Style::BoldRed)
+                        .add(": Constant to override not found: ")
+                        .add(&bindings.resolve_raw(a))
+                        .add("::")
+                        .add(&bindings.resolve_raw(b))
+                        .style(Style::Bold)
+                        .emit();
+                    had_err = true;
+                }
+
+                found_mod = true;
+                break;
+            }
+        }
+        if !found_mod {
+            Doc::start("error")
+                .style(Style::BoldRed)
+                .add(": Module of constant to override not found: ")
+                .add(&bindings.resolve_raw(a))
+                .style(Style::Bold)
+                .emit();
+            had_err = true;
         }
     }
 

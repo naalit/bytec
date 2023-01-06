@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use crate::term::*;
 
@@ -462,6 +462,7 @@ enum TypeError {
     SelfOutsideClass(Span),
     NonRefNull(Span, Type),
     ArrayExternArg(Span),
+    StatementLetDec(Span),
 }
 impl TypeError {
     fn to_error(self, bindings: &Bindings) -> Error {
@@ -551,12 +552,16 @@ impl TypeError {
                 Doc::start("Dynamic arrays are not currently supported as extern function arguments"),
                 span,
             ),
+            TypeError::StatementLetDec(span) => Spanned::new(
+                Doc::start("Let used in statement position must have a value"),
+                span,
+            ),
         }
     }
 }
 
 impl<'b> Cxt<'b> {
-    fn elab_type(&self, ty: &PreType) -> Result<Type, TypeError> {
+    fn elab_type(&mut self, ty: &PreType) -> Result<Type, TypeError> {
         match ty {
             PreType::I32 => Ok(Type::I32),
             PreType::I64 => Ok(Type::I64),
@@ -573,7 +578,10 @@ impl<'b> Cxt<'b> {
                 .collect::<Result<Vec<_>, _>>()
                 .map(Type::Tuple),
             PreType::Array(t) => Ok(Type::Array(Box::new(self.elab_type(t)?))),
-            PreType::SArray(t, i) => Ok(Type::SArray(Box::new(self.elab_type(t)?), *i)),
+            PreType::SArray(t, i) => Ok(Type::SArray(
+                Box::new(self.elab_type(t)?),
+                Rc::new(self.check(i, Type::I32)?),
+            )),
         }
     }
 
@@ -1135,7 +1143,9 @@ impl<'b> Cxt<'b> {
             }
             PreStatement::Item(PreItem::InlineJava(s, _)) => Ok(Some(Statement::InlineJava(*s))),
             PreStatement::Item(PreItem::Let(name, constant, ty, value, public)) => {
-                let value = value.as_ref().expect("statement let must have a value");
+                let value = value
+                    .as_ref()
+                    .ok_or(TypeError::StatementLetDec(name.span))?;
                 let (x, t) = match ty {
                     Some(t) => {
                         let t = self.elab_type(t)?;
@@ -1302,7 +1312,10 @@ impl<'b> Cxt<'b> {
                 let ty = ty.unwrap_or(Type::Unit);
                 Ok((
                     Term::Array(v2, ty.clone(), false),
-                    Type::SArray(Box::new(ty), v.len()),
+                    Type::SArray(
+                        Box::new(ty),
+                        Rc::new(Term::Lit(Literal::Int(v.len() as _), Type::I32)),
+                    ),
                 ))
             }
             Pre::ArrayIdx(parr, idx, inline) => {
@@ -1428,7 +1441,7 @@ impl<'b> Cxt<'b> {
                             if a.len() != 0 {
                                 return Err(TypeError::WrongArity(pre.span, a.len(), 0));
                             }
-                            Ok((Term::Lit(Literal::Int(l as i64), Type::I32), Type::I32))
+                            Ok((l.cloned(self.bindings), Type::I32))
                         }
                         _ => return Err(TypeError::NotFound(lpath(*f))),
                     },

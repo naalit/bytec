@@ -286,9 +286,8 @@ impl Server {
                             .insert(file, self.source[&url].clone());
 
                         // Parse it and add the items, but skip errors - we don't need errors in other files
-                        let mut defs = Default::default();
                         let mut parser =
-                            Parser::new(self.source[&url].slice(..), &mut self.bindings, &mut defs);
+                            Parser::new(self.source[&url].slice(..), &mut self.bindings);
                         let (v, e) = parser.top_level();
                         self.parse_errors.insert(
                             file,
@@ -307,12 +306,7 @@ impl Server {
             self.source[&file_changed].clone(),
         );
 
-        let mut defs = Default::default();
-        let mut parser = Parser::new(
-            self.source[&file_changed].slice(..),
-            &mut self.bindings,
-            &mut defs,
-        );
+        let mut parser = Parser::new(self.source[&file_changed].slice(..), &mut self.bindings);
         let (v, e) = parser.top_level();
         self.parsed.insert(file_changed.clone(), v);
         self.parse_errors.insert(

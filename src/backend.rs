@@ -91,7 +91,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
                 let class = cxt.class(*c).unwrap();
                 mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
                 for (s, t) in members {
-                    let t = t.lower(&cxt);
+                    let t = t.lower(cxt);
                     let mut vars = Vec::new();
                     for t in t {
                         let var = cxt.fresh_var(cxt.bindings.public(*s));
@@ -111,7 +111,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
                     let item = cxt.fresh_fn();
                     cxt.fn_ids.push((f.id, item));
 
-                    let ret = f.ret_ty.lower(&cxt);
+                    let ret = f.ret_ty.lower(cxt);
                     cxt.fn_ret_tys.insert(item, ret);
                     mappings.push((item.0, cxt.bindings.fn_name(f.id), !f.public));
 
@@ -121,7 +121,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
                     }
                 }
                 for (s, t, _) in members {
-                    let t = t.lower(&cxt);
+                    let t = t.lower(cxt);
                     let mut vars = Vec::new();
                     for t in t {
                         let var = cxt.fresh_var(cxt.bindings.public(*s));
@@ -139,7 +139,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
                 if *ext {
                     mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
                     for (s, t) in members {
-                        let t = t.lower(&cxt);
+                        let t = t.lower(cxt);
                         let mut vars = Vec::new();
                         for t in t {
                             let var = cxt.fresh_var(cxt.bindings.public(*s));
@@ -158,7 +158,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
                         let item = cxt.fresh_fn();
                         cxt.fn_ids.push((f.id, item));
 
-                        let ret = f.ret_ty.lower(&cxt);
+                        let ret = f.ret_ty.lower(cxt);
                         cxt.fn_ret_tys.insert(item, ret);
                         mappings.push((item.0, cxt.bindings.fn_name(f.id), !f.public));
 
@@ -176,7 +176,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
                 continue;
             }
             Item::Let(s, false, t, _, _) => {
-                let t = t.lower(&cxt);
+                let t = t.lower(cxt);
                 let mut vars = Vec::new();
                 for t in t {
                     let var = cxt.fresh_var(cxt.bindings.public(*s));
@@ -199,7 +199,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
             cxt.inline_fns.insert(item, i);
         }
 
-        let mut ret = ret.lower(&cxt);
+        let mut ret = ret.lower(cxt);
         // Try to convert certain types - for example, convert Java arrays to Bytec dynamic arrays
         if ext {
             if ret.len() > 1 {
@@ -706,7 +706,7 @@ impl JTerm {
                 .hardline()
                 .chain(
                     Doc::start(
-                        "help: to generate a large switch statement, add `inline` before the index",
+                        "help: adding `unroll` to `for` loops may help; or to generate a large switch statement, add `inline` before the index",
                     )
                     .style(crate::pretty::Style::Special),
                 )),
@@ -1861,6 +1861,7 @@ impl Term {
                     let body = body.cloned(cxt.bindings);
                     let mut syms = HashMap::new();
                     for ((s, t), x) in atys
+                        .clone()
                         .iter()
                         .flat_map(|(s, t)| t.lower(cxt).into_iter().map(|t| (*s, t)))
                         .collect::<Vec<_>>()
@@ -2119,7 +2120,7 @@ impl Statement {
 
                 cxt.vars.push((*n, JVars::Tuple(vars)));
             }
-            Statement::Let(n, true, t, x) => {
+            Statement::Let(n, true, _t, x) => {
                 cxt.inline_vars.insert(*n, x.cloned(cxt.bindings));
             }
             Statement::While(cond, block) => {
@@ -2418,7 +2419,7 @@ impl Item {
     }
 }
 impl Type {
-    fn lower(&self, cxt: &Cxt) -> JTys {
+    fn lower(&self, cxt: &mut Cxt) -> JTys {
         JTys::One(match self {
             Type::I32 => JTy::I32,
             Type::I64 => JTy::I64,
@@ -2448,7 +2449,26 @@ impl Type {
                 )
             }
             Type::SArray(t, i) => {
-                return JTys::Tuple(std::iter::repeat(t.lower(cxt)).take(*i).flatten().collect())
+                if let Some(CVal::Int(i)) = i.lower(cxt).one().prop(&mut Env::new(cxt.bindings, 0))
+                {
+                    return JTys::Tuple(
+                        std::iter::repeat(t.lower(cxt))
+                            .take(i as _)
+                            .flatten()
+                            .collect(),
+                    );
+                } else {
+                    // Propagating errors out of this function would require so much refactoring that it's not worth it in this case
+                    // We have the expression, so the span of the item it's in isn't as important
+                    Doc::start("error")
+                        .style(crate::pretty::Style::BoldRed)
+                        .add(": Array length does not resolve to statically known integer literal: '")
+                        .chain(i.pretty(cxt.bindings))
+                        .add("'")
+                        .style(crate::pretty::Style::Bold)
+                        .emit();
+                    std::process::exit(1)
+                }
             }
         })
     }

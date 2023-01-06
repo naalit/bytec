@@ -1,7 +1,7 @@
-use ropey::RopeSlice;
+use ropey::{Rope, RopeSlice};
 
 use crate::term::*;
-use std::{collections::HashMap, str::FromStr};
+use std::str::FromStr;
 
 // LEXER
 // This is basically Rust syntax
@@ -444,30 +444,14 @@ impl<'a> Iterator for Lexer<'a> {
     }
 }
 
-pub fn lex_one(input: RopeSlice, bindings: &mut Bindings) -> Option<Tok> {
-    let mut lexer = Lexer {
-        input,
-        bindings,
-        pos: 0,
-    };
-    Some(lexer.next()?.ok()?.inner)
-}
-
-enum IfDef {
-    Yes,
-    No(bool),
-}
-impl IfDef {
-    fn resolve(self, p: &mut Parser) -> bool {
-        match self {
-            IfDef::Yes => true,
-            IfDef::No(set_isreal) => {
-                if set_isreal {
-                    p.is_real = true;
-                }
-                false
-            }
-        }
+pub fn quick_parse_term(input: impl Into<Rope>, bindings: &mut Bindings) -> Option<SPre> {
+    let rope = input.into();
+    let mut parser = Parser::new(rope.slice(..), bindings);
+    let r = parser.term().ok().flatten()?;
+    if parser.errors.is_empty() {
+        Some(r)
+    } else {
+        None
     }
 }
 
@@ -477,16 +461,9 @@ pub struct Parser<'a> {
     next: Option<Spanned<Tok>>,
     errors: Vec<Error>,
     had_lex_error: bool,
-    is_real: bool,
-    in_ifdef: bool,
-    defs: &'a mut HashMap<RawSym, Option<Tok>>,
 }
 impl<'a> Parser<'a> {
-    pub fn new(
-        input: RopeSlice<'a>,
-        bindings: &'a mut Bindings,
-        defs: &'a mut HashMap<RawSym, Option<Tok>>,
-    ) -> Self {
+    pub fn new(input: RopeSlice<'a>, bindings: &'a mut Bindings) -> Self {
         Parser {
             lexer: Lexer {
                 input,
@@ -496,9 +473,6 @@ impl<'a> Parser<'a> {
             next: None,
             errors: Vec::new(),
             had_lex_error: false,
-            in_ifdef: false,
-            is_real: true,
-            defs,
         }
     }
 
@@ -511,20 +485,6 @@ impl<'a> Parser<'a> {
                 }
                 if let Some(x) = self.lexer.next() {
                     match x {
-                        Ok(Spanned {
-                            inner: Tok::Name(r),
-                            span,
-                        }) if !self.in_ifdef && self.defs.contains_key(&r) => {
-                            let x = self.defs.get(&r).unwrap();
-                            match x {
-                                Some(t) => {
-                                    let t = Spanned::new(t.clone(), span);
-                                    self.next = Some(t.clone());
-                                    Some(t)
-                                }
-                                None => self.peek(),
-                            }
-                        }
                         Ok(x) => {
                             self.next = Some(x.clone());
                             Some(x)
@@ -540,59 +500,6 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-    }
-
-    fn ifdef(&mut self) -> Result<IfDef, Error> {
-        if self.peek().as_deref() == Some(&Tok::IfDef) {
-            self.next();
-            self.in_ifdef = true;
-            let wanted = if self.peek().as_deref() == Some(&Tok::Not) {
-                self.next();
-                false
-            } else {
-                true
-            };
-            let ident = self
-                .ident()
-                .ok_or(self.err("expected identifier after ifdef"))?;
-            self.in_ifdef = false;
-            let defined = self.defs.contains_key(&*ident);
-            if defined == wanted {
-                Ok(IfDef::Yes)
-            } else {
-                if self.is_real {
-                    self.is_real = false;
-                    Ok(IfDef::No(true))
-                } else {
-                    Ok(IfDef::No(false))
-                }
-            }
-        } else {
-            Ok(IfDef::Yes)
-        }
-    }
-
-    fn defines(&mut self) -> Result<(), Error> {
-        while self.peek().as_deref() == Some(&Tok::Define) {
-            self.next();
-            let name = self
-                .ident()
-                .ok_or(self.err("expected identifier after define"))?;
-            if self.peek().as_deref() == Some(&Tok::Equals) {
-                self.next();
-                let val = self.next().ok_or(self.err("expected token after '='"))?;
-                self.expect(Tok::Semicolon, "';'")?;
-                if self.is_real {
-                    self.defs.insert(*name, Some(val.inner.clone()));
-                }
-            } else {
-                self.expect(Tok::Semicolon, "'=' or ';'")?;
-                if self.is_real {
-                    self.defs.insert(*name, None);
-                }
-            }
-        }
-        Ok(())
     }
 
     fn next(&mut self) -> Option<Spanned<Tok>> {
@@ -1220,12 +1127,7 @@ impl<'a> Parser<'a> {
                 let inner = self.ty()?.ok_or(self.err("expected type"))?;
                 let i = if self.peek().as_deref() == Some(&Tok::Semicolon) {
                     self.next();
-                    if let Some(Tok::LitI(i)) = self.peek().as_deref() {
-                        self.next();
-                        Some(*i as usize)
-                    } else {
-                        return Err(self.err("expected number after ';'"));
-                    }
+                    Some(self.term()?.ok_or(self.err("expected length after ';'"))?)
                 } else {
                     None
                 };
@@ -1393,7 +1295,6 @@ impl<'a> Parser<'a> {
         let mut constructor = None;
 
         while *self.peek().ok_or(self.err("expected closing '}'"))? != Tok::CloseBrace {
-            let ifdef = self.ifdef()?;
             match self.peek().as_deref() {
                 Some(Tok::Constructor) => {
                     if constructor.is_some() {
@@ -1421,9 +1322,7 @@ impl<'a> Parser<'a> {
                     }
                     self.expect(Tok::CloseParen, "closing ')'")?;
                     self.expect(Tok::Semicolon, "';'")?;
-                    if ifdef.resolve(self) {
-                        constructor = Some(args);
-                    }
+                    constructor = Some(args);
                 }
                 Some(Tok::Let) => {
                     self.next();
@@ -1445,9 +1344,7 @@ impl<'a> Parser<'a> {
                     }
 
                     self.expect(Tok::Semicolon, "';'")?;
-                    if ifdef.resolve(self) {
-                        members.push((name, public, ty, body));
-                    }
+                    members.push((name, public, ty, body));
                 }
                 Some(Tok::Fn) => {
                     self.next();
@@ -1482,9 +1379,7 @@ impl<'a> Parser<'a> {
                             args,
                             mapping,
                         };
-                        if ifdef.resolve(self) {
-                            methods.push(PreFnEither::Extern(f));
-                        }
+                        methods.push(PreFnEither::Extern(f));
                     } else {
                         let mut throws = Vec::new();
                         if self.peek().as_deref() == Some(&Tok::Throws) {
@@ -1516,9 +1411,7 @@ impl<'a> Parser<'a> {
                             throws,
                             inline,
                         };
-                        if ifdef.resolve(self) {
-                            methods.push(PreFnEither::Local(f));
-                        }
+                        methods.push(PreFnEither::Local(f));
                     }
                 }
                 _ => return Err(self.err("expected item or closing '}'")),
@@ -1560,8 +1453,6 @@ impl<'a> Parser<'a> {
     }
 
     fn item(&mut self) -> Result<Option<PreItem>, Error> {
-        self.defines()?;
-        let ifdef = self.ifdef()?;
         let i = match self.peek().as_deref() {
             None => Ok(None),
             Some(Tok::ExternBlock(s)) => Ok(Some(PreItem::InlineJava(*s, self.next_span()))),
@@ -1703,17 +1594,10 @@ impl<'a> Parser<'a> {
             }
             _ => Ok(None),
         };
-        if ifdef.resolve(self) {
-            i
-        } else {
-            i?;
-            self.item()
-        }
+        i
     }
 
     fn stmt(&mut self) -> Result<Option<PreStatement>, Error> {
-        self.defines()?;
-        let ifdef = self.ifdef()?;
         let i = match self.peek().as_deref() {
             Some(
                 Tok::Fn
@@ -1797,12 +1681,7 @@ impl<'a> Parser<'a> {
             }
             _ => Ok(self.term()?.map(PreStatement::Term)),
         };
-        if ifdef.resolve(self) {
-            i
-        } else {
-            i?;
-            self.stmt()
-        }
+        i
     }
 
     pub fn top_level(&mut self) -> (Vec<PreItem>, Vec<Error>) {
