@@ -399,6 +399,19 @@ impl<'b> Cxt<'b> {
                 return *m;
             }
         }
+        let r = self.bindings.sym_path(s);
+        if r.len() == 2 {
+            if let Some(module) = self.module(**r.0.first().unwrap()) {
+                if let Some(m) = module
+                    .vars
+                    .iter()
+                    .rfind(|(_, x, _)| *x == s)
+                    .map(|(_, _, (_, m))| m)
+                {
+                    return *m;
+                }
+            }
+        }
         panic!("Not found: {}", self.bindings.resolve_spath(s))
     }
 
@@ -1258,13 +1271,6 @@ impl<'b> Cxt<'b> {
                             }
 
                             return Ok((Term::Variant(class, *b, Vec::new()), Type::Class(class)));
-                        } else if let Some(ty) = self.module(*a.stem()) {
-                            let (_, s, (t, _)) = ty
-                                .vars
-                                .iter()
-                                .rfind(|(s, _, _)| *s == *b)
-                                .ok_or(TypeError::NotFound(lpath(b)))?;
-                            return Ok((Term::Var(*s), t.clone()));
                         }
                     }
                     Err(e)
