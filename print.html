@@ -76,7 +76,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="usage.html"><strong aria-hidden="true">2.</strong> Usage and Project Structure</a></li><li class="chapter-item expanded "><a href="language.html"><strong aria-hidden="true">3.</strong> Language Tour</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="arrays.html"><strong aria-hidden="true">3.1.</strong> Arrays</a></li><li class="chapter-item expanded "><a href="classes.html"><strong aria-hidden="true">3.2.</strong> Classes and Enums</a></li><li class="chapter-item expanded "><a href="modules.html"><strong aria-hidden="true">3.3.</strong> Modules</a></li><li class="chapter-item expanded "><a href="define.html"><strong aria-hidden="true">3.4.</strong> Define</a></li></ol></li><li class="chapter-item expanded "><a href="optimization.html"><strong aria-hidden="true">4.</strong> Optimization Features</a></li><li class="chapter-item expanded "><a href="api.html"><strong aria-hidden="true">5.</strong> Interacting with the Battlecode API</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="usage.html"><strong aria-hidden="true">2.</strong> Usage and Project Structure</a></li><li class="chapter-item expanded "><a href="language.html"><strong aria-hidden="true">3.</strong> Language Tour</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="arrays.html"><strong aria-hidden="true">3.1.</strong> Arrays</a></li><li class="chapter-item expanded "><a href="classes.html"><strong aria-hidden="true">3.2.</strong> Classes and Enums</a></li><li class="chapter-item expanded "><a href="modules.html"><strong aria-hidden="true">3.3.</strong> Modules</a></li><li class="chapter-item expanded "><a href="constants.html"><strong aria-hidden="true">3.4.</strong> Constants</a></li></ol></li><li class="chapter-item expanded "><a href="optimization.html"><strong aria-hidden="true">4.</strong> Optimization Features</a></li><li class="chapter-item expanded "><a href="api.html"><strong aria-hidden="true">5.</strong> Interacting with the Battlecode API</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -179,7 +179,7 @@
 <p>Then, the CLI syntax for <code>bytec</code> looks like <code>bytec source-path1 source-path2... dest-path</code>, so here it would be:</p>
 <pre><code>bytec bytec/common bytec/bot_one src/bot_one
 </code></pre>
-<p>This is intended to make it easy to test against alternate versions of your bot - simply compile to a certain output package (the names don't need to match, <code>bytec</code> will insert the necessary <code>package</code> declarations), make a change, and then compile it again to a different output package and run them against each other. A simplified form of C <code>define</code>s can also help with this, and you can pass those as <code>-DSOME_FLAG</code> or <code>-DSOME_CONST=12</code> on the command line.</p>
+<p>This is intended to make it easy to test against alternate versions of your bot - simply compile to a certain output package (the names don't need to match, <code>bytec</code> will insert the necessary <code>package</code> declarations), make a change, and then compile it again to a different output package and run them against each other. The ability to override <a href="./constants.html">constants</a> from the command line (<code>-CModule::SOME_CONST=12</code>, along the lines of C's <code>-DSOME_CONST=12</code>) also helps with that, especially with scripts that might test many possible parameters automatically.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="language-tour"><a class="header" href="#language-tour">Language Tour</a></h1>
 <p>ByteC is syntactically similar to Rust: functions are declared with <code>fn</code> and variables with <code>let</code> and type inference.</p>
 <pre><pre class="playground"><code class="language-rust">
@@ -412,29 +412,26 @@ fn doStuff() {
 }
 <span class="boring">}
 </span></code></pre></pre>
-<div style="break-before: page; page-break-before: always;"></div><h1 id="define"><a class="header" href="#define">Define</a></h1>
-<p>This is a somewhat hacky system for constants and conditional compilation; it might be replaced at some point.
-Currently, it's similar to a simplified version of the C preprocessor.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="constants"><a class="header" href="#constants">Constants</a></h1>
+<p>Constants replace the old C-like system of <code>define</code>s, and are much easier to use (for instance, they're scoped like all other items!). They look like <code>let</code> definitions, but using <code>const</code> instead of <code>let</code>. Unlike a <code>let</code> definition, constants cannot be modified, and in fact the value is always inlined into use sites.</p>
+<p><strong>Warning!</strong> The value of a constant is essentially pasted at every use. Generally, a constant should have a value that is known at compile time; otherwise, it may be worse than it looks for performance, as the value is evaluated multiple times. Additionally, something like <code>const C = getCurrentTime()</code> is possible, and would have a different value each time it is used, which though convenient is not easily visible. Eventually the compiler is intended to check that constants have compile-time known values, but this has not yet been implemented, so be careful.</p>
 <pre><pre class="playground"><code class="language-rust">
 <span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>define SOME_FLAG;
-// the &quot;value&quot; of a define is allowed to be any one token, but 90% of the time it's a literal
-define SOME_CONST = 12;
+</span>// Main.bt
+const SOME_FLAG = true;
+const SOME_CONST = 12;
 
-// ifdef can be used to qualify declarations
-ifdef SOME_FLAG
-fn someFunction() {}
-
-fn otherFunction() {
-    // or to qualify statements, usually blocks
-    ifdef SOME_FLAG {
+fn someFunction() {
+    // This if will go away, since the value of SOME_FLAG is known at compile time
+    if SOME_FLAG {
+        // SOME_CONST will be replaced with the value 12 during compilation
         println(&quot;SOME_CONST = &quot; + SOME_CONST);
     }
 }
 <span class="boring">}
 </span></code></pre></pre>
-<p>You can also pass defines on the command line if they're not defined in the source code. For this example, it would be <code>-DSOME_FLAG -DSOME_CONST=12</code>.
+<p>You can also override constants from the command line with <code>C&lt;module&gt;::&lt;constant&gt;=&lt;value&gt;</code> - for this example: <code>-CMain::SOME_FLAG=false -CMain::SOME_CONST=42</code>.
 This can be useful for testing different magic numbers and features in a systematic way.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="optimization-features"><a class="header" href="#optimization-features">Optimization Features</a></h1>
 <p>The primary purpose of ByteC is to enable high-level, maintanable programming that preserves maximum bytecode efficiency.
