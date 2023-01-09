@@ -1,4 +1,5 @@
 import * as path from 'path';
+import * as os from "os";
 import { workspace, ExtensionContext } from 'vscode';
 
 import {
@@ -12,7 +13,7 @@ let client: LanguageClient;
 
 export function activate(context: ExtensionContext) {
   // The server is implemented in node
-  let serverModule = context.asAbsolutePath(path.join('..', 'target', 'debug', 'bytec'));
+  let serverModule = path.join(os.homedir(), '.cargo', 'bin', 'bytec');
 
   // If the extension is launched in debug mode then the debug server options are used
   // Otherwise the run options are used

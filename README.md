@@ -7,13 +7,15 @@ and it's fully interoperable with Java so it can be used for the performance-cri
 
 [Read the guide here!](https://tolziplohu.github.io/bytec)
 
+[Or check out this example of a Battlecode 2022 bot written entirely in bytec.](https://github.com/tolziplohu/battlecode22)
+
 ### VSCode extension
 
-There's a simple VSCode extension for ByteC syntax highlighting in the `vscode` folder in this repository. The easiest way to enable it is to symlink it to `[VSCODE-DIRECTIORY]/extensions/bytec-basic` - the VSCode directory is `~/.vscode-oss` on Linux, I'm not sure about other operating systems.
+There's a VSCode extension for ByteC with syntax highlighting, errors as you type, and autocomplete for class members in the `vscode` folder in this repository. The easiest way to enable it is to symlink it to `[VSCODE-DIRECTIORY]/extensions/bytec-basic` - the VSCode directory is `~/.vscode-oss` on Linux. The extension assumes you've installed bytec to `$HOME/.cargo/bin`, which is the default on Linux and I think also on Mac.
 
 ## Language tour
 
-Here's a simple player for Battlecode 2021. Compile it with something like `bytec <input directory>/RobotPlayer.bt <output directory>/testplayer/RobotPlayer.java`. (First instally it with `cargo install --path .`, and make sure the cargo install directory is on your path (`~/.cargo/bin` on Linux)).
+Here's a simple player for Battlecode 2021. Compile it with something like `bytec <input directory>/RobotPlayer.bt <output directory>/testplayer/RobotPlayer.java`. (First install it with `cargo install --path .`, and make sure the cargo install directory is on your path (`~/.cargo/bin` on Linux)).
 
 ```rust
 // This is an extern block, which gets copied into the resulting Java code
