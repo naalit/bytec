@@ -128,15 +128,14 @@ impl Server {
                             _ => (),
                         });
                         if let Some(found) = found {
-                            let info = crate::elaborate::Cxt::from_type(
+                            let cxt = crate::elaborate::Cxt::from_type(
                                 module.ty.clone(),
                                 self.last_mod_tys.clone(),
                                 Vec::new(),
                                 &mut self.bindings,
                                 file,
-                            )
-                            .class_info(found)
-                            .clone();
+                            );
+                            let info = cxt.class_info(found).clone();
                             let members = info.members.iter().map(|(s, _, t)| CompletionItem {
                                 label: self.bindings.resolve_raw(*s).into(),
                                 kind: Some(CompletionItemKind::PROPERTY),

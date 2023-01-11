@@ -675,7 +675,7 @@ impl<'b> Cxt<'b> {
                                     if let Type::Array(_) = t {
                                         return Err(TypeError::ArrayExternArg(s.span));
                                     }
-                                    args.push(t.clone());
+                                    args.push((**s, t.clone()));
                                     args2.push((self.bindings.create(lpath(*s), true), t));
                                 }
                                 let rty = self.elab_type(&f.ret_ty)?;
@@ -699,7 +699,7 @@ impl<'b> Cxt<'b> {
                                 let mut args2 = Vec::new();
                                 for (s, t, _) in &f.args {
                                     let t = self.elab_type(t)?;
-                                    args.push(t.clone());
+                                    args.push((**s, t.clone()));
                                     args2.push((self.bindings.create(lpath(*s), true), t));
                                 }
                                 let rty = self.elab_type(&f.ret_ty)?;
@@ -790,9 +790,9 @@ impl<'b> Cxt<'b> {
             PreItem::InlineJava(_, _) => Ok(()),
             PreItem::Fn(f) => {
                 let mut args = Vec::new();
-                for (_s, t, _) in &f.args {
+                for (s, t, _) in &f.args {
                     let t = self.elab_type(t)?;
-                    args.push(t);
+                    args.push((**s, t));
                 }
                 let rty = self.elab_type(&f.ret_ty)?;
                 self.create_fn(f.name, FnType(args, rty))?;
@@ -805,7 +805,7 @@ impl<'b> Cxt<'b> {
                     if let Type::Array(_) = t {
                         return Err(TypeError::ArrayExternArg(s.span));
                     }
-                    args.push(t);
+                    args.push((**s, t));
                 }
                 let rty = self.elab_type(&f.ret_ty)?;
                 self.create_fn(f.name, FnType(args, rty))?;
@@ -818,7 +818,7 @@ impl<'b> Cxt<'b> {
                 let ty = match ty {
                     Some(ty) => self.elab_type(ty)?,
                     None => {
-                        self.infer(x.as_ref().expect("can't infer type of nothing"))?
+                        self.infer(x.as_ref().ok_or(TypeError::TypeNeeded(name.span))?)?
                             .1
                     }
                 };
@@ -927,7 +927,7 @@ impl<'b> Cxt<'b> {
 
         self.push(Some((rty.clone(), *inline)));
         let mut args2 = Vec::new();
-        for ((a, _, public), t) in args.iter().zip(atys) {
+        for ((a, _, public), (_, t)) in args.iter().zip(atys) {
             let a = self.create(*a, (t.clone(), true), *public);
             args2.push((a, t));
         }
@@ -979,7 +979,7 @@ impl<'b> Cxt<'b> {
 
                 self.push(Some((rty.clone(), false)));
                 let mut args2 = Vec::new();
-                for ((a, _, public), t) in args.iter().zip(atys) {
+                for ((a, _, public), (_, t)) in args.iter().zip(atys) {
                     let a = self.create(*a, (t.clone(), true), *public);
                     args2.push((a, t));
                 }
@@ -1412,7 +1412,7 @@ impl<'b> Cxt<'b> {
                         return Err(TypeError::WrongArity(pre.span, a.len(), atys.len()));
                     }
                     let mut a2 = Vec::new();
-                    for (a, t) in a.iter().zip(atys.clone()) {
+                    for (a, (_, t)) in a.iter().zip(atys.clone()) {
                         a2.push(self.check(a, t)?);
                     }
                     Ok((Term::Call(None, fid, a2), rty))
@@ -1474,7 +1474,7 @@ impl<'b> Cxt<'b> {
                             return Err(TypeError::WrongArity(pre.span, a.len(), atys.len()));
                         }
                         let mut a2 = Vec::new();
-                        for (a, t) in a.iter().zip(atys.clone()) {
+                        for (a, (_, t)) in a.iter().zip(atys.clone()) {
                             a2.push(self.check(a, t)?);
                         }
                         Ok((Term::Call(Some(Box::new(o)), fid, a2), rty))

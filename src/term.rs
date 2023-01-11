@@ -241,7 +241,7 @@ pub struct ModType {
 }
 
 #[derive(Clone)]
-pub struct FnType(pub Vec<Type>, pub Type);
+pub struct FnType(pub Vec<(RawSym, Type)>, pub Type);
 
 #[derive(Clone, Default)]
 pub struct ClassInfo {
@@ -642,7 +642,7 @@ impl Term {
                 x.visit(f);
                 v.iter().for_each(|(_, _, x)| x.visit(f));
             }
-            Term::Not(_) => todo!(),
+            Term::Not(x) => x.visit(f),
             _ => (),
         }
     }
@@ -1219,7 +1219,11 @@ impl FnType {
     pub fn pretty(&self, cxt: &Bindings) -> Doc {
         Doc::start("fn(")
             .chain(Doc::intersperse(
-                self.0.iter().map(|t| t.pretty(cxt)),
+                self.0.iter().map(|(n, t)| {
+                    Doc::start(cxt.resolve_raw(*n))
+                        .add(": ")
+                        .chain(t.pretty(cxt))
+                }),
                 Doc::start(", "),
             ))
             .add("): ")
