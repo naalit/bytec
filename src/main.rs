@@ -31,6 +31,7 @@ fn main() {
     let mut paths = Vec::new();
     let mut bindings = crate::binding::Bindings::default();
     let mut consts = Vec::new();
+    let mut throws = Vec::new();
     for i in args {
         if i.starts_with("-C") {
             if let Some(idx) = i.find('=') {
@@ -69,6 +70,9 @@ fn main() {
                     .emit();
                 std::process::exit(1)
             }
+        } else if i.starts_with("-T") {
+            let rest = &i[2..];
+            throws.push(bindings.raw(rest));
         } else {
             paths.push(i);
         }
@@ -254,10 +258,12 @@ fn main() {
     for (m, (out_path, file)) in &ir_mods {
         use std::io::Write;
 
-        let java = m.codegen(&mut cxt, &ir_mods).unwrap_or_else(|e| {
-            e.emit(Severity::Error, *file);
-            std::process::exit(1);
-        });
+        let java = m
+            .codegen(&mut cxt, &ir_mods, throws.clone())
+            .unwrap_or_else(|e| {
+                e.emit(Severity::Error, *file);
+                std::process::exit(1);
+            });
         let mut out_file = File::create(out_path).unwrap();
         write!(out_file, "{}", java).unwrap();
     }

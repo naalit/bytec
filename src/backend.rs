@@ -235,7 +235,12 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
 }
 
 impl IRMod {
-    pub fn codegen<T>(&self, cxt: &mut Cxt, mods: &[(IRMod, T)]) -> Result<String, Error> {
+    pub fn codegen<T>(
+        &self,
+        cxt: &mut Cxt,
+        mods: &[(IRMod, T)],
+        throws: Vec<RawSym>,
+    ) -> Result<String, Error> {
         for i in &self.code {
             i.lower(cxt);
         }
@@ -253,7 +258,7 @@ impl IRMod {
                 names.insert(*i, (m, *b));
             }
         }
-        let mut gen = Gen::new(cxt.bindings);
+        let mut gen = Gen::new(cxt.bindings, throws);
         gen.names = names;
         // Generate items
         let mut s = String::new();
@@ -490,13 +495,15 @@ struct Gen<'a> {
     /// The bool is whether to mangle names for deduplication
     names: HashMap<u64, (RawPath, bool)>,
     indent: usize,
+    throws: Vec<RawSym>,
 }
 impl<'a> Gen<'a> {
-    fn new(bindings: &'a Bindings) -> Self {
+    fn new(bindings: &'a Bindings, throws: Vec<RawSym>) -> Self {
         Gen {
             bindings,
             names: HashMap::new(),
             indent: 0,
+            throws,
         }
     }
 
@@ -1054,10 +1061,10 @@ impl JFn {
             write!(buf, "{} {}", t.gen(cxt), cxt.name_str(*v),).unwrap();
         }
         buf.push(')');
-        if !self.throws.is_empty() {
+        if !self.throws.is_empty() || !cxt.throws.is_empty() {
             buf.push_str(" throws ");
             let mut first = true;
-            for i in &self.throws {
+            for i in self.throws.iter().chain(&cxt.throws) {
                 if !first {
                     buf.push_str(", ");
                 }
