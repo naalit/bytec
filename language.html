@@ -153,7 +153,7 @@ Functions can be written in a single-expression style as well:</p>
 </span>fn triple2(x: i32): i32 = x * 3;
 <span class="boring">}
 </span></code></pre></pre>
-<p>ByteC has a few &quot;primitive&quot; types, which should be familiar from Rust:</p>
+<p>ByteC has a few &quot;primitive&quot; types, which should be familiar from Rust, along with <code>as</code> to convert between number types:</p>
 <pre><pre class="playground"><code class="language-rust">
 <span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -162,6 +162,8 @@ let b: i64 = 1300000000;
 let c: str = &quot;Hello, world!&quot;;
 let d: bool = false;
 let e: () = {}; // The unit type, used for `void` functions
+let f: f32 = 9.2;
+let g: f64 = 0.9352891473 + a as f64;
 <span class="boring">}
 </span></code></pre></pre>
 <p>As well as tuples, which don't yet support destructuring but do support member access with dot syntax. These are of course lowered to separate variables.</p>
@@ -173,18 +175,19 @@ a += tup.0;
 b += tup.1;
 <span class="boring">}
 </span></code></pre></pre>
-<p>The <code>==</code> and <code>!=</code> operators are automatically translated to <code>.equals()</code> when comparing objects, and when neither side is <code>null</code>;
+<p>The <code>==</code> and <code>!=</code> operators are automatically translated to <code>.equals()</code> when comparing objects, as long as neither side is <code>null</code>;
 so you can just compare everything with <code>==</code> and it should never cause problems unless you specifically need reference equality for some reason.
 Other operators are the same as Java, except that bitwise operators all have the same precedence and you should really just be using parentheses for those anyway.</p>
-<p>All variables are mutable, and can be reassigned and modified in the normal way:</p>
+<p>All variables are immutable by default, but they can be declared mutable using <code>let mut</code>, and can then be reassigned and modified in the normal way:</p>
 <pre><pre class="playground"><code class="language-rust">
 <span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let a = 3;
+</span>let mut a = 3;
 a += 2;
 a = 4;
 <span class="boring">}
 </span></code></pre></pre>
+<p>However, since ByteC compiles to Java, objects are always mutable - if you have an immutable <code>let</code> variable referring to an object, you can still reassign fields of the object, but you can't reassign the variable to point to a new object.</p>
 <p><code>if-else</code> and <code>match</code> (the equivalent to Java <code>switch</code>) are expressions, and can return a value from each branch.
 They don't require parentheses, but do require braces around the body:</p>
 <pre><pre class="playground"><code class="language-rust">

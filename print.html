@@ -138,10 +138,10 @@
                         <h1 id="introduction"><a class="header" href="#introduction">Introduction</a></h1>
 <p>ByteC or <code>bytec</code> is a compiler from a tiny Rust-like language to bytecode-optimized Java, intended for use in Battlecode.</p>
 <p>The language (also called &quot;bytec&quot; for lack of a better name) has a few features Java doesn't, like zero-overhead dynamic arrays, unrolled statically-sized arrays, and tuples, and it's fully interoperable with Java so it can be used for the performance-critical parts of a Java bot. The language itself is somewhere in between Rust and Java.</p>
-<p>For an example of a Battlecode 2022 bot written in ByteC, see <a href="https://github.com/tolziplohu/battlecode22">https://github.com/tolziplohu/battlecode22</a></p>
+<p>For an example of a Battlecode 2022 bot written in ByteC, see <a href="https://github.com/naalit/battlecode22">https://github.com/naalit/battlecode22</a></p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="usage-and-project-structure"><a class="header" href="#usage-and-project-structure">Usage and Project Structure</a></h1>
-<p>ByteC can be installed by cloning this repository and then running <code>cargo install --path .</code>; make sure you have cargo's output directory on your <code>PATH</code> (this is <code>~/.cargo/bin</code> on Linux). After that, you can use the <code>bytec</code> command to run the compiler.</p>
-<p>The project structure for a ByteC-based Battlecode bot should look something like this (see an <a href="https://github.com/tolziplohu/battlecode22">example Battlecode 2022 bot here</a>):</p>
+<p>ByteC can be installed by cloning this repository and then running <code>cargo install --path .</code> (you'll need Rust installed to use <code>cargo</code>); make sure you have cargo's output directory on your <code>PATH</code> (this is <code>~/.cargo/bin</code> on Linux). After that, you can use the <code>bytec</code> command to run the compiler.</p>
+<p>The project structure for a ByteC-based Battlecode bot should look something like this (see an <a href="https://github.com/naalit/battlecode22">example Battlecode 2022 bot here</a>):</p>
 <ul>
 <li><code>battlecode22</code> - the Git repository for this year's bots, a clone of <code>battlecode22-scaffold</code>
 <ul>
@@ -180,6 +180,9 @@
 <pre><code>bytec bytec/common bytec/bot_one src/bot_one
 </code></pre>
 <p>This is intended to make it easy to test against alternate versions of your bot - simply compile to a certain output package (the names don't need to match, <code>bytec</code> will insert the necessary <code>package</code> declarations), make a change, and then compile it again to a different output package and run them against each other. The ability to override <a href="./constants.html">constants</a> from the command line (<code>-CModule::SOME_CONST=12</code>, along the lines of C's <code>-DSOME_CONST=12</code>) also helps with that, especially with scripts that might test many possible parameters automatically.</p>
+<h2 id="vscode-extension"><a class="header" href="#vscode-extension">VSCode extension</a></h2>
+<p>There's a VSCode extension for ByteC with syntax highlighting, errors as you type, and autocomplete for class members. The extension is not on the marketplace, unfortunately - to install it, you'll want to symlink the <code>vscode</code> folder at the top level of the <code>bytec</code> repository to <code>[VSCODE-DIRECTIORY]/extensions/bytec-basic</code> - the VSCode directory is <code>~/.vscode-oss</code> on Linux. The extension assumes you've installed bytec to <code>$HOME/.cargo/bin</code>, which is the default on Linux (and I think also on Mac?).</p>
+<p>Alternatively, if you open the <code>bytec</code> repository in VSCode and then click F5 (or &quot;Launch Extension&quot; in the Run and Debug menu), it should open a new VSCode window with the extension loaded, without needing to install the extension manually - but you'd need to do that every time you use it, so actually installing the extension is preferred.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="language-tour"><a class="header" href="#language-tour">Language Tour</a></h1>
 <p>ByteC is syntactically similar to Rust: functions are declared with <code>fn</code> and variables with <code>let</code> and type inference.</p>
 <pre><pre class="playground"><code class="language-rust">
@@ -199,7 +202,7 @@ Functions can be written in a single-expression style as well:</p>
 </span>fn triple2(x: i32): i32 = x * 3;
 <span class="boring">}
 </span></code></pre></pre>
-<p>ByteC has a few &quot;primitive&quot; types, which should be familiar from Rust:</p>
+<p>ByteC has a few &quot;primitive&quot; types, which should be familiar from Rust, along with <code>as</code> to convert between number types:</p>
 <pre><pre class="playground"><code class="language-rust">
 <span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -208,6 +211,8 @@ let b: i64 = 1300000000;
 let c: str = &quot;Hello, world!&quot;;
 let d: bool = false;
 let e: () = {}; // The unit type, used for `void` functions
+let f: f32 = 9.2;
+let g: f64 = 0.9352891473 + a as f64;
 <span class="boring">}
 </span></code></pre></pre>
 <p>As well as tuples, which don't yet support destructuring but do support member access with dot syntax. These are of course lowered to separate variables.</p>
@@ -219,18 +224,19 @@ a += tup.0;
 b += tup.1;
 <span class="boring">}
 </span></code></pre></pre>
-<p>The <code>==</code> and <code>!=</code> operators are automatically translated to <code>.equals()</code> when comparing objects, and when neither side is <code>null</code>;
+<p>The <code>==</code> and <code>!=</code> operators are automatically translated to <code>.equals()</code> when comparing objects, as long as neither side is <code>null</code>;
 so you can just compare everything with <code>==</code> and it should never cause problems unless you specifically need reference equality for some reason.
 Other operators are the same as Java, except that bitwise operators all have the same precedence and you should really just be using parentheses for those anyway.</p>
-<p>All variables are mutable, and can be reassigned and modified in the normal way:</p>
+<p>All variables are immutable by default, but they can be declared mutable using <code>let mut</code>, and can then be reassigned and modified in the normal way:</p>
 <pre><pre class="playground"><code class="language-rust">
 <span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let a = 3;
+</span>let mut a = 3;
 a += 2;
 a = 4;
 <span class="boring">}
 </span></code></pre></pre>
+<p>However, since ByteC compiles to Java, objects are always mutable - if you have an immutable <code>let</code> variable referring to an object, you can still reassign fields of the object, but you can't reassign the variable to point to a new object.</p>
 <p><code>if-else</code> and <code>match</code> (the equivalent to Java <code>switch</code>) are expressions, and can return a value from each branch.
 They don't require parentheses, but do require braces around the body:</p>
 <pre><pre class="playground"><code class="language-rust">
@@ -321,7 +327,7 @@ fn getArr(i: i32): i32 {
 <span class="boring">}
 </span></code></pre></pre>
 <p>A dynamic array, on the other hand, doesn't have a length known at compile time. In fact, the length of the array can change at any moment.
-It's similar to a Java <code>ArrayList</code>, but all the logic is inlined, so any operations that normal Java arrays support (indexing, index assignment, looping over the array) are exactly as fast, and <code>push</code> and <code>pop</code> are pretty fast as well and don't involve method calls. Java arrays returned by <code>extern</code> functions are automatically converted to ByteC dynamic arrays. Here's an example of the operations supported by dynamic arrays:</p>
+It's similar to a Java <code>ArrayList</code>, but all the logic is inlined, so any operations that normal Java arrays support (indexing, index assignment, looping over the array) are exactly as fast, and <code>push</code> and <code>pop</code> are pretty fast as well and don't involve method calls. Java arrays returned by <code>extern</code> functions are automatically converted to ByteC dynamic arrays. (Internally, dynamic arrays are represented as a Java array, which might have open space at the end, and a length.) Here's an example of the operations supported by dynamic arrays:</p>
 <pre><pre class="playground"><code class="language-rust">
 <span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -350,11 +356,8 @@ x.clear();
 <span class="boring">}
 </span></code></pre></pre>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="classes-and-enums"><a class="header" href="#classes-and-enums">Classes and Enums</a></h1>
-<p>Classes in bytec (which aren't <code>extern</code>) are pretty simple. They can have fields and methods, but custom constructors aren't yet supported.</p>
-<pre><pre class="playground"><code class="language-rust">
-<span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>class LocInfo {
+<p>Classes in bytec (which aren't marked <code>extern</code> - we'll cover <code>extern</code> classes in the Java interop section) are pretty simple. They can have fields and methods, but custom constructors aren't yet supported (and neither are static members).</p>
+<pre><code class="language-rs">class LocInfo {
     let loc: MapLocation;
     let rubble: i32;
     // Fields can have an initial value, but must have an explicit type
@@ -367,8 +370,7 @@ x.clear();
 }
 let x = LocInfo();
 x.set(rc.getLocation());
-<span class="boring">}
-</span></code></pre></pre>
+</code></pre>
 <p>Enums are a little further from Java enums, and closer to Rust ones. Each variant can have members, which essentially form a tuple:</p>
 <pre><pre class="playground"><code class="language-rust">
 <span class="boring">#![allow(unused)]
@@ -413,8 +415,8 @@ fn doStuff() {
 <span class="boring">}
 </span></code></pre></pre>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="constants"><a class="header" href="#constants">Constants</a></h1>
-<p>Constants replace the old C-like system of <code>define</code>s, and are much easier to use (for instance, they're scoped like all other items!). They look like <code>let</code> definitions, but using <code>const</code> instead of <code>let</code>. Unlike a <code>let</code> definition, constants cannot be modified, and in fact the value is always inlined into use sites.</p>
-<p><strong>Warning!</strong> The value of a constant is essentially pasted at every use. Generally, a constant should have a value that is known at compile time; otherwise, it may be worse than it looks for performance, as the value is evaluated multiple times. Additionally, something like <code>const C = getCurrentTime()</code> is possible, and would have a different value each time it is used, which though convenient is not easily visible. Eventually the compiler is intended to check that constants have compile-time known values, but this has not yet been implemented, so be careful.</p>
+<p>Constants replace the old C-like system of <code>define</code>s that <code>bytec</code> used until Battlecode 2023, and are much easier to use (for instance, they're scoped like all other items!). They look like <code>let</code> definitions, but using <code>const</code> instead of <code>let</code>. The constant value is always inlined into use sites - this is the difference between a top-level <code>let</code> and <code>const</code>.</p>
+<p><strong>Warning!</strong> The value of a constant is essentially pasted at every use. Generally, a constant should have a value that is known at compile time; otherwise, it may be worse than it looks for performance, as the value is evaluated multiple times (just use <code>let</code> instead if computation is involved). Additionally, something like <code>const C = getCurrentTime()</code> is possible, and would have a different value each time it is used, which though convenient is not easily visible. Eventually the compiler is intended to check that constants have compile-time known values, but this has not yet been implemented, so be careful.</p>
 <pre><pre class="playground"><code class="language-rust">
 <span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -423,7 +425,7 @@ const SOME_FLAG = true;
 const SOME_CONST = 12;
 
 fn someFunction() {
-    // This if will go away, since the value of SOME_FLAG is known at compile time
+    // This if will disappear, since the value of SOME_FLAG is known at compile time
     if SOME_FLAG {
         // SOME_CONST will be replaced with the value 12 during compilation
         println(&quot;SOME_CONST = &quot; + SOME_CONST);
@@ -431,7 +433,7 @@ fn someFunction() {
 }
 <span class="boring">}
 </span></code></pre></pre>
-<p>You can also override constants from the command line with <code>C&lt;module&gt;::&lt;constant&gt;=&lt;value&gt;</code> - for this example: <code>-CMain::SOME_FLAG=false -CMain::SOME_CONST=42</code>.
+<p>You can also override constants from the command line with <code>-C&lt;module&gt;::&lt;constant&gt;=&lt;value&gt;</code> - for this example: <code>-CMain::SOME_FLAG=false -CMain::SOME_CONST=42</code>. (This is an analogue of C's <code>-DSOME_CONST=52</code>.)
 This can be useful for testing different magic numbers and features in a systematic way.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="optimization-features"><a class="header" href="#optimization-features">Optimization Features</a></h1>
 <p>The primary purpose of ByteC is to enable high-level, maintanable programming that preserves maximum bytecode efficiency.

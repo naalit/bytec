@@ -135,8 +135,8 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="usage-and-project-structure"><a class="header" href="#usage-and-project-structure">Usage and Project Structure</a></h1>
-<p>ByteC can be installed by cloning this repository and then running <code>cargo install --path .</code>; make sure you have cargo's output directory on your <code>PATH</code> (this is <code>~/.cargo/bin</code> on Linux). After that, you can use the <code>bytec</code> command to run the compiler.</p>
-<p>The project structure for a ByteC-based Battlecode bot should look something like this (see an <a href="https://github.com/tolziplohu/battlecode22">example Battlecode 2022 bot here</a>):</p>
+<p>ByteC can be installed by cloning this repository and then running <code>cargo install --path .</code> (you'll need Rust installed to use <code>cargo</code>); make sure you have cargo's output directory on your <code>PATH</code> (this is <code>~/.cargo/bin</code> on Linux). After that, you can use the <code>bytec</code> command to run the compiler.</p>
+<p>The project structure for a ByteC-based Battlecode bot should look something like this (see an <a href="https://github.com/naalit/battlecode22">example Battlecode 2022 bot here</a>):</p>
 <ul>
 <li><code>battlecode22</code> - the Git repository for this year's bots, a clone of <code>battlecode22-scaffold</code>
 <ul>
@@ -175,6 +175,9 @@
 <pre><code>bytec bytec/common bytec/bot_one src/bot_one
 </code></pre>
 <p>This is intended to make it easy to test against alternate versions of your bot - simply compile to a certain output package (the names don't need to match, <code>bytec</code> will insert the necessary <code>package</code> declarations), make a change, and then compile it again to a different output package and run them against each other. The ability to override <a href="./constants.html">constants</a> from the command line (<code>-CModule::SOME_CONST=12</code>, along the lines of C's <code>-DSOME_CONST=12</code>) also helps with that, especially with scripts that might test many possible parameters automatically.</p>
+<h2 id="vscode-extension"><a class="header" href="#vscode-extension">VSCode extension</a></h2>
+<p>There's a VSCode extension for ByteC with syntax highlighting, errors as you type, and autocomplete for class members. The extension is not on the marketplace, unfortunately - to install it, you'll want to symlink the <code>vscode</code> folder at the top level of the <code>bytec</code> repository to <code>[VSCODE-DIRECTIORY]/extensions/bytec-basic</code> - the VSCode directory is <code>~/.vscode-oss</code> on Linux. The extension assumes you've installed bytec to <code>$HOME/.cargo/bin</code>, which is the default on Linux (and I think also on Mac?).</p>
+<p>Alternatively, if you open the <code>bytec</code> repository in VSCode and then click F5 (or &quot;Launch Extension&quot; in the Run and Debug menu), it should open a new VSCode window with the extension loaded, without needing to install the extension manually - but you'd need to do that every time you use it, so actually installing the extension is preferred.</p>
 
                     </main>
 

@@ -135,11 +135,8 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="classes-and-enums"><a class="header" href="#classes-and-enums">Classes and Enums</a></h1>
-<p>Classes in bytec (which aren't <code>extern</code>) are pretty simple. They can have fields and methods, but custom constructors aren't yet supported.</p>
-<pre><pre class="playground"><code class="language-rust">
-<span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>class LocInfo {
+<p>Classes in bytec (which aren't marked <code>extern</code> - we'll cover <code>extern</code> classes in the Java interop section) are pretty simple. They can have fields and methods, but custom constructors aren't yet supported (and neither are static members).</p>
+<pre><code class="language-rs">class LocInfo {
     let loc: MapLocation;
     let rubble: i32;
     // Fields can have an initial value, but must have an explicit type
@@ -152,8 +149,7 @@
 }
 let x = LocInfo();
 x.set(rc.getLocation());
-<span class="boring">}
-</span></code></pre></pre>
+</code></pre>
 <p>Enums are a little further from Java enums, and closer to Rust ones. Each variant can have members, which essentially form a tuple:</p>
 <pre><pre class="playground"><code class="language-rust">
 <span class="boring">#![allow(unused)]

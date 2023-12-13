@@ -148,7 +148,7 @@ fn getArr(i: i32): i32 {
 <span class="boring">}
 </span></code></pre></pre>
 <p>A dynamic array, on the other hand, doesn't have a length known at compile time. In fact, the length of the array can change at any moment.
-It's similar to a Java <code>ArrayList</code>, but all the logic is inlined, so any operations that normal Java arrays support (indexing, index assignment, looping over the array) are exactly as fast, and <code>push</code> and <code>pop</code> are pretty fast as well and don't involve method calls. Java arrays returned by <code>extern</code> functions are automatically converted to ByteC dynamic arrays. Here's an example of the operations supported by dynamic arrays:</p>
+It's similar to a Java <code>ArrayList</code>, but all the logic is inlined, so any operations that normal Java arrays support (indexing, index assignment, looping over the array) are exactly as fast, and <code>push</code> and <code>pop</code> are pretty fast as well and don't involve method calls. Java arrays returned by <code>extern</code> functions are automatically converted to ByteC dynamic arrays. (Internally, dynamic arrays are represented as a Java array, which might have open space at the end, and a length.) Here's an example of the operations supported by dynamic arrays:</p>
 <pre><pre class="playground"><code class="language-rust">
 <span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
