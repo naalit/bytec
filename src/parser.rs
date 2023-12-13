@@ -24,6 +24,10 @@ pub enum Tok {
     I32,
     // i64
     I64,
+    // f32
+    F32,
+    // f64
+    F64,
     // str
     Str,
     // let
@@ -82,6 +86,10 @@ pub enum Tok {
     Unroll,
     // inline
     Inline,
+    // mut
+    Mut,
+    // as
+    As,
 
     // +
     Add,
@@ -187,6 +195,8 @@ impl<'a> Lexer<'a> {
             "fn" => Tok::Fn,
             "i32" => Tok::I32,
             "i64" => Tok::I64,
+            "f32" => Tok::F32,
+            "f64" => Tok::F64,
             "str" => Tok::Str,
             "let" => Tok::Let,
             "const" => Tok::Const,
@@ -216,6 +226,8 @@ impl<'a> Lexer<'a> {
             "ifdef" => Tok::IfDef,
             "unroll" => Tok::Unroll,
             "inline" => Tok::Inline,
+            "mut" => Tok::Mut,
+            "as" => Tok::As,
             _ => Tok::Name(self.bindings.raw(name)),
         };
 
@@ -787,6 +799,12 @@ impl<'a> Parser<'a> {
                     let span = Span(t.span.0, self.lexer.pos);
                     t = Box::new(Spanned::new(Pre::ArrayIdx(t, idx, inline), span));
                 }
+                Some(Tok::As) => {
+                    self.next();
+                    let ty = self.ty()?.ok_or(self.err("expected type"))?;
+                    let span = Span(t.span.0, self.lexer.pos);
+                    t = Box::new(Spanned::new(Pre::As(t, ty), span));
+                }
                 _ => break,
             }
         }
@@ -827,6 +845,10 @@ impl<'a> Parser<'a> {
             None => return Ok(None),
             Some(Tok::LitI(i)) => Ok(Some(Box::new(Spanned::new(
                 Pre::Lit(Literal::Int(*i), None),
+                self.next_span(),
+            )))),
+            Some(Tok::LitF(f)) => Ok(Some(Box::new(Spanned::new(
+                Pre::Lit(Literal::Float(*f), None),
                 self.next_span(),
             )))),
             Some(Tok::LitS(s)) => {
@@ -909,12 +931,16 @@ impl<'a> Parser<'a> {
                                     }
 
                                     let mut public = false;
+                                    let mut mutable = false;
                                     if self.peek().as_deref() == Some(&Tok::Pub) {
                                         public = true;
                                     }
+                                    if self.peek().as_deref() == Some(&Tok::Mut) {
+                                        mutable = true;
+                                    }
 
                                     let name = self.ident().ok_or(self.err("expected name"))?;
-                                    captures.push((name, public));
+                                    captures.push((name, public, mutable));
                                     if self.peek().as_deref() == Some(&Tok::Comma) {
                                         self.next();
                                     } else {
@@ -1114,6 +1140,14 @@ impl<'a> Parser<'a> {
                 self.next();
                 Ok(Some(PreType::I64))
             }
+            Some(Tok::F32) => {
+                self.next();
+                Ok(Some(PreType::F32))
+            }
+            Some(Tok::F64) => {
+                self.next();
+                Ok(Some(PreType::F64))
+            }
             Some(Tok::Bool) => {
                 self.next();
                 Ok(Some(PreType::Bool))
@@ -1178,7 +1212,8 @@ impl<'a> Parser<'a> {
     ) -> Result<
         (
             Spanned<RawSym>,
-            Vec<(Spanned<RawSym>, PreType, bool)>,
+            // (name, type, pub, mut)
+            Vec<(Spanned<RawSym>, PreType, bool, bool)>,
             PreType,
         ),
         Error,
@@ -1193,6 +1228,12 @@ impl<'a> Parser<'a> {
             } else {
                 false
             };
+            let mutable = if self.peek().as_deref() == Some(&Tok::Mut) {
+                self.next();
+                true
+            } else {
+                false
+            };
 
             let n = self
                 .ident()
@@ -1200,7 +1241,7 @@ impl<'a> Parser<'a> {
             self.expect(Tok::Colon, "':'")?;
 
             let t = self.ty()?.ok_or(self.err("expected argument type"))?;
-            args.push((n, t, public));
+            args.push((n, t, public, mutable));
             match self.peek().as_deref() {
                 Some(Tok::Comma) => {
                     self.next();
@@ -1466,6 +1507,13 @@ impl<'a> Parser<'a> {
                 } else {
                     false
                 };
+                let mutable = !constant
+                    && if self.peek().as_deref() == Some(&Tok::Mut) {
+                        self.next();
+                        true
+                    } else {
+                        false
+                    };
 
                 let name = self.ident().ok_or(self.err("expected name"))?;
                 let ty = if self.peek().as_deref() == Some(&Tok::Colon) {
@@ -1483,7 +1531,9 @@ impl<'a> Parser<'a> {
 
                 self.expect(Tok::Semicolon, "';'")?;
 
-                Ok(Some(PreItem::Let(name, constant, ty, value, public)))
+                Ok(Some(PreItem::Let(
+                    name, constant, ty, value, public, mutable,
+                )))
             }
             Some(Tok::Class) => {
                 self.next();
@@ -1643,6 +1693,12 @@ impl<'a> Parser<'a> {
                 } else {
                     false
                 };
+                let mutable = if self.peek().as_deref() == Some(&Tok::Mut) {
+                    self.next();
+                    true
+                } else {
+                    false
+                };
                 let var = self.ident().ok_or(self.err("expected name"))?;
 
                 self.expect(Tok::In, "'in'")?;
@@ -1677,7 +1733,9 @@ impl<'a> Parser<'a> {
                     block.push(stmt);
                 }
 
-                Ok(Some(PreStatement::For(var, public, unroll, a, b, block)))
+                Ok(Some(PreStatement::For(
+                    var, public, mutable, unroll, a, b, block,
+                )))
             }
             _ => Ok(self.term()?.map(PreStatement::Term)),
         };

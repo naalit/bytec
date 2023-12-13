@@ -73,6 +73,14 @@ fn main() {
         } else if i.starts_with("-T") {
             let rest = &i[2..];
             throws.push(bindings.raw(rest));
+        } else if i.starts_with('-') {
+            Doc::start("error")
+                .style(Style::BoldRed)
+                .add(": Unrecognized option: ")
+                .add(i)
+                .style(Style::Bold)
+                .emit();
+            std::process::exit(1)
         } else {
             paths.push(i);
         }
@@ -158,7 +166,7 @@ fn main() {
             if file.1 == a {
                 let mut found_item = false;
                 for i in items {
-                    if let PreItem::Let(n, true, _, body, _) = i {
+                    if let PreItem::Let(n, true, _, body, _, _) = i {
                         if **n == b {
                             *body = Some(c);
                             found_item = true;

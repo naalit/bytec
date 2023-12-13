@@ -16,13 +16,15 @@ Functions can be written in a single-expression style as well:
 fn triple2(x: i32): i32 = x * 3;
 ```
 
-ByteC has a few "primitive" types, which should be familiar from Rust:
+ByteC has a few "primitive" types, which should be familiar from Rust, along with `as` to convert between number types:
 ```rust
 let a: i32 = 12;
 let b: i64 = 1300000000;
 let c: str = "Hello, world!";
 let d: bool = false;
 let e: () = {}; // The unit type, used for `void` functions
+let f: f32 = 9.2;
+let g: f64 = 0.9352891473 + a as f64;
 ```
 
 As well as tuples, which don't yet support destructuring but do support member access with dot syntax. These are of course lowered to separate variables.
@@ -32,16 +34,17 @@ a += tup.0;
 b += tup.1;
 ```
 
-The `==` and `!=` operators are automatically translated to `.equals()` when comparing objects, and when neither side is `null`;
+The `==` and `!=` operators are automatically translated to `.equals()` when comparing objects, as long as neither side is `null`;
 so you can just compare everything with `==` and it should never cause problems unless you specifically need reference equality for some reason.
 Other operators are the same as Java, except that bitwise operators all have the same precedence and you should really just be using parentheses for those anyway.
 
-All variables are mutable, and can be reassigned and modified in the normal way:
+All variables are immutable by default, but they can be declared mutable using `let mut`, and can then be reassigned and modified in the normal way:
 ```rust
-let a = 3;
+let mut a = 3;
 a += 2;
 a = 4;
 ```
+However, since ByteC compiles to Java, objects are always mutable - if you have an immutable `let` variable referring to an object, you can still reassign fields of the object, but you can't reassign the variable to point to a new object.
 
 `if-else` and `match` (the equivalent to Java `switch`) are expressions, and can return a value from each branch.
 They don't require parentheses, but do require braces around the body:

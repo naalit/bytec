@@ -1,7 +1,7 @@
 # Classes and Enums
 
-Classes in bytec (which aren't `extern`) are pretty simple. They can have fields and methods, but custom constructors aren't yet supported.
-```rust
+Classes in bytec (which aren't marked `extern` - we'll cover `extern` classes in the Java interop section) are pretty simple. They can have fields and methods, but custom constructors aren't yet supported (and neither are static members).
+```rs
 class LocInfo {
     let loc: MapLocation;
     let rubble: i32;

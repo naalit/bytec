@@ -298,6 +298,8 @@ struct JBlock(u64);
 enum JLit {
     Int(i32),
     Long(i64),
+    Float(f32),
+    Double(f64),
     Str(RawSym),
     Bool(bool),
 }
@@ -325,6 +327,7 @@ enum JTerm {
     Null(JTy),
     This(JClass),
     InlineJava(RawSym, JTy),
+    Cast(Box<JTerm>, JTy),
 }
 impl JTerm {
     fn to_lval(self) -> Option<JLVal> {
@@ -371,6 +374,8 @@ enum JStmt {
 enum JTy {
     I32,
     I64,
+    F32,
+    F64,
     Bool,
     String,
     Class(JClass),
@@ -381,6 +386,8 @@ impl JTy {
         match self {
             JTy::I32 => true,
             JTy::I64 => true,
+            JTy::F32 => true,
+            JTy::F64 => true,
             JTy::Bool => true,
             JTy::String => false,
             JTy::Class(_) => false,
@@ -471,6 +478,16 @@ impl<T> IntoIterator for MaybeList<T> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.to_vec().into_iter()
+    }
+}
+impl<T> FromIterator<T> for MaybeList<T> {
+    fn from_iter<U: IntoIterator<Item = T>>(iter: U) -> Self {
+        let mut v: Vec<T> = iter.into_iter().collect();
+        if v.len() == 1 {
+            MaybeList::One(v.pop().unwrap())
+        } else {
+            MaybeList::Tuple(v)
+        }
     }
 }
 
@@ -579,9 +596,12 @@ impl JTerm {
             JTerm::Lit(l) => match l {
                 JLit::Int(i) => i.to_string(),
                 JLit::Long(i) => format!("{}L", i),
+                JLit::Float(i) => format!("{}f", i),
+                JLit::Double(i) => i.to_string(),
                 JLit::Str(s) => format!("\"{}\"", cxt.bindings.resolve_raw(*s)),
                 JLit::Bool(b) => b.to_string(),
             },
+            JTerm::Cast(x, ty) => format!("({})({})", ty.gen(cxt), x.gen(cxt)?),
             JTerm::Call(None, f, a, _) => {
                 let mut buf = String::new();
                 buf.push_str(&cxt.fn_str(*f));
@@ -996,6 +1016,8 @@ impl JTy {
         match self {
             JTy::I32 => "int".into(),
             JTy::I64 => "long".into(),
+            JTy::F32 => "float".into(),
+            JTy::F64 => "double".into(),
             JTy::Bool => "boolean".into(),
             JTy::String => "String".into(),
             JTy::Class(c) => cxt.class_str(*c),
@@ -1010,6 +1032,8 @@ impl JTy {
         match self {
             JTy::I32 => "0",
             JTy::I64 => "0L",
+            JTy::F32 => "0.0f",
+            JTy::F64 => "0.0",
             JTy::Bool => "false",
             JTy::String => "null",
             JTy::Class(_) => "null",
@@ -1392,6 +1416,7 @@ impl JTerm {
             | JTerm::Lit(_)
             | JTerm::Null(_)
             | JTerm::SIndex(_, _)
+            | JTerm::Cast(_, _)
             | JTerm::This(_) => true,
             JTerm::Call(_, _, _, _)
             | JTerm::BinOp(_, _, _)
@@ -1413,9 +1438,12 @@ impl JTerm {
             JTerm::Lit(l) => match l {
                 JLit::Int(_) => JTy::I32,
                 JLit::Long(_) => JTy::I64,
+                JLit::Float(_) => JTy::F32,
+                JLit::Double(_) => JTy::F64,
                 JLit::Str(_) => JTy::String,
                 JLit::Bool(_) => JTy::Bool,
             },
+            JTerm::Cast(_, t) => t.clone(),
             JTerm::SIndex(v, _) => v[0].ty(),
             JTerm::Not(_) => JTy::Bool,
             JTerm::Call(_, _, _, t) => t.clone(),
@@ -1521,9 +1549,22 @@ impl Term {
                     Type::I64 => JTerm::Lit(JLit::Long(*i)),
                     _ => unreachable!(),
                 },
+                Literal::Float(i) => match t {
+                    Type::F32 => JTerm::Lit(JLit::Float(*i as f32)),
+                    Type::F64 => JTerm::Lit(JLit::Double(*i)),
+                    _ => unreachable!(),
+                },
                 Literal::Str(s) => JTerm::Lit(JLit::Str(*s)),
                 Literal::Bool(b) => JTerm::Lit(JLit::Bool(*b)),
             },
+            Term::As(x, _from, to) => {
+                return x
+                    .lower(cxt)
+                    .into_iter()
+                    .zip(to.lower(cxt).into_iter())
+                    .map(|(x, ty)| JTerm::Cast(Box::new(x), ty))
+                    .collect()
+            }
             Term::Break => {
                 cxt.block.push(JStmt::Break(
                     cxt.block_label().expect("'break' outside of loop"),
@@ -2430,6 +2471,8 @@ impl Type {
         JTys::One(match self {
             Type::I32 => JTy::I32,
             Type::I64 => JTy::I64,
+            Type::F32 => JTy::F32,
+            Type::F64 => JTy::F64,
             Type::Bool => JTy::Bool,
             Type::Str => JTy::String,
             Type::Unit => return JTys::empty(),
@@ -2524,6 +2567,9 @@ impl JTerm {
         match self {
             JTerm::Var(_, _) => (),
             JTerm::Lit(_) => (),
+            JTerm::Cast(x, _) => {
+                x.map(f);
+            }
             JTerm::Call(o, _, a, _) => {
                 if let Some(o) = o {
                     o.map(f);
@@ -2675,6 +2721,7 @@ impl Visitor for SideEffects {
             JTerm::InlineJava(_, _) => true,
 
             JTerm::Var(_, _)
+            | JTerm::Cast(_, _)
             | JTerm::Lit(_)
             | JTerm::Prop(_, _, _)
             | JTerm::BinOp(_, _, _)
@@ -2900,6 +2947,7 @@ impl JTerm {
         match self {
             JTerm::Var(_, _) => 1,
             JTerm::Lit(_) => 1,
+            JTerm::Cast(a, _) => a.ops() + 1,
             JTerm::Call(_, _, _, _) => 100,
             JTerm::Prop(a, _, _) => a.ops() + 1,
             JTerm::BinOp(_, a, b) => a.ops() + b.ops() + 1,
@@ -2958,6 +3006,8 @@ enum CVal {
     Null(JTy),
     Int(i32),
     Long(i64),
+    Float(f32),
+    Double(f64),
     Bool(bool),
     String(RawSym),
     Array {
@@ -2975,6 +3025,8 @@ impl CVal {
             CVal::Null(ty) => Some(JTerm::Null(ty.clone())),
             CVal::Int(b) => Some(JTerm::Lit(JLit::Int(*b))),
             CVal::Long(b) => Some(JTerm::Lit(JLit::Long(*b))),
+            CVal::Float(b) => Some(JTerm::Lit(JLit::Float(*b))),
+            CVal::Double(b) => Some(JTerm::Lit(JLit::Double(*b))),
             CVal::Bool(b) => Some(JTerm::Lit(JLit::Bool(*b))),
             CVal::Variant(class, r) => Some(JTerm::Variant(*class, *r)),
             CVal::String(r) => Some(JTerm::Lit(JLit::Str(*r))),
@@ -3004,6 +3056,8 @@ impl CVal {
             CVal::Null(ty) => Some(JTerm::Null(ty.clone())),
             CVal::Int(b) => Some(JTerm::Lit(JLit::Int(*b))),
             CVal::Long(b) => Some(JTerm::Lit(JLit::Long(*b))),
+            CVal::Float(b) => Some(JTerm::Lit(JLit::Float(*b))),
+            CVal::Double(b) => Some(JTerm::Lit(JLit::Double(*b))),
             CVal::Bool(b) => Some(JTerm::Lit(JLit::Bool(*b))),
             CVal::Variant(class, r) => Some(JTerm::Variant(*class, *r)),
             CVal::String(r) => Some(JTerm::Lit(JLit::Str(*r))),
@@ -3514,6 +3568,40 @@ impl BinOp {
                 BinOp::BitShl => Long(a << b),
                 BinOp::And | BinOp::Or => unreachable!(),
             }),
+            (Float(a), Float(b)) => Some(match self {
+                BinOp::Add => Float(a + b),
+                BinOp::Sub => Float(a - b),
+                BinOp::Mul => Float(a * b),
+                BinOp::Div => Float(a / b),
+                BinOp::Mod => Float(a % b),
+                BinOp::Gt => Bool(a > b),
+                BinOp::Lt => Bool(a < b),
+                BinOp::Eq => Bool(a == b),
+                BinOp::Neq => Bool(a != b),
+                BinOp::Geq => Bool(a >= b),
+                BinOp::Leq => Bool(a <= b),
+                BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::BitShr | BinOp::BitShl => {
+                    unreachable!()
+                }
+                BinOp::And | BinOp::Or => unreachable!(),
+            }),
+            (Double(a), Double(b)) => Some(match self {
+                BinOp::Add => Double(a + b),
+                BinOp::Sub => Double(a - b),
+                BinOp::Mul => Double(a * b),
+                BinOp::Div => Double(a / b),
+                BinOp::Mod => Double(a % b),
+                BinOp::Gt => Bool(a > b),
+                BinOp::Lt => Bool(a < b),
+                BinOp::Eq => Bool(a == b),
+                BinOp::Neq => Bool(a != b),
+                BinOp::Geq => Bool(a >= b),
+                BinOp::Leq => Bool(a <= b),
+                BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::BitShr | BinOp::BitShl => {
+                    unreachable!()
+                }
+                BinOp::And | BinOp::Or => unreachable!(),
+            }),
             (Bool(a), Bool(b)) => Some(Bool(match self {
                 BinOp::Eq => a == b,
                 BinOp::Neq => a != b,
@@ -3553,9 +3641,42 @@ impl JTerm {
             JTerm::Lit(l) => Some(match l {
                 JLit::Int(i) => CVal::Int(*i),
                 JLit::Long(i) => CVal::Long(*i),
+                JLit::Float(i) => CVal::Float(*i),
+                JLit::Double(i) => CVal::Double(*i),
                 JLit::Str(s) => CVal::String(*s),
                 JLit::Bool(b) => CVal::Bool(*b),
             }),
+            JTerm::Cast(x, ty) => match x.prop(env)? {
+                CVal::Int(i) => match ty {
+                    JTy::I32 => Some(CVal::Int(i as i32)),
+                    JTy::I64 => Some(CVal::Long(i as i64)),
+                    JTy::F32 => Some(CVal::Float(i as f32)),
+                    JTy::F64 => Some(CVal::Double(i as f64)),
+                    _ => None,
+                },
+                CVal::Long(i) => match ty {
+                    JTy::I32 => Some(CVal::Int(i as i32)),
+                    JTy::I64 => Some(CVal::Long(i as i64)),
+                    JTy::F32 => Some(CVal::Float(i as f32)),
+                    JTy::F64 => Some(CVal::Double(i as f64)),
+                    _ => None,
+                },
+                CVal::Float(i) => match ty {
+                    JTy::I32 => Some(CVal::Int(i as i32)),
+                    JTy::I64 => Some(CVal::Long(i as i64)),
+                    JTy::F32 => Some(CVal::Float(i as f32)),
+                    JTy::F64 => Some(CVal::Double(i as f64)),
+                    _ => None,
+                },
+                CVal::Double(i) => match ty {
+                    JTy::I32 => Some(CVal::Int(i as i32)),
+                    JTy::I64 => Some(CVal::Long(i as i64)),
+                    JTy::F32 => Some(CVal::Float(i as f32)),
+                    JTy::F64 => Some(CVal::Double(i as f64)),
+                    _ => None,
+                },
+                _ => None,
+            },
             // Ignoring some terms, like the object of a method call, is fine
             // They won't be optimized, but complicated expressions shouldn't be method receivers anyway
             JTerm::Call(_, _, args, _) => {

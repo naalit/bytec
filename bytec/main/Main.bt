@@ -76,9 +76,9 @@ fn test_methods(x: [i32]): i32 {
 }
 
 fn fib_mut(n: i32): i32 {
-    let i = 1;
-    let a = 1;
-    let b = 1;
+    let mut i = 1;
+    let mut a = 1;
+    let mut b = 1;
     while i < n {
         i += 1;
         let t = a + b;
@@ -87,16 +87,16 @@ fn fib_mut(n: i32): i32 {
     }
     a
 }
-fn map_plus_one(a: [i32]) {
-    let i = 0;
+fn map_plus_one(mut a: [i32]) {
+    let mut i = 0;
     while i < a.len() {
         a[i] += 1;
         i += 1;
     }
 }
 
-let counter = 0;
-let stuff: [i32] = [];
+let mut counter = 0;
+let mut stuff: [i32] = [];
 fn add_stuff(i: i32) {
     stuff.push(i);
     counter += 1;
@@ -110,7 +110,7 @@ fn pretty_arr(arr: [i32]) {
     for i in 0..200 {
         counter += 1;
     }
-    for i in arr {
+    for mut i in arr {
         if i > 10 && (i & 1) == 1 {
             // This only affects i, not the array, so nothing happens
             i += 1;
@@ -166,7 +166,7 @@ fn callsArray(): i32 {
     }
     let arr = returnsArray();
     arr.push(12);
-    let sum = 0;
+    let mut sum = 0;
     for i in arr {
         sum += i;
     }
@@ -192,7 +192,7 @@ fn intsSum(i: Ints): i32 = match i {
     None => 0,
     One(x) => x,
     Lots(v) => {
-        let sum = 0;
+        let mut sum = 0;
         for i in v {
             sum += i;
         }
@@ -215,26 +215,25 @@ fn uses(): i32 {
     myVar.total() + myVar.z.len()
 }
 
-ifdef NotDefined
-fn thisDoesntCompile(): str {
-    return 12;
-}
+// ifdef NotDefined
+// fn thisDoesntCompile(): str {
+//     return 12;
+// }
 
-define Yes;
-define Num = 12;
+const Yes = true;
+const Num = 12;
 
-ifdef Yes
 fn testThis() {
     let num = Num;
-    ifdef Num2 {
-        num += Num2;
-    }
+    // if Num2 {
+    //     num += Num2;
+    // }
 }
 
 let dynamic: [i32] = [1, 2, 3];
 let static: [i32; 3] = [1, 2, 3];
 fn looper2(): i32 {
-    let sum = 0;
+    let mut sum = 0;
     for i in dynamic {
         for j in static {
             let tmp = i * j;

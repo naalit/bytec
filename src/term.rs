@@ -120,12 +120,20 @@ impl BinOp {
             BinOp::And | BinOp::Or => BinOpType::Logic,
         }
     }
+
+    pub fn is_bit_op(self) -> bool {
+        match self {
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::BitShr | BinOp::BitShl => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Literal {
     /// Java doesn't have unsigned integers, which makes int literals convenient
     Int(i64),
+    Float(f64),
     Str(RawSym),
     Bool(bool),
 }
@@ -217,7 +225,7 @@ impl Error {
                 Doc::start(format!("{:4} |", line))
                     .style(Style::Special)
                     .space()
-                    .add(line_str),
+                    .add(line_str.to_string().trim_end()),
             )
             .hardline()
             .chain(
@@ -323,6 +331,7 @@ pub enum Term {
         Box<Term>,
         Vec<(Option<RawSym>, Vec<(Sym, Type)>, Term)>,
     ),
+    As(Box<Term>, Type, Type),
     Not(Box<Term>),
     Null(Type),
     Selph(TypeId),
@@ -389,6 +398,8 @@ pub struct ExternFn {
 pub enum Type {
     I32,
     I64,
+    F32,
+    F64,
     Bool,
     Str,
     Unit,
@@ -492,8 +503,15 @@ pub enum Pre {
     // match x { s => t, else => u }
     Match(
         SPre,
-        Vec<(Spanned<Option<RawSym>>, Vec<(Spanned<RawSym>, bool)>, SPre)>,
+        // (name, pub, mut)
+        Vec<(
+            Spanned<Option<RawSym>>,
+            Vec<(Spanned<RawSym>, bool, bool)>,
+            SPre,
+        )>,
     ),
+    // x as t
+    As(SPre, PreType),
     // !x
     Not(SPre),
     // null
@@ -507,7 +525,8 @@ pub struct PreFn {
     pub name: Spanned<RawSym>,
     pub public: bool,
     pub ret_ty: PreType,
-    pub args: Vec<(Spanned<RawSym>, PreType, bool)>,
+    // (name, type, pub, mut)
+    pub args: Vec<(Spanned<RawSym>, PreType, bool, bool)>,
     pub body: SPre,
     pub throws: Vec<RawSym>,
     pub inline: bool,
@@ -516,7 +535,8 @@ pub struct PreFn {
 pub struct PreEFn {
     pub name: Spanned<RawSym>,
     pub ret_ty: PreType,
-    pub args: Vec<(Spanned<RawSym>, PreType, bool)>,
+    // (name, type, pub, mut)
+    pub args: Vec<(Spanned<RawSym>, PreType, bool, bool)>,
     pub mapping: RawSym,
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -538,7 +558,15 @@ pub enum PreItem {
         members: Vec<(Spanned<RawSym>, bool, PreType, Option<SPre>)>,
         constructor: Option<Vec<PreType>>,
     },
-    Let(Spanned<RawSym>, bool, Option<PreType>, Option<SPre>, bool),
+    // (name, const, type, value, pub, mut)
+    Let(
+        Spanned<RawSym>,
+        bool,
+        Option<PreType>,
+        Option<SPre>,
+        bool,
+        bool,
+    ),
     // use a::b; the bool is true if it's a wildcard a::b::*
     Use(RawPath, bool),
 }
@@ -551,8 +579,9 @@ pub enum PreStatement {
     // for pub a in [unroll] b..c
     For(
         Spanned<RawSym>,
-        bool,
-        bool,
+        bool, // pub
+        bool, // mut
+        bool, // unroll
         SPre,
         Option<SPre>,
         Vec<PreStatement>,
@@ -563,6 +592,8 @@ pub enum PreStatement {
 pub enum PreType {
     I32,
     I64,
+    F32,
+    F64,
     Bool,
     Str,
     Class(RawPath),
@@ -794,6 +825,7 @@ impl Term {
             Term::Constructor(f, a) => {
                 Term::Constructor(*f, a.iter().map(|x| x.cloned_(cln)).collect())
             }
+            Term::As(x, from, to) => Term::As(Box::new(x.cloned_(cln)), from.clone(), to.clone()),
             Term::Not(x) => Term::Not(Box::new(x.cloned_(cln))),
             Term::Null(t) => Term::Null(t.clone()),
             Term::Selph(t) => Term::Selph(*t),
@@ -888,6 +920,11 @@ impl Term {
                 Literal::Int(i) => Doc::start(i).add(match t {
                     Type::I32 => "i32",
                     Type::I64 => "i64",
+                    _ => unreachable!(),
+                }),
+                Literal::Float(i) => Doc::start(i).add(match t {
+                    Type::F32 => "f32",
+                    Type::F64 => "f64",
                     _ => unreachable!(),
                 }),
                 Literal::Str(s) => Doc::start('"').add(cxt.resolve_raw(*s)).add('"'),
@@ -993,6 +1030,13 @@ impl Term {
                 .indent()
                 .line()
                 .add('}'),
+            Term::As(x, _from, to) => x
+                .pretty(cxt)
+                .nest(Prec::App)
+                .space()
+                .chain(Doc::keyword("as"))
+                .space()
+                .chain(to.pretty(cxt)),
             Term::Set(v, op, x) => v
                 .pretty(cxt)
                 .space()
@@ -1196,6 +1240,8 @@ impl Type {
         match self {
             Type::I32 => Doc::keyword("i32"),
             Type::I64 => Doc::keyword("i64"),
+            Type::F32 => Doc::keyword("f32"),
+            Type::F64 => Doc::keyword("f64"),
             Type::Bool => Doc::keyword("bool"),
             Type::Str => Doc::keyword("str"),
             Type::Unit => Doc::start("()"),

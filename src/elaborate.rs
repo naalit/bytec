@@ -488,6 +488,8 @@ enum TypeError {
     ImmutableAssign(Sym, Span),
     InlineReturn(Span),
     ReturnOutOfFunction(Span),
+    IllegalBinOp(Span, BinOp, Type),
+    InvalidConversion(Span, Type, Type),
 }
 impl TypeError {
     fn to_error(self, bindings: &Bindings) -> Error {
@@ -593,6 +595,20 @@ impl TypeError {
                 Doc::start("`return` used outside of a function"),
                 span,
             ),
+            TypeError::IllegalBinOp(span, op, ty) => Spanned::new(
+                Doc::start("Cannot apply operation ")
+                    .add(op.repr())
+                    .add(" to value of type ")
+                    .chain(ty.pretty(bindings)),
+                span,
+            ),
+            TypeError::InvalidConversion(span, from, to) => Spanned::new(
+                Doc::start("Cannot `as`-convert from type ")
+                    .chain(from.pretty(bindings))
+                    .add(" into type ")
+                    .chain(to.pretty(bindings)),
+                span,
+            ),
         }
     }
 }
@@ -602,6 +618,8 @@ impl<'b> Cxt<'b> {
         match ty {
             PreType::I32 => Ok(Type::I32),
             PreType::I64 => Ok(Type::I64),
+            PreType::F32 => Ok(Type::F32),
+            PreType::F64 => Ok(Type::F64),
             PreType::Bool => Ok(Type::Bool),
             PreType::Str => Ok(Type::Str),
             PreType::Tuple(v) if v.is_empty() => Ok(Type::Unit),
@@ -670,7 +688,7 @@ impl<'b> Cxt<'b> {
                             PreFnEither::Extern(f) => {
                                 let mut args = Vec::new();
                                 let mut args2 = Vec::new();
-                                for (s, t, _) in &f.args {
+                                for (s, t, _, _) in &f.args {
                                     let t = self.elab_type(t)?;
                                     if let Type::Array(_) = t {
                                         return Err(TypeError::ArrayExternArg(s.span));
@@ -697,7 +715,7 @@ impl<'b> Cxt<'b> {
                             PreFnEither::Local(f) => {
                                 let mut args = Vec::new();
                                 let mut args2 = Vec::new();
-                                for (s, t, _) in &f.args {
+                                for (s, t, _, _) in &f.args {
                                     let t = self.elab_type(t)?;
                                     args.push((**s, t.clone()));
                                     args2.push((self.bindings.create(lpath(*s), true), t));
@@ -790,7 +808,7 @@ impl<'b> Cxt<'b> {
             PreItem::InlineJava(_, _) => Ok(()),
             PreItem::Fn(f) => {
                 let mut args = Vec::new();
-                for (s, t, _) in &f.args {
+                for (s, t, _, _) in &f.args {
                     let t = self.elab_type(t)?;
                     args.push((**s, t));
                 }
@@ -800,7 +818,7 @@ impl<'b> Cxt<'b> {
             }
             PreItem::ExternFn(f) => {
                 let mut args = Vec::new();
-                for (s, t, _) in &f.args {
+                for (s, t, _, _) in &f.args {
                     let t = self.elab_type(t)?;
                     if let Type::Array(_) = t {
                         return Err(TypeError::ArrayExternArg(s.span));
@@ -811,7 +829,7 @@ impl<'b> Cxt<'b> {
                 self.create_fn(f.name, FnType(args, rty))?;
                 Ok(())
             }
-            PreItem::Let(name, constant, ty, x, public) => {
+            PreItem::Let(name, _constant, ty, x, public, mutable) => {
                 if self.var(&lpath(*name)).is_some() {
                     return Err(TypeError::Duplicate(name.span, **name));
                 }
@@ -822,7 +840,7 @@ impl<'b> Cxt<'b> {
                             .1
                     }
                 };
-                self.create(*name, (ty, !constant), *public);
+                self.create(*name, (ty, *mutable), *public);
                 Ok(())
             }
             PreItem::Class { .. } => Ok(()),
@@ -927,8 +945,8 @@ impl<'b> Cxt<'b> {
 
         self.push(Some((rty.clone(), *inline)));
         let mut args2 = Vec::new();
-        for ((a, _, public), (_, t)) in args.iter().zip(atys) {
-            let a = self.create(*a, (t.clone(), true), *public);
+        for ((a, _, public, mutable), (_, t)) in args.iter().zip(atys) {
+            let a = self.create(*a, (t.clone(), *mutable), *public);
             args2.push((a, t));
         }
         let body = self.check(body, rty.clone())?;
@@ -979,8 +997,8 @@ impl<'b> Cxt<'b> {
 
                 self.push(Some((rty.clone(), false)));
                 let mut args2 = Vec::new();
-                for ((a, _, public), (_, t)) in args.iter().zip(atys) {
-                    let a = self.create(*a, (t.clone(), true), *public);
+                for ((a, _, public, mutable), (_, t)) in args.iter().zip(atys) {
+                    let a = self.create(*a, (t.clone(), *mutable), *public);
                     args2.push((a, t));
                 }
                 // let body = self.check(body, rty.clone())?;
@@ -994,7 +1012,7 @@ impl<'b> Cxt<'b> {
                     span: name.span,
                 })])
             }
-            PreItem::Let(name, constant, _, x, _) => {
+            PreItem::Let(name, constant, _, x, _, _) => {
                 let (s, t) = self.var(&lpath(*name)).unwrap();
                 let (t, _) = t.clone();
                 let x = x.as_ref().map(|x| self.check(x, t.clone())).transpose()?;
@@ -1183,7 +1201,7 @@ impl<'b> Cxt<'b> {
                 Ok(None)
             }
             PreStatement::Item(PreItem::InlineJava(s, _)) => Ok(Some(Statement::InlineJava(*s))),
-            PreStatement::Item(PreItem::Let(name, constant, ty, value, public)) => {
+            PreStatement::Item(PreItem::Let(name, constant, ty, value, public, mutable)) => {
                 let value = value
                     .as_ref()
                     .ok_or(TypeError::StatementLetDec(name.span))?;
@@ -1195,7 +1213,7 @@ impl<'b> Cxt<'b> {
                     }
                     None => self.infer(value)?,
                 };
-                let n = self.create(*name, (t.clone(), !constant), *public);
+                let n = self.create(*name, (t.clone(), *mutable), *public);
                 Ok(Some(Statement::Let(n, *constant, t, x)))
             }
             PreStatement::Term(t) => self.infer(t).map(|(x, _)| Some(Statement::Term(x))),
@@ -1210,7 +1228,7 @@ impl<'b> Cxt<'b> {
 
                 Ok(Some(Statement::While(cond, block2)))
             }
-            PreStatement::For(s, public, unroll, pa, b, block) => {
+            PreStatement::For(s, public, mutable, unroll, pa, b, block) => {
                 let (iter, t) = match b {
                     // Range
                     Some(b) => {
@@ -1229,7 +1247,7 @@ impl<'b> Cxt<'b> {
                     }
                 };
                 self.push(None);
-                let n = self.create(*s, (t, false), *public);
+                let n = self.create(*s, (t, *mutable), *public);
                 let mut block2 = Vec::new();
                 for i in block {
                     self.check_stmt(i).map(|x| block2.push(x));
@@ -1284,9 +1302,29 @@ impl<'b> Cxt<'b> {
                     // Default to i32
                     None => Ok((Term::Lit(*l, Type::I32), Type::I32)),
                 },
+                Literal::Float(_) => match t {
+                    Some(t) => {
+                        let t = self.elab_type(t)?;
+                        Ok((Term::Lit(*l, t.clone()), t))
+                    }
+                    // Default to f32
+                    None => Ok((Term::Lit(*l, Type::F32), Type::F32)),
+                },
                 Literal::Str(_) => Ok((Term::Lit(*l, Type::Str), Type::Str)),
                 Literal::Bool(_) => Ok((Term::Lit(*l, Type::Bool), Type::Bool)),
             },
+            Pre::As(x, t) => {
+                let t = self.elab_type(t)?;
+                let (x, xty) = self.infer(x)?;
+                match (&xty, &t) {
+                    (
+                        Type::I32 | Type::I64 | Type::F32 | Type::F64,
+                        Type::I32 | Type::I64 | Type::F32 | Type::F64,
+                    ) => (),
+                    _ => return Err(TypeError::InvalidConversion(pre.span, xty, t)),
+                }
+                Ok((Term::As(Box::new(x), xty, t.clone()), t))
+            }
             // These default to (), but can be coerced to any type - see check()
             Pre::Break => Ok((Term::Break, Type::Unit)),
             Pre::Continue => Ok((Term::Continue, Type::Unit)),
@@ -1529,12 +1567,19 @@ impl<'b> Cxt<'b> {
                         (a, t, Type::Bool)
                     }
                     BinOpType::Arith => {
+                        let aspan = a.span;
                         let (a, t) = self.infer(a)?;
+                        match t {
+                            Type::I32 | Type::I64 => (),
+                            Type::F32 | Type::F64 if !op.is_bit_op() => (),
+                            Type::Str if *op == BinOp::Add => (),
+                            _ => return Err(TypeError::IllegalBinOp(aspan, *op, t)),
+                        }
                         (a, t.clone(), t)
                     }
                     BinOpType::Logic => (self.check(a, Type::Bool)?, Type::Bool, Type::Bool),
                 };
-                let b = if rt == Type::Str && op.ty() == BinOpType::Arith {
+                let b = if rt == Type::Str && *op == BinOp::Add {
                     let (b, _) = self.infer(b)?;
                     b
                 } else {
@@ -1547,7 +1592,7 @@ impl<'b> Cxt<'b> {
 
                 let mut v2 = Vec::new();
                 for i in v {
-                    for x in self.check_stmt(i) {
+                    if let Some(x) = self.check_stmt(i) {
                         v2.push(x);
                     }
                 }
@@ -1616,8 +1661,8 @@ impl<'b> Cxt<'b> {
                                     atys.len(),
                                 ));
                             } else {
-                                for (&(raw, public), ty) in captures.iter().zip(atys) {
-                                    let s = self.create(raw, (ty.clone(), true), public);
+                                for (&(raw, public, mutable), ty) in captures.iter().zip(atys) {
+                                    let s = self.create(raw, (ty.clone(), mutable), public);
                                     captures2.push((s, ty.clone()));
                                 }
                             }
