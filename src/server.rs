@@ -154,24 +154,27 @@ impl Server {
         let pos =
             source.char_to_byte(source.line_to_char(pos.line as usize) + pos.character as usize);
         if let Some(module) = self.last_mods.iter().find(|m| m.file == file) {
-            if let Some(item) = module
-                .items
-                .iter()
-                .enumerate()
-                .find(|(_, m)| m.span().0 > pos)
-                .and_then(|(i, m)| {
-                    if i == 0 {
-                        Some(m)
-                    } else {
-                        module.items.get(i - 1)
+            // Identify the last item that starts before the cursor, and assume we're in that one
+            let mut item = None;
+            for m in module.items.iter() {
+                if m.span().0 <= pos {
+                    match item {
+                        None => item = Some(m),
+                        Some(i) if i.span().0 < m.span().0 => item = Some(m),
+                        Some(_) => (),
                     }
-                })
-                .or_else(|| module.items.last())
-            {
+                }
+            }
+            if let Some(item) = item {
                 let mut found_member = None;
+                let mut is_call = false;
                 item.visit(&mut |x| match x {
                     Term::Member(_, t, m) if m.span.0 <= pos + 1 && m.span.1 + 1 >= pos => {
                         found_member = Some(*t)
+                    }
+                    Term::Call(_, Err(m), _) if m.span.0 <= pos + 1 && m.span.1 + 1 >= pos => {
+                        found_member = Some(**m);
+                        is_call = true
                     }
                     _ => (),
                 });
@@ -198,7 +201,7 @@ impl Server {
                     let methods = info
                         .methods
                         .iter()
-                        .map(|(s, _, t)| self.make_fn_comp_item(s, t));
+                        .map(|(s, _, t)| self.make_fn_comp_item(s, t, !is_call));
                     return Some(members.chain(methods).collect());
                 } else {
                     // Try to complete paths
@@ -208,7 +211,7 @@ impl Server {
                     while source.char(ppos).is_alphanumeric() || source.char(ppos) == ':' {
                         ppos -= 1;
                     }
-                    let path = source.slice(ppos..pos).to_string();
+                    let path = source.slice(ppos + 1..pos).to_string();
                     eprintln!("Completion backup: {}", path);
                     let mut path: Vec<_> = path
                         .split("::")
@@ -238,8 +241,9 @@ impl Server {
                                     }),
                                     ..Default::default()
                                 });
-                                let fns =
-                                    m.fns.iter().map(|(s, _, t)| self.make_fn_comp_item(s, t));
+                                let fns = m.fns.iter().map(|(s, _, t)| {
+                                    self.make_fn_comp_item(s, t, source.char(pos) != '(')
+                                });
                                 return Some(fns.chain(classes).chain(vars).collect());
                             } else {
                                 let cxt = crate::elaborate::Cxt::from_type(
@@ -319,12 +323,13 @@ impl Server {
         None
     }
 
-    fn make_fn_comp_item(&self, s: &RawSym, t: &FnType) -> CompletionItem {
+    fn make_fn_comp_item(&self, s: &RawSym, t: &FnType, gen_args: bool) -> CompletionItem {
         if t.0.is_empty() {
             CompletionItem {
                 label: format!("{}()", self.bindings.resolve_raw(*s)),
                 kind: Some(CompletionItemKind::METHOD),
                 detail: Some(t.pretty(&self.bindings).raw_string()),
+                insert_text: (!gen_args).then(|| self.bindings.resolve_raw(*s).into()),
                 documentation: None,
                 label_details: Some(CompletionItemLabelDetails {
                     // This field shows up left-aligned after the label, Rust uses it for e.g. `(as Clone)`
@@ -341,18 +346,22 @@ impl Server {
                 detail: Some(t.pretty(&self.bindings).raw_string()),
                 insert_text: Some(
                     Doc::start(self.bindings.resolve_raw(*s))
-                        .add('(')
-                        .chain(Doc::intersperse(
-                            t.0.iter().enumerate().map(|(i, (n, _))| {
-                                Doc::start("${")
-                                    .add(i + 1)
-                                    .add(":")
-                                    .add(self.bindings.resolve_raw(*n))
-                                    .add("}")
-                            }),
-                            Doc::start(", "),
-                        ))
-                        .add(')')
+                        .chain(if gen_args {
+                            Doc::start('(')
+                                .chain(Doc::intersperse(
+                                    t.0.iter().enumerate().map(|(i, (n, _))| {
+                                        Doc::start("${")
+                                            .add(i + 1)
+                                            .add(":")
+                                            .add(self.bindings.resolve_raw(*n))
+                                            .add("}")
+                                    }),
+                                    Doc::start(", "),
+                                ))
+                                .add(')')
+                        } else {
+                            Doc::none()
+                        })
                         .raw_string(),
                 ),
                 insert_text_format: Some(InsertTextFormat::SNIPPET),

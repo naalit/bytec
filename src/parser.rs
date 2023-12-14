@@ -834,13 +834,25 @@ impl<'a> Parser<'a> {
                     self.next();
                 }
                 Some(Tok::CloseParen) => (),
-                _ => return Err(self.err("expected ',' or ')'")),
+                _ => {
+                    let e = self.err("expected ',' or ')'");
+                    self.errors.push(e);
+                    break;
+                }
             }
         }
-        match self.next().as_deref() {
-            Some(Tok::CloseParen) => Ok(args),
-            None => return Err(self.err("unclosed argument list, expected ')'")),
-            _ => unreachable!(),
+        match self.peek().as_deref() {
+            Some(Tok::CloseParen) => {
+                self.next();
+                Ok(args)
+            }
+            None => {
+                let e = self.err("unclosed argument list, expected ')'");
+                self.errors.push(e);
+                Ok(args)
+            }
+            // we already emitted an error here
+            _ => Ok(args),
         }
     }
 
@@ -1122,7 +1134,9 @@ impl<'a> Parser<'a> {
                             ))));
                         }
                         (PreStatement::Term(x), _) if x.needs_semicolon() => {
-                            return Err(self.err("expected ';' after expression statement"))
+                            let error = self.err("expected ';' after expression statement");
+                            self.errors.push(error);
+                            block.push(PreStatement::Term(x));
                         }
                         (x, _) => {
                             block.push(x);
@@ -1533,7 +1547,8 @@ impl<'a> Parser<'a> {
                     value = Some(self.term()?.ok_or(self.err("expected expression"))?);
                 }
 
-                self.expect(Tok::Semicolon, "';'")?;
+                self.expect(Tok::Semicolon, "';'")
+                    .unwrap_or_else(|e| self.errors.push(e));
 
                 Ok(Some(PreItem::Let(
                     name, constant, ty, value, public, mutable,
@@ -1605,7 +1620,8 @@ impl<'a> Parser<'a> {
                         Some(Tok::Equals) => {
                             self.next();
                             let t = self.term()?;
-                            self.expect(Tok::Semicolon, "';' to end function body")?;
+                            self.expect(Tok::Semicolon, "';' to end function body")
+                                .unwrap_or_else(|e| self.errors.push(e));
                             t
                         }
                         // let term() consume the brace
@@ -1768,6 +1784,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        errors.append(&mut self.errors);
         (v, errors)
     }
 }

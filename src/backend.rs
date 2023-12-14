@@ -1901,7 +1901,7 @@ impl Term {
                 }
             }
             Term::Call(o, f, a) => {
-                let fn_id = cxt.fun(*f).unwrap();
+                let fn_id = cxt.fun(f.unwrap()).unwrap();
                 let o = o.as_ref().map(|x| Box::new(x.lower(cxt).one()));
                 let args = a.iter().flat_map(|x| x.lower(cxt)).collect();
                 let rtys = cxt.fn_ret_tys.get(&fn_id).unwrap().clone();
@@ -1958,7 +1958,8 @@ impl Term {
                             cxt.tys.insert(var, ty.clone());
                             let raw = cxt.bindings.raw(format!(
                                 "{}$_call_ret{}",
-                                cxt.bindings.resolve_raw(*cxt.bindings.fn_name(*f).stem()),
+                                cxt.bindings
+                                    .resolve_raw(*cxt.bindings.fn_name(f.unwrap()).stem()),
                                 i
                             ));
                             terms.push(JTerm::Var(var, ty.clone()));
@@ -2520,6 +2521,7 @@ impl Type {
                     std::process::exit(1)
                 }
             }
+            Type::Error => panic!("reached backend with type errors"),
         })
     }
 }

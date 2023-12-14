@@ -306,7 +306,7 @@ pub enum ForIter {
 pub enum Term {
     Var(Sym),
     Lit(Literal, Type),
-    Call(Option<Box<Term>>, FnId, Vec<Term>),
+    Call(Option<Box<Term>>, Result<FnId, Spanned<TypeId>>, Vec<Term>),
     BinOp(BinOp, Box<Term>, Box<Term>),
     Block(Vec<Statement>, Option<Box<Term>>),
     If(Box<Term>, Box<Term>, Option<Box<Term>>),
@@ -407,6 +407,7 @@ pub enum Type {
     Tuple(Vec<Type>),
     Array(Box<Type>),
     SArray(Box<Type>, Rc<Term>),
+    Error,
 }
 impl Type {
     pub fn has_null(&self) -> bool {
@@ -673,6 +674,7 @@ impl Term {
                 x.visit(f);
                 v.iter().for_each(|(_, _, x)| x.visit(f));
             }
+            Term::As(x, _, _) => x.visit(f),
             Term::Not(x) => x.visit(f),
             _ => (),
         }
@@ -960,7 +962,7 @@ impl Term {
                 ArrayMethod::Clear => Doc::start("clear()"),
                 ArrayMethod::Push(x) => Doc::start("push(").chain(x.pretty(cxt)).add(')'),
             }),
-            Term::Call(None, f, a) => cxt
+            Term::Call(None, Ok(f), a) => cxt
                 .fn_name(*f)
                 .pretty(cxt)
                 .add("(")
@@ -969,7 +971,7 @@ impl Term {
                     Doc::start(",").space(),
                 ))
                 .add(")"),
-            Term::Call(Some(o), f, a) => o
+            Term::Call(Some(o), Ok(f), a) => o
                 .pretty(cxt)
                 .add('.')
                 .chain(cxt.fn_name(*f).pretty(cxt))
@@ -979,6 +981,7 @@ impl Term {
                     Doc::start(",").space(),
                 ))
                 .add(")"),
+            Term::Call(_, Err(_), _) => Doc::keyword("<unknown method>"),
             Term::BinOp(op, a, b) => a
                 .pretty(cxt)
                 .nest(Prec::Atom)
@@ -1258,6 +1261,7 @@ impl Type {
                 .add("; ")
                 .chain(u.pretty(cxt))
                 .add(']'),
+            Type::Error => Doc::keyword("<error>"),
         }
     }
 }

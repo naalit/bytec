@@ -1328,6 +1328,7 @@ impl<'b> Cxt<'b> {
                         Type::I32 | Type::I64 | Type::F32 | Type::F64,
                         Type::I32 | Type::I64 | Type::F32 | Type::F64,
                     ) => (),
+                    (Type::Error, _) => (),
                     _ => return Err(TypeError::InvalidConversion(pre.span, xty, t)),
                 }
                 Ok((Term::As(Box::new(x), xty, t.clone()), t))
@@ -1423,9 +1424,10 @@ impl<'b> Cxt<'b> {
                 match t {
                     Type::Class(tid) => {
                         let info = self.class_info(tid);
+                        let span = Span(px.span.1, m.span.1);
                         if let Some((_, s, t)) = info.members.iter().find(|(s, _, _)| *s == **m) {
                             Ok((
-                                Term::Member(Box::new(x), tid, Spanned::new(*s, m.span)),
+                                Term::Member(Box::new(x), tid, Spanned::new(*s, span)),
                                 t.clone(),
                             ))
                         } else {
@@ -1433,8 +1435,8 @@ impl<'b> Cxt<'b> {
                             let s = Spanned::new(s, m.span);
                             self.errors.push(TypeError::NotFound(lpath(*m)));
                             Ok((
-                                Term::Member(Box::new(x), tid, Spanned::new(*s, m.span)),
-                                Type::Unit,
+                                Term::Member(Box::new(x), tid, Spanned::new(*s, span)),
+                                Type::Error,
                             ))
                         }
                     }
@@ -1460,7 +1462,7 @@ impl<'b> Cxt<'b> {
                     for (a, (_, t)) in a.iter().zip(atys.clone()) {
                         a2.push(self.check(a, t)?);
                     }
-                    Ok((Term::Call(None, fid, a2), rty))
+                    Ok((Term::Call(None, Ok(fid), a2), rty))
                 } else if let Some(t) = self.class(f) {
                     let info = self.class_info(t);
                     if let Some(atys) = &info.constructor {
@@ -1508,21 +1510,40 @@ impl<'b> Cxt<'b> {
                 match t {
                     Type::Class(c) => {
                         let methods = &self.class_info(c).methods;
-                        let (_, fid, FnType(atys, rty)) = methods
+                        match methods
                             .iter()
                             .find(|(s, _, _)| *s == **f)
-                            .ok_or(TypeError::NotFound(lpath(*f)))?;
-                        let fid = *fid;
+                            .ok_or(TypeError::NotFound(lpath(*f)))
+                        {
+                            Ok((_, fid, FnType(atys, rty))) => {
+                                let fid = *fid;
 
-                        let rty = rty.clone();
-                        if a.len() != atys.len() {
-                            return Err(TypeError::WrongArity(pre.span, a.len(), atys.len()));
+                                let rty = rty.clone();
+                                if a.len() != atys.len() {
+                                    return Err(TypeError::WrongArity(
+                                        pre.span,
+                                        a.len(),
+                                        atys.len(),
+                                    ));
+                                }
+                                let mut a2 = Vec::new();
+                                for (a, (_, t)) in a.iter().zip(atys.clone()) {
+                                    a2.push(self.check(a, t)?);
+                                }
+                                Ok((Term::Call(Some(Box::new(o)), Ok(fid), a2), rty))
+                            }
+                            Err(e) => {
+                                self.errors.push(e);
+                                Ok((
+                                    Term::Call(
+                                        Some(Box::new(o)),
+                                        Err(Spanned::new(c, f.span)),
+                                        Vec::new(),
+                                    ),
+                                    Type::Error,
+                                ))
+                            }
                         }
-                        let mut a2 = Vec::new();
-                        for (a, (_, t)) in a.iter().zip(atys.clone()) {
-                            a2.push(self.check(a, t)?);
-                        }
-                        Ok((Term::Call(Some(Box::new(o)), fid, a2), rty))
                     }
                     Type::SArray(_, l) => match self.bindings.resolve_raw(**f) {
                         "len" => {
@@ -1604,12 +1625,16 @@ impl<'b> Cxt<'b> {
                     }
                 }
                 match e {
-                    Some(e) => {
-                        let (e, t) = self.infer(e)?;
-
-                        self.pop();
-                        Ok((Term::Block(v2, Some(Box::new(e))), t))
-                    }
+                    Some(e) => match self.infer(e) {
+                        Ok((e, t)) => {
+                            self.pop();
+                            Ok((Term::Block(v2, Some(Box::new(e))), t))
+                        }
+                        Err(e) => {
+                            self.errors.push(e);
+                            Ok((Term::Block(v2, None), Type::Error))
+                        }
+                    },
                     None => {
                         self.pop();
                         Ok((Term::Block(v2, None), Type::Unit))
@@ -1785,7 +1810,7 @@ impl<'b> Cxt<'b> {
 
             _ => {
                 let (term, ity) = self.infer(pre)?;
-                if ty == ity {
+                if ty == ity || ity == Type::Error || ty == Type::Error {
                     Ok(term)
                 } else {
                     self.errors.push(TypeError::Unify(pre.span, ity, ty));
