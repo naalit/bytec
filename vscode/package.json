@@ -14,21 +14,31 @@
         "onLanguage:bytec"
     ],
     "contributes": {
-        "languages": [{
-            "id": "bytec",
-            "aliases": ["bytec"],
-            "extensions": [".bt"],
-            "configuration": "./language-configuration.json"
-        }],
-        "grammars": [{
-            "language": "bytec",
-            "scopeName": "source.bytec",
-            "path": "./syntaxes/bytec.tmLanguage.json"
-        }],
-        "snippets": [{
-            "language": "bytec",
-            "path": "./snippets.json"
-        }]
+        "languages": [
+            {
+                "id": "bytec",
+                "aliases": [
+                    "bytec"
+                ],
+                "extensions": [
+                    ".bt"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "bytec",
+                "scopeName": "source.bytec",
+                "path": "./syntaxes/bytec.tmLanguage.json"
+            }
+        ],
+        "snippets": [
+            {
+                "language": "bytec",
+                "path": "./snippets.json"
+            }
+        ]
     },
     "scripts": {
         "vscode:prepublish": "npm run build",
@@ -36,10 +46,10 @@
         "watch": "tsc -watch -p ./"
     },
     "dependencies": {
-        "vscode-languageclient": "^7.0.0"
+        "vscode-languageclient": "^9.0.1"
     },
     "devDependencies": {
-        "@types/node": "^17.0.23",
+        "@types/node": "^20.10.4",
         "@types/vscode": "^1.63.0",
         "@vscode/test-electron": "^2.1.2",
         "typescript": "^4.6.3"

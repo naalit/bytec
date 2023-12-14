@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 lsp-server = "*"
-lsp-types = "*"
+lsp-types = { version = "*", features = ["proposed"] }
 serde = "*"
 serde_json = "*"
 ropey = "*"

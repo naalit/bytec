@@ -70,6 +70,4 @@ fn inline manhattanDistance(a: MapLocation, b: MapLocation): i32 {
 }
 ```
 
-If the arguments are constant, they will be propagated throughout the function body, so you can e.g. access static arrays with indices that depend on the function arguments as long as the function is only ever called with constant arguments (e.g. in unrolled loops is fine).
-
-**Warning!** `return` has strange behavior in inline functions. Specifically, the type checker treats it as if it's returning from the inline function, but it will actually return from the enclosing function. Usually getting this wrong results in a type error either in ByteC or the Java compiler, but it's important to keep in mind especially with `()`-returning functions. Please don't rely on this behavior, as it will hopefully be fixed in the future.
+If the arguments are constant, they will be propagated throughout the function body, so you can e.g. access static arrays with indices that depend on the function arguments as long as the function is only ever called with constant arguments (e.g. in unrolled loops is fine). Note that `return` is not allowed in `inline` functions.

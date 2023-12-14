@@ -169,15 +169,19 @@ impl<'a> Lexer<'a> {
         self.peekn(0)
     }
     fn peekn(&self, n: usize) -> Option<char> {
-        if self.pos + n < self.input.len_bytes() {
-            Some(self.input.byte(self.pos + n).into())
-        } else {
-            None
+        let mut c = None;
+        let mut off = 0;
+        for _ in 0..n + 1 {
+            c = self.input.get_char(self.input.byte_to_char(self.pos + off));
+            if let Some(c) = c {
+                off += c.len_utf8();
+            }
         }
+        c
     }
     fn nextc(&mut self) -> Option<char> {
         let c = self.peek()?;
-        self.pos += 1;
+        self.pos += c.len_utf8();
         Some(c)
     }
 
@@ -188,7 +192,7 @@ impl<'a> Lexer<'a> {
     fn alpha(&mut self) -> Result<Spanned<Tok>, Error> {
         let start = self.pos;
         while self.peek().map_or(false, Lexer::is_ident_char) {
-            self.pos += 1;
+            self.pos += self.peek().unwrap().len_utf8();
         }
         let name = self.input.byte_slice(start..self.pos).to_string();
         let tok = match &*name {

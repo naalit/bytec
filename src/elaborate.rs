@@ -338,7 +338,7 @@ impl<'b> Cxt<'b> {
             None
         }
     }
-    fn class(&self, s: &RawPath) -> Option<TypeId> {
+    pub fn class(&self, s: &RawPath) -> Option<TypeId> {
         let mut s = s.clone();
         if s.len() == 1 {
             if let Some(t) = self.local_classes.get(&*s.stem()) {
@@ -355,7 +355,7 @@ impl<'b> Cxt<'b> {
             None
         }
     }
-    fn module(&self, s: RawSym) -> Option<&ModType> {
+    pub fn module(&self, s: RawSym) -> Option<&ModType> {
         self.mods.get(&s)
     }
     pub fn class_info(&self, class: TypeId) -> &ClassInfo {
@@ -1284,11 +1284,18 @@ impl<'b> Cxt<'b> {
                         let b = raw.1;
                         if let Some(class) = self.class(&a) {
                             let variants = self.class_info(class).variants.as_ref();
-                            if variants.map_or(true, |v| v.iter().all(|(x, _)| *x != *b)) {
-                                return Err(TypeError::NotFound(lpath(b)));
+                            match variants.and_then(|v| v.iter().find(|(x, _)| *x == *b)) {
+                                Some((_, v)) if v.is_empty() => {
+                                    return Ok((
+                                        Term::Variant(class, *b, Vec::new()),
+                                        Type::Class(class),
+                                    ))
+                                }
+                                Some((_, v)) => {
+                                    return Err(TypeError::WrongArity(b.span, 0, v.len()))
+                                }
+                                None => return Err(TypeError::NotFound(lpath(b))),
                             }
-
-                            return Ok((Term::Variant(class, *b, Vec::new()), Type::Class(class)));
                         }
                     }
                     Err(e)

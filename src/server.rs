@@ -41,7 +41,10 @@ impl Server {
             )),
             definition_provider: Some(OneOf::Left(true)),
             completion_provider: Some(CompletionOptions {
-                trigger_characters: Some(vec!['.'.into()]),
+                trigger_characters: Some(vec!['.'.into(), ':'.into()]),
+                completion_item: Some(CompletionOptionsCompletionItem {
+                    label_details_support: Some(true),
+                }),
                 ..CompletionOptions::default()
             }),
             ..Default::default()
@@ -50,6 +53,7 @@ impl Server {
         let initialization_params = connection.initialize(server_capabilities).unwrap();
         let initialization_params: InitializeParams =
             serde_json::from_value(initialization_params).unwrap();
+        eprintln!("{:?}", initialization_params.capabilities);
 
         Server {
             source: HashMap::new(),
@@ -102,66 +106,16 @@ impl Server {
                 let url = &params.text_document_position.text_document.uri;
                 let file = self.file_ids[&params.text_document_position.text_document.uri];
                 let pos = params.text_document_position.position;
-                let source = self.source.get(url).unwrap();
-                let pos = source
-                    .char_to_byte(source.line_to_char(pos.line as usize) + pos.character as usize);
-                if let Some(module) = self.last_mods.iter().find(|m| m.file == file) {
-                    if let Some(item) = module
-                        .items
-                        .iter()
-                        .enumerate()
-                        .find(|(_, m)| m.span().0 > pos)
-                        .and_then(|(i, m)| {
-                            if i == 0 {
-                                Some(m)
-                            } else {
-                                module.items.get(i - 1)
-                            }
-                        })
-                        .or_else(|| module.items.last())
-                    {
-                        let mut found = None;
-                        item.visit(&mut |x| match x {
-                            Term::Member(_, t, m) if m.span.0 <= pos + 1 && m.span.1 + 1 >= pos => {
-                                found = Some(*t)
-                            }
-                            _ => (),
-                        });
-                        if let Some(found) = found {
-                            let cxt = crate::elaborate::Cxt::from_type(
-                                module.ty.clone(),
-                                self.last_mod_tys.clone(),
-                                Vec::new(),
-                                &mut self.bindings,
-                                file,
-                            );
-                            let info = cxt.class_info(found).clone();
-                            let members = info.members.iter().map(|(s, _, t)| CompletionItem {
-                                label: self.bindings.resolve_raw(*s).into(),
-                                kind: Some(CompletionItemKind::PROPERTY),
-                                detail: Some(t.pretty(&self.bindings).raw_string()),
-                                ..Default::default()
-                            });
-                            let methods = info.methods.iter().map(|(s, _, t)| CompletionItem {
-                                label: format!("{}(...)", self.bindings.resolve_raw(*s)),
-                                kind: Some(CompletionItemKind::METHOD),
-                                detail: Some(t.pretty(&self.bindings).raw_string()),
-                                insert_text: Some(format!("{}($0)", self.bindings.resolve_raw(*s))),
-                                insert_text_format: Some(InsertTextFormat::SNIPPET),
-                                ..Default::default()
-                            });
-                            let result =
-                                CompletionResponse::Array(members.chain(methods).collect());
-                            let result = serde_json::to_value(&result)?;
-                            let resp = lsp::Response {
-                                id,
-                                result: Some(result),
-                                error: None,
-                            };
-                            self.connection.sender.send(lsp::Message::Response(resp))?;
-                            return Ok(());
-                        }
-                    }
+                if let Some(completions) = self.find_completions(url, pos, file) {
+                    let result = CompletionResponse::Array(completions);
+                    let result = serde_json::to_value(&result)?;
+                    let resp = lsp::Response {
+                        id,
+                        result: Some(result),
+                        error: None,
+                    };
+                    self.connection.sender.send(lsp::Message::Response(resp))?;
+                    return Ok(());
                 }
                 let resp = lsp::Response {
                     id,
@@ -188,6 +142,230 @@ impl Server {
         }
 
         Ok(())
+    }
+
+    fn find_completions(
+        &mut self,
+        url: &Url,
+        pos: Position,
+        file: FileId,
+    ) -> Option<Vec<CompletionItem>> {
+        let source = self.source.get(url).unwrap();
+        let pos =
+            source.char_to_byte(source.line_to_char(pos.line as usize) + pos.character as usize);
+        if let Some(module) = self.last_mods.iter().find(|m| m.file == file) {
+            if let Some(item) = module
+                .items
+                .iter()
+                .enumerate()
+                .find(|(_, m)| m.span().0 > pos)
+                .and_then(|(i, m)| {
+                    if i == 0 {
+                        Some(m)
+                    } else {
+                        module.items.get(i - 1)
+                    }
+                })
+                .or_else(|| module.items.last())
+            {
+                let mut found_member = None;
+                item.visit(&mut |x| match x {
+                    Term::Member(_, t, m) if m.span.0 <= pos + 1 && m.span.1 + 1 >= pos => {
+                        found_member = Some(*t)
+                    }
+                    _ => (),
+                });
+                if let Some(found) = found_member {
+                    let cxt = crate::elaborate::Cxt::from_type(
+                        module.ty.clone(),
+                        self.last_mod_tys.clone(),
+                        Vec::new(),
+                        &mut self.bindings,
+                        file,
+                    );
+
+                    let info = cxt.class_info(found).clone();
+                    let members = info.members.iter().map(|(s, _, t)| CompletionItem {
+                        label: self.bindings.resolve_raw(*s).into(),
+                        kind: Some(CompletionItemKind::PROPERTY),
+                        detail: Some(t.pretty(&self.bindings).raw_string()),
+                        label_details: Some(CompletionItemLabelDetails {
+                            detail: None,
+                            description: Some(t.pretty(&self.bindings).raw_string()),
+                        }),
+                        ..Default::default()
+                    });
+                    let methods = info
+                        .methods
+                        .iter()
+                        .map(|(s, _, t)| self.make_fn_comp_item(s, t));
+                    return Some(members.chain(methods).collect());
+                } else {
+                    // Try to complete paths
+                    // let rope = self.source.get(&Url::from_file_path(&module.input_path).unwrap()).unwrap();
+                    let pos = source.byte_to_char(pos);
+                    let mut ppos = pos - 1;
+                    while source.char(ppos).is_alphanumeric() || source.char(ppos) == ':' {
+                        ppos -= 1;
+                    }
+                    let path = source.slice(ppos..pos).to_string();
+                    eprintln!("Completion backup: {}", path);
+                    let mut path: Vec<_> = path
+                        .split("::")
+                        .map(|x| Spanned::hack(self.bindings.raw(x.trim())))
+                        .collect();
+                    if let Some(_stem) = path.pop() {
+                        // TODO better path system
+                        if let Some(base) = path.pop() {
+                            if let Some(m) = self.last_mod_tys.get(&base) {
+                                let classes = m.classes.iter().map(|(s, (_, _))| CompletionItem {
+                                    label: self.bindings.resolve_raw(*s.stem()).into(),
+                                    kind: Some(CompletionItemKind::CLASS),
+                                    detail: Some("class".into()),
+                                    label_details: Some(CompletionItemLabelDetails {
+                                        detail: None,
+                                        description: Some("class".into()),
+                                    }),
+                                    ..Default::default()
+                                });
+                                let vars = m.vars.iter().map(|(s, _, (t, _))| CompletionItem {
+                                    label: self.bindings.resolve_raw(*s).into(),
+                                    kind: Some(CompletionItemKind::VARIABLE),
+                                    detail: Some(t.pretty(&self.bindings).raw_string()),
+                                    label_details: Some(CompletionItemLabelDetails {
+                                        detail: None,
+                                        description: Some(t.pretty(&self.bindings).raw_string()),
+                                    }),
+                                    ..Default::default()
+                                });
+                                let fns =
+                                    m.fns.iter().map(|(s, _, t)| self.make_fn_comp_item(s, t));
+                                return Some(fns.chain(classes).chain(vars).collect());
+                            } else {
+                                let cxt = crate::elaborate::Cxt::from_type(
+                                    module.ty.clone(),
+                                    self.last_mod_tys.clone(),
+                                    Vec::new(),
+                                    &mut self.bindings,
+                                    file,
+                                );
+                                if let Some(class) = cxt.class(&RawPath(Vec::new(), base)) {
+                                    if let Some(variants) = cxt.class_info(class).variants.clone() {
+                                        let variants = variants.into_iter().map(|(s, p)| {
+                                            if p.is_empty() {
+                                                CompletionItem {
+                                                    label: self.bindings.resolve_raw(s).into(),
+                                                    kind: Some(CompletionItemKind::VARIABLE),
+                                                    detail: Some(
+                                                        self.bindings.resolve_raw(*base).into(),
+                                                    ),
+                                                    label_details: Some(
+                                                        CompletionItemLabelDetails {
+                                                            detail: None,
+                                                            description: Some(
+                                                                self.bindings
+                                                                    .resolve_raw(*base)
+                                                                    .into(),
+                                                            ),
+                                                        },
+                                                    ),
+                                                    ..Default::default()
+                                                }
+                                            } else {
+                                                let detail = Some(
+                                                    Doc::start("(")
+                                                        .chain(Doc::intersperse(
+                                                            p.into_iter()
+                                                                .map(|t| t.pretty(&self.bindings)),
+                                                            Doc::start(", "),
+                                                        ))
+                                                        .add("): ")
+                                                        .add(self.bindings.resolve_raw(*base))
+                                                        .raw_string(),
+                                                );
+                                                CompletionItem {
+                                                    label: format!(
+                                                        "{}(…)",
+                                                        self.bindings.resolve_raw(s)
+                                                    ),
+                                                    kind: Some(CompletionItemKind::FUNCTION),
+                                                    detail: detail.clone(),
+                                                    label_details: Some(
+                                                        CompletionItemLabelDetails {
+                                                            detail: None,
+                                                            description: detail,
+                                                        },
+                                                    ),
+                                                    insert_text: Some(format!(
+                                                        "{}($0)",
+                                                        self.bindings.resolve_raw(s)
+                                                    )),
+                                                    insert_text_format: Some(
+                                                        InsertTextFormat::SNIPPET,
+                                                    ),
+                                                    ..Default::default()
+                                                }
+                                            }
+                                        });
+                                        return Some(variants.collect());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn make_fn_comp_item(&self, s: &RawSym, t: &FnType) -> CompletionItem {
+        if t.0.is_empty() {
+            CompletionItem {
+                label: format!("{}()", self.bindings.resolve_raw(*s)),
+                kind: Some(CompletionItemKind::METHOD),
+                detail: Some(t.pretty(&self.bindings).raw_string()),
+                documentation: None,
+                label_details: Some(CompletionItemLabelDetails {
+                    // This field shows up left-aligned after the label, Rust uses it for e.g. `(as Clone)`
+                    detail: None,
+                    description: Some(t.pretty(&self.bindings).raw_string()),
+                }),
+                preselect: Some(true),
+                ..Default::default()
+            }
+        } else {
+            CompletionItem {
+                label: format!("{}(…)", self.bindings.resolve_raw(*s)),
+                kind: Some(CompletionItemKind::METHOD),
+                detail: Some(t.pretty(&self.bindings).raw_string()),
+                insert_text: Some(
+                    Doc::start(self.bindings.resolve_raw(*s))
+                        .add('(')
+                        .chain(Doc::intersperse(
+                            t.0.iter().enumerate().map(|(i, (n, _))| {
+                                Doc::start("${")
+                                    .add(i + 1)
+                                    .add(":")
+                                    .add(self.bindings.resolve_raw(*n))
+                                    .add("}")
+                            }),
+                            Doc::start(", "),
+                        ))
+                        .add(')')
+                        .raw_string(),
+                ),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                documentation: None,
+                label_details: Some(CompletionItemLabelDetails {
+                    // This field shows up left-aligned after the label, Rust uses it for e.g. `(as Clone)`
+                    detail: None,
+                    description: Some(t.pretty(&self.bindings).raw_string()),
+                }),
+                preselect: Some(true),
+                ..Default::default()
+            }
+        }
     }
 
     fn handle_notification(&mut self, msg: lsp::Notification) -> Result<(), Box<dyn Error>> {
