@@ -511,8 +511,7 @@ if tx*tx + ty*ty &lt;= 20 {
 }
 <span class="boring">}
 </span></code></pre></pre>
-<p>If the arguments are constant, they will be propagated throughout the function body, so you can e.g. access static arrays with indices that depend on the function arguments as long as the function is only ever called with constant arguments (e.g. in unrolled loops is fine).</p>
-<p><strong>Warning!</strong> <code>return</code> has strange behavior in inline functions. Specifically, the type checker treats it as if it's returning from the inline function, but it will actually return from the enclosing function. Usually getting this wrong results in a type error either in ByteC or the Java compiler, but it's important to keep in mind especially with <code>()</code>-returning functions. Please don't rely on this behavior, as it will hopefully be fixed in the future.</p>
+<p>If the arguments are constant, they will be propagated throughout the function body, so you can e.g. access static arrays with indices that depend on the function arguments as long as the function is only ever called with constant arguments (e.g. in unrolled loops is fine). Note that <code>return</code> is not allowed in <code>inline</code> functions.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="interacting-with-the-battlecode-api"><a class="header" href="#interacting-with-the-battlecode-api">Interacting with the Battlecode API</a></h1>
 <h2 id="overview-of-java-interop-in-general"><a class="header" href="#overview-of-java-interop-in-general">Overview of Java interop in general</a></h2>
 <p>Java interop is done with the <code>extern</code> keyword, which can be used in many contexts with roughly the same meaning of &quot;the thing following this is a Java thing&quot;.
