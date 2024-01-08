@@ -176,7 +176,7 @@ impl Bindings {
 
     pub fn resolve_path_jm(&self, raw: &RawPath) -> String {
         let mut s = String::new();
-        if self.root_mod_path.as_ref() != Some(raw) {
+        if self.root_mod_path.as_ref() != Some(&raw.stem()) {
             for i in &raw.0 {
                 s.push_str(self.resolve_raw(**i));
                 s.push_str("$$");
@@ -186,13 +186,12 @@ impl Bindings {
         s
     }
     pub fn resolve_path_j(&self, raw: &RawPath) -> String {
-        let mut s = String::new();
-        for i in &raw.0 {
-            s.push_str(self.resolve_raw(**i));
-            s.push_str("$$");
-        }
+        let mut s = if raw.len() > 1 {
+            self.resolve_path_jm(&raw.stem())
+        } else {
+            String::new()
+        };
         if raw.len() > 1 {
-            s.truncate(s.len() - 2);
             s.push('.');
         }
         s.push_str(self.resolve_raw(*raw.1));

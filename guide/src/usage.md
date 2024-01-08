@@ -19,10 +19,10 @@ The project structure for a ByteC-based Battlecode bot should look something lik
         - ...
     - ...
 
-Then, the CLI syntax for `bytec` looks like `bytec source-path1 source-path2... dest-path`, so here it would be:
+Then, the CLI syntax for `bytec` looks like `bytec source-path dest-path`, so here it would be (note that files in `bot_one` can still use files in `common`, even though it's not in the command-line arguments):
 
 ```
-bytec bytec/common bytec/bot_one src/bot_one
+bytec bytec/bot_one src/bot_one
 ```
 
 This is intended to make it easy to test against alternate versions of your bot - simply compile to a certain output package (the names don't need to match, `bytec` will insert the necessary `package` declarations), make a change, and then compile it again to a different output package and run them against each other. The ability to override [constants](./constants.md) from the command line (`-CModule::SOME_CONST=12`, along the lines of C's `-DSOME_CONST=12`) also helps with that, especially with scripts that might test many possible parameters automatically.

@@ -435,7 +435,7 @@ impl Driver {
             self.root.as_ref().unwrap().display()
         );
         if i == 0 {
-            bindings.root_mod_path = Some(mod_path.clone());
+            bindings.root_mod_path = Some(mod_path.stem());
         }
         self.mods_base.push(ModStatusBase {
             pre_items,

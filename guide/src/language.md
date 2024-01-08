@@ -78,7 +78,7 @@ Loops are not expressions, and there are about three types:
 
 ```rust
 // The simplest kind of loop, loops infinitely until a `break`
-let a = 0;
+let mut a = 0;
 loop {
     a += 1;
     if a > 12 {

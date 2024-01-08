@@ -63,7 +63,7 @@ extern fn bytecodeNum(): i32 = "Clock.getBytecodeNum";
 
 You'll need to use the Battlecode API to do anything useful, and unfortunately this is a little bit harder than in Java, because ByteC isn't smart enough to find and read the API by itself. You'll probably have a file called something like `Common.bt` or `API.bt` shared by all your bots, which has a bunch of `extern` declarations for the entire Battlecode API - an example is at the end of this page. My API bindings were 300 lines of code in 2022, and automatically generating this from the Javadoc isn't too hard; I may write a dedicated script to do this and include it with ByteC at some point.
 
-Also, most functions will probably require `throws GameActionException`. The `throws` clause is actually entirely ignored by ByteC and just passed on to the Java code, but the Java compiler will complain if you leave these out (that does mean you don't need them for inline functions, though).
+Also, most functions will probably require `throws GameActionException`. The `throws` clause is actually entirely ignored by ByteC and just passed on to the Java code, but the Java compiler will complain if you leave these out (that does mean you don't need them for inline functions, though). There's also a command-line flag `-T` to add a `throws` clause to every function - for example, `-TGameActionException` - but it's probably best to annotate individual functions.
 
 You'll also need the RobotPlayer class, but this is actually easier than in Java, since every ByteC file ("module") turns into a Java class with static members. Just make sure you have a file called `RobotPlayer.bt`, with something like this:
 
