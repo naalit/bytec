@@ -5,6 +5,7 @@ extern {
 
 extern fn println(s: str) = "out.println";
 
+use util::Lib;
 use Lib::Bool;
 use Bool::*;
 
@@ -30,7 +31,7 @@ fn rand(r: Lib::Random): i32 = r.next_int(10);
 fn triple(pub x: i32): i32 {
     fn add(x: i32, y: i32): i32 = x + y;
 
-    let pub y = add(x, x);
+    let pub y = add(x, util2::Lib::a);
 
     extern {
         out.print("x: " + x);

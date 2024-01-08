@@ -9,7 +9,7 @@ use crate::pretty::{Prec, Style};
 // Common types
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct FileId(pub usize, pub RawSym);
+pub struct FileId(pub usize);
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Span(pub usize, pub usize);
@@ -246,6 +246,7 @@ pub struct ModType {
     pub fns: Vec<(RawSym, FnId, FnType)>,
     pub classes: HashMap<RawPath, (TypeId, ClassInfo)>,
     pub local_classes: HashMap<RawSym, TypeId>,
+    pub local_mods: HashMap<RawSym, RawPath>,
 }
 
 #[derive(Clone)]
@@ -265,6 +266,7 @@ pub enum ArrayMethod {
     Pop,
     Clear,
     Push(Box<Term>),
+    Unknown(Span, bool),
 }
 
 #[derive(PartialEq)]
@@ -277,7 +279,7 @@ pub enum LValue {
     Member(Box<Term>, Sym),
 }
 impl LValue {
-    pub fn check_mutability(&self, cxt: &crate::elaborate::Cxt) -> Result<(), Sym> {
+    pub fn check_mutability(&self, cxt: &mut crate::elaborate::Cxt) -> Result<(), Sym> {
         match self {
             LValue::Var(s) => {
                 if !cxt.is_mutable(*s) {
@@ -443,8 +445,21 @@ impl RawPath {
     pub fn len(&self) -> usize {
         self.0.len() + 1
     }
-    pub fn stem(&self) -> Spanned<RawSym> {
+    pub fn last(&self) -> Spanned<RawSym> {
         self.1
+    }
+    pub fn stem(&self) -> RawPath {
+        RawPath(self.0[..self.0.len() - 1].to_vec(), *self.0.last().unwrap())
+    }
+    pub fn add(&self, s: Spanned<RawSym>) -> RawPath {
+        RawPath(
+            self.0
+                .iter()
+                .copied()
+                .chain(std::iter::once(self.1))
+                .collect(),
+            s,
+        )
     }
     pub fn span(&self) -> Span {
         Span(
@@ -858,6 +873,7 @@ impl ArrayMethod {
             ArrayMethod::Pop => ArrayMethod::Pop,
             ArrayMethod::Clear => ArrayMethod::Clear,
             ArrayMethod::Push(x) => ArrayMethod::Push(Box::new(x.cloned_(cln))),
+            ArrayMethod::Unknown(x, y) => ArrayMethod::Unknown(*x, *y),
         }
     }
 }
@@ -961,6 +977,7 @@ impl Term {
                 ArrayMethod::Pop => Doc::start("pop()"),
                 ArrayMethod::Clear => Doc::start("clear()"),
                 ArrayMethod::Push(x) => Doc::start("push(").chain(x.pretty(cxt)).add(')'),
+                ArrayMethod::Unknown(_, _) => Doc::start("<unknown method>"),
             }),
             Term::Call(None, Ok(f), a) => cxt
                 .fn_name(*f)

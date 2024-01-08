@@ -9,7 +9,6 @@ use lsp_types::*;
 use ropey::Rope;
 
 use crate::driver::Driver;
-use crate::parser::Parser;
 use crate::term::*;
 
 pub struct Server {
@@ -18,11 +17,8 @@ pub struct Server {
     initialization_params: InitializeParams,
     file_ids: HashMap<Url, FileId>,
     source: HashMap<Url, Rope>,
-    parsed: HashMap<Url, Vec<PreItem>>,
-    parse_errors: HashMap<FileId, Vec<lsp_types::Diagnostic>>,
     bindings: Bindings,
-    last_mods: Vec<crate::driver::ModStatus>,
-    last_mod_tys: HashMap<RawSym, crate::term::ModType>,
+    driver: Driver,
     // db: DatabaseImpl,
 }
 impl Server {
@@ -58,14 +54,11 @@ impl Server {
         Server {
             source: HashMap::new(),
             file_ids: HashMap::new(),
-            parsed: HashMap::new(),
-            parse_errors: HashMap::new(),
             io_threads,
             connection,
             initialization_params,
             bindings: Default::default(),
-            last_mods: Vec::new(),
-            last_mod_tys: Default::default(),
+            driver: Driver::new(Vec::new(), &mut Bindings::default()),
             // db: DatabaseImpl::default(),
         }
     }
@@ -153,7 +146,7 @@ impl Server {
         let source = self.source.get(url).unwrap();
         let pos =
             source.char_to_byte(source.line_to_char(pos.line as usize) + pos.character as usize);
-        if let Some(module) = self.last_mods.iter().find(|m| m.file == file) {
+        if let Some(module) = self.driver.mods.iter().find(|m| m.file == file) {
             // Identify the last item that starts before the cursor, and assume we're in that one
             let mut item = None;
             for m in module.items.iter() {
@@ -168,6 +161,7 @@ impl Server {
             if let Some(item) = item {
                 let mut found_member = None;
                 let mut is_call = false;
+                let mut found_array = None;
                 item.visit(&mut |x| match x {
                     Term::Member(_, t, m) if m.span.0 <= pos + 1 && m.span.1 + 1 >= pos => {
                         found_member = Some(*t)
@@ -176,15 +170,21 @@ impl Server {
                         found_member = Some(**m);
                         is_call = true
                     }
+                    Term::ArrayMethod(_, ArrayMethod::Unknown(span, b))
+                        if span.0 <= pos + 1 && span.1 + 1 >= pos =>
+                    {
+                        found_array = Some(*b)
+                    }
                     _ => (),
                 });
                 if let Some(found) = found_member {
                     let cxt = crate::elaborate::Cxt::from_type(
                         module.ty.clone(),
-                        self.last_mod_tys.clone(),
                         Vec::new(),
                         &mut self.bindings,
                         file,
+                        module.mod_path.clone(),
+                        &mut self.driver,
                     );
 
                     let info = cxt.class_info(found).clone();
@@ -201,8 +201,33 @@ impl Server {
                     let methods = info
                         .methods
                         .iter()
-                        .map(|(s, _, t)| self.make_fn_comp_item(s, t, !is_call));
+                        .map(|(s, _, t)| Self::make_fn_comp_item(&self.bindings, s, t, !is_call));
                     return Some(members.chain(methods).collect());
+                } else if let Some(sarr) = found_array {
+                    return Some(
+                        if sarr {
+                            [("len()", "fn(): i32")].iter()
+                        } else {
+                            [
+                                ("push(…)", "fn(T)"),
+                                ("pop()", "fn(): T"),
+                                ("len()", "fn(): i32"),
+                                ("clear()", "fn()"),
+                            ]
+                            .iter()
+                        }
+                        .map(|(s, t)| CompletionItem {
+                            label: s.to_string(),
+                            kind: Some(CompletionItemKind::METHOD),
+                            detail: Some(t.to_string()),
+                            label_details: Some(CompletionItemLabelDetails {
+                                detail: None,
+                                description: Some(t.to_string()),
+                            }),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    );
                 } else {
                     // Try to complete paths
                     // let rope = self.source.get(&Url::from_file_path(&module.input_path).unwrap()).unwrap();
@@ -219,10 +244,22 @@ impl Server {
                         .collect();
                     if let Some(_stem) = path.pop() {
                         // TODO better path system
-                        if let Some(base) = path.pop() {
-                            if let Some(m) = self.last_mod_tys.get(&base) {
+                        if !path.is_empty() {
+                            let mut cxt = crate::elaborate::Cxt::from_type(
+                                module.ty.clone(),
+                                Vec::new(),
+                                &mut self.bindings,
+                                file,
+                                module.mod_path.clone(),
+                                &mut self.driver,
+                            );
+
+                            let n = path.pop().unwrap();
+                            let path = RawPath(path, n);
+                            if let Some(m) = cxt.module(&path).cloned() {
+                                // Try to suggest paths from a module
                                 let classes = m.classes.iter().map(|(s, (_, _))| CompletionItem {
-                                    label: self.bindings.resolve_raw(*s.stem()).into(),
+                                    label: cxt.bindings.resolve_raw(*s.last()).into(),
                                     kind: Some(CompletionItemKind::CLASS),
                                     detail: Some("class".into()),
                                     label_details: Some(CompletionItemLabelDetails {
@@ -232,28 +269,27 @@ impl Server {
                                     ..Default::default()
                                 });
                                 let vars = m.vars.iter().map(|(s, _, (t, _))| CompletionItem {
-                                    label: self.bindings.resolve_raw(*s).into(),
+                                    label: cxt.bindings.resolve_raw(*s).into(),
                                     kind: Some(CompletionItemKind::VARIABLE),
-                                    detail: Some(t.pretty(&self.bindings).raw_string()),
+                                    detail: Some(t.pretty(&cxt.bindings).raw_string()),
                                     label_details: Some(CompletionItemLabelDetails {
                                         detail: None,
-                                        description: Some(t.pretty(&self.bindings).raw_string()),
+                                        description: Some(t.pretty(&cxt.bindings).raw_string()),
                                     }),
                                     ..Default::default()
                                 });
                                 let fns = m.fns.iter().map(|(s, _, t)| {
-                                    self.make_fn_comp_item(s, t, source.char(pos) != '(')
+                                    Self::make_fn_comp_item(
+                                        &cxt.bindings,
+                                        s,
+                                        t,
+                                        source.char(pos) != '(',
+                                    )
                                 });
                                 return Some(fns.chain(classes).chain(vars).collect());
                             } else {
-                                let cxt = crate::elaborate::Cxt::from_type(
-                                    module.ty.clone(),
-                                    self.last_mod_tys.clone(),
-                                    Vec::new(),
-                                    &mut self.bindings,
-                                    file,
-                                );
-                                if let Some(class) = cxt.class(&RawPath(Vec::new(), base)) {
+                                // Try to suggest variants of an enum
+                                if let Some(class) = cxt.class(&path) {
                                     if let Some(variants) = cxt.class_info(class).variants.clone() {
                                         let variants = variants.into_iter().map(|(s, p)| {
                                             if p.is_empty() {
@@ -261,14 +297,16 @@ impl Server {
                                                     label: self.bindings.resolve_raw(s).into(),
                                                     kind: Some(CompletionItemKind::VARIABLE),
                                                     detail: Some(
-                                                        self.bindings.resolve_raw(*base).into(),
+                                                        self.bindings
+                                                            .resolve_raw(*path.last())
+                                                            .into(),
                                                     ),
                                                     label_details: Some(
                                                         CompletionItemLabelDetails {
                                                             detail: None,
                                                             description: Some(
                                                                 self.bindings
-                                                                    .resolve_raw(*base)
+                                                                    .resolve_raw(*path.last())
                                                                     .into(),
                                                             ),
                                                         },
@@ -284,7 +322,9 @@ impl Server {
                                                             Doc::start(", "),
                                                         ))
                                                         .add("): ")
-                                                        .add(self.bindings.resolve_raw(*base))
+                                                        .add(
+                                                            self.bindings.resolve_raw(*path.last()),
+                                                        )
                                                         .raw_string(),
                                                 );
                                                 CompletionItem {
@@ -323,29 +363,34 @@ impl Server {
         None
     }
 
-    fn make_fn_comp_item(&self, s: &RawSym, t: &FnType, gen_args: bool) -> CompletionItem {
+    fn make_fn_comp_item(
+        bindings: &Bindings,
+        s: &RawSym,
+        t: &FnType,
+        gen_args: bool,
+    ) -> CompletionItem {
         if t.0.is_empty() {
             CompletionItem {
-                label: format!("{}()", self.bindings.resolve_raw(*s)),
+                label: format!("{}()", bindings.resolve_raw(*s)),
                 kind: Some(CompletionItemKind::METHOD),
-                detail: Some(t.pretty(&self.bindings).raw_string()),
-                insert_text: (!gen_args).then(|| self.bindings.resolve_raw(*s).into()),
+                detail: Some(t.pretty(bindings).raw_string()),
+                insert_text: (!gen_args).then(|| bindings.resolve_raw(*s).into()),
                 documentation: None,
                 label_details: Some(CompletionItemLabelDetails {
                     // This field shows up left-aligned after the label, Rust uses it for e.g. `(as Clone)`
                     detail: None,
-                    description: Some(t.pretty(&self.bindings).raw_string()),
+                    description: Some(t.pretty(&bindings).raw_string()),
                 }),
                 preselect: Some(true),
                 ..Default::default()
             }
         } else {
             CompletionItem {
-                label: format!("{}(…)", self.bindings.resolve_raw(*s)),
+                label: format!("{}(…)", bindings.resolve_raw(*s)),
                 kind: Some(CompletionItemKind::METHOD),
-                detail: Some(t.pretty(&self.bindings).raw_string()),
+                detail: Some(t.pretty(&bindings).raw_string()),
                 insert_text: Some(
-                    Doc::start(self.bindings.resolve_raw(*s))
+                    Doc::start(bindings.resolve_raw(*s))
                         .chain(if gen_args {
                             Doc::start('(')
                                 .chain(Doc::intersperse(
@@ -353,7 +398,7 @@ impl Server {
                                         Doc::start("${")
                                             .add(i + 1)
                                             .add(":")
-                                            .add(self.bindings.resolve_raw(*n))
+                                            .add(bindings.resolve_raw(*n))
                                             .add("}")
                                     }),
                                     Doc::start(", "),
@@ -369,7 +414,7 @@ impl Server {
                 label_details: Some(CompletionItemLabelDetails {
                     // This field shows up left-aligned after the label, Rust uses it for e.g. `(as Clone)`
                     detail: None,
-                    description: Some(t.pretty(&self.bindings).raw_string()),
+                    description: Some(t.pretty(&bindings).raw_string()),
                 }),
                 preselect: Some(true),
                 ..Default::default()
@@ -422,69 +467,29 @@ impl Server {
         eprintln!("Starting diagnostic publishing...");
 
         if !self.file_ids.contains_key(&file_changed) {
-            let mod_name = self.bindings.raw(
-                file_changed
-                    .path_segments()
-                    .unwrap()
-                    .next_back()
-                    .unwrap()
-                    .split('.')
-                    .next()
-                    .unwrap(),
-            );
-            eprintln!("module {}", self.bindings.resolve_raw(mod_name));
-            self.file_ids
-                .insert(file_changed.clone(), FileId(self.file_ids.len(), mod_name));
+            let path = file_changed.to_file_path().unwrap();
+            if let Some(m) = self.driver.mods_base.iter().find(|m| m.input_path == path) {
+                self.file_ids.insert(file_changed.clone(), m.file);
+            } else {
+                let mod_name = self.bindings.raw(
+                    file_changed
+                        .path_segments()
+                        .unwrap()
+                        .next_back()
+                        .unwrap()
+                        .split('.')
+                        .next()
+                        .unwrap(),
+                );
+                eprintln!("module {}", self.bindings.resolve_raw(mod_name));
+                self.file_ids
+                    .insert(file_changed.clone(), FileId(self.driver.nfiles));
+                self.driver.nfiles += 1;
+            }
             INPUT_PATH.write().unwrap().insert(
                 self.file_ids[&file_changed],
                 file_changed.to_file_path().unwrap(),
             );
-
-            // If this was the first file in this session, look for other neighboring bytec files in the file system
-            // We add them to the hashmaps with their url, so when they're opened in the editor it will automatically override them
-            if self.file_ids.len() == 1 {
-                let path = file_changed.to_file_path().unwrap().canonicalize().unwrap();
-                let folder = path.parent().unwrap();
-                for i in folder.read_dir().unwrap() {
-                    let i = i.unwrap();
-                    if i.file_name().to_str().unwrap().ends_with(".bt") {
-                        let path = i.path();
-                        let url = Url::from_file_path(&path).unwrap();
-                        if url == file_changed {
-                            continue;
-                        }
-
-                        let mod_name = self
-                            .bindings
-                            .raw(path.file_stem().unwrap().to_string_lossy());
-                        let file = FileId(self.file_ids.len(), mod_name);
-                        eprintln!("Adding neighboring file {}", url);
-
-                        self.file_ids.insert(url.clone(), file);
-                        self.source.insert(
-                            url.clone(),
-                            Rope::from_reader(std::fs::File::open(&path).unwrap()).unwrap(),
-                        );
-                        INPUT_PATH.write().unwrap().insert(file, path);
-                        INPUT_SOURCE
-                            .write()
-                            .unwrap()
-                            .insert(file, self.source[&url].clone());
-
-                        // Parse it and add the items, but skip errors - we don't need errors in other files
-                        let mut parser =
-                            Parser::new(self.source[&url].slice(..), &mut self.bindings);
-                        let (v, e) = parser.top_level();
-                        self.parse_errors.insert(
-                            file,
-                            e.into_iter()
-                                .map(|e| self.lsp_error(e, Severity::Error, &url))
-                                .collect(),
-                        );
-                        self.parsed.insert(url, v);
-                    }
-                }
-            }
         }
 
         INPUT_SOURCE.write().unwrap().insert(
@@ -492,34 +497,32 @@ impl Server {
             self.source[&file_changed].clone(),
         );
 
-        let mut parser = Parser::new(self.source[&file_changed].slice(..), &mut self.bindings);
-        let (v, e) = parser.top_level();
-        self.parsed.insert(file_changed.clone(), v);
-        self.parse_errors.insert(
+        eprintln!(
+            "Updated: {} (file {:?})",
+            file_changed, self.file_ids[&file_changed]
+        );
+        self.driver.update_mod_src(
             self.file_ids[&file_changed],
-            e.into_iter()
-                .map(|e| self.lsp_error(e, Severity::Error, &file_changed))
-                .collect(),
+            &mut self.bindings,
+            &self.source[&file_changed],
         );
 
         self.publish_diagnostics();
     }
 
     fn publish_diagnostics(&mut self) {
-        let mut diagnostics = self.parse_errors.clone();
-        let mut driver = Driver::new(
-            self.parsed
-                .iter()
-                .map(|(k, v)| (self.file_ids[k], v.clone(), k.to_file_path().unwrap()))
-                .collect(),
-        );
-        driver.run_all(&mut self.bindings);
-        for (error, file) in driver.errors {
-            diagnostics.entry(file).or_default().push(self.lsp_error(
-                error,
-                Severity::Error,
-                self.file_ids.iter().find(|(_, v)| **v == file).unwrap().0,
-            ));
+        let mut diagnostics: HashMap<FileId, Vec<Diagnostic>> =
+            self.file_ids.values().map(|&k| (k, Vec::new())).collect();
+        self.driver.run_all(&mut self.bindings);
+        self.driver.stage = 0;
+        for (error, file) in self.driver.errors.split_off(0) {
+            if let Some((url, _)) = self.file_ids.iter().find(|(_, v)| **v == file) {
+                diagnostics.entry(file).or_default().push(self.lsp_error(
+                    error,
+                    Severity::Error,
+                    url,
+                ));
+            }
         }
         // TODO only send diagnostics if they changed
         for (file, diagnostics) in diagnostics {
@@ -543,8 +546,7 @@ impl Server {
                 .send(lsp::Message::Notification(message))
                 .unwrap();
         }
-        self.last_mods = driver.mods;
-        self.last_mod_tys = driver.mods_pre.into_iter().collect();
+
         eprintln!("Published diagnostics!");
     }
 

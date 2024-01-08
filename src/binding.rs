@@ -82,6 +82,7 @@ pub struct Bindings {
     types: Vec<RawPath>,
     fns: Vec<RawPath>,
     syms: Vec<RawPath>,
+    pub root_mod_path: Option<RawPath>,
 }
 impl Bindings {
     /// Don't do this if you're holding symbols somewhere!
@@ -173,11 +174,35 @@ impl Bindings {
         s
     }
 
-    pub fn resolve_path(&self, raw: &RawPath) -> String {
+    pub fn resolve_path_jm(&self, raw: &RawPath) -> String {
+        let mut s = String::new();
+        if self.root_mod_path.as_ref() != Some(raw) {
+            for i in &raw.0 {
+                s.push_str(self.resolve_raw(**i));
+                s.push_str("$$");
+            }
+        }
+        s.push_str(self.resolve_raw(*raw.1));
+        s
+    }
+    pub fn resolve_path_j(&self, raw: &RawPath) -> String {
         let mut s = String::new();
         for i in &raw.0 {
             s.push_str(self.resolve_raw(**i));
+            s.push_str("$$");
+        }
+        if raw.len() > 1 {
+            s.truncate(s.len() - 2);
             s.push('.');
+        }
+        s.push_str(self.resolve_raw(*raw.1));
+        s
+    }
+    pub fn resolve_path_o(&self, raw: &RawPath) -> String {
+        let mut s = String::new();
+        for i in &raw.0 {
+            s.push_str(self.resolve_raw(**i));
+            s.push_str("::");
         }
         s.push_str(self.resolve_raw(*raw.1));
         s

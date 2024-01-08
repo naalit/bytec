@@ -16,7 +16,7 @@ enum Predef {
 }
 
 pub struct IRMod {
-    name: RawSym,
+    name: RawPath,
     code: Vec<Item>,
     mappings: Vec<(u64, RawPath, bool)>,
     java: Vec<RawSym>,

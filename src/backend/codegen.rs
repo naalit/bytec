@@ -19,14 +19,10 @@ impl IRMod {
         // Declare items
         for (m, _) in mods {
             for (i, m, b) in &m.mappings {
-                let mut m = m.clone();
-                if m.0.first().copied().as_deref() == Some(&self.name) {
-                    m.0.remove(0);
-                }
-                names.insert(*i, (m, *b));
+                names.insert(*i, (m.clone(), *b));
             }
         }
-        let mut gen = Gen::new(cxt.bindings, throws);
+        let mut gen = Gen::new(cxt.bindings, throws, self.name.clone());
         gen.names = names;
         // Generate items
         let mut s = String::new();
@@ -53,6 +49,7 @@ impl IRMod {
 #[derive(Clone, Debug)]
 struct Gen<'a> {
     bindings: &'a Bindings,
+    mod_path: RawPath,
     /// The bool is whether to mangle names for deduplication
     names: HashMap<u64, (RawPath, bool)>,
     indent: usize,
@@ -60,9 +57,10 @@ struct Gen<'a> {
 }
 
 impl<'a> Gen<'a> {
-    fn new(bindings: &'a Bindings, throws: Vec<RawSym>) -> Self {
+    fn new(bindings: &'a Bindings, throws: Vec<RawSym>, mod_path: RawPath) -> Self {
         Gen {
             bindings,
+            mod_path,
             names: HashMap::new(),
             indent: 0,
             throws,
@@ -86,8 +84,13 @@ impl<'a> Gen<'a> {
             .names
             .get(&v.0)
             .unwrap_or_else(|| panic!("not found: {}", v.0));
+        let i = if i.len() > 1 && i.stem() == self.mod_path {
+            lpath(i.last())
+        } else {
+            i.clone()
+        };
         // let (i, b) = &self.names[&v.0];
-        let s = self.bindings.resolve_path(i);
+        let s = self.bindings.resolve_path_j(&i);
         if *b {
             format!("{}${}", s, v.0)
         } else {
@@ -99,7 +102,12 @@ impl<'a> Gen<'a> {
     }
     fn fn_str(&self, v: JFnId) -> String {
         let (i, b) = &self.names[&v.0];
-        let s = self.bindings.resolve_path(i);
+        let i = if i.len() > 1 && i.stem() == self.mod_path {
+            lpath(i.last())
+        } else {
+            i.clone()
+        };
+        let s = self.bindings.resolve_path_j(&i);
         if *b {
             format!("{}${}", s, v.0)
         } else {
@@ -111,7 +119,12 @@ impl<'a> Gen<'a> {
     }
     fn class_str(&self, v: JClass) -> String {
         let (i, b) = &self.names[&v.0];
-        let s = self.bindings.resolve_path(i);
+        let i = if i.len() > 1 && i.stem() == self.mod_path {
+            lpath(i.last())
+        } else {
+            i.clone()
+        };
+        let s = self.bindings.resolve_path_j(&i);
         if *b {
             format!("{}${}", s, v.0)
         } else {

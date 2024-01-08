@@ -32,7 +32,12 @@ pub fn declare_p1(code: &[Item], cxt: &mut Cxt) {
     }
 }
 
-pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRMod, Error> {
+pub fn declare_p2(
+    code: Vec<Item>,
+    cxt: &mut Cxt,
+    mod_path: RawPath,
+    out_class: &str,
+) -> Result<IRMod, Error> {
     // Declare items
     let mut mappings = Vec::new();
     let mut java = Vec::new();
@@ -72,7 +77,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
             ),
             Item::ExternClass(c, members, _span) => {
                 let class = cxt.class(*c).unwrap();
-                mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
+                mappings.push((class.0, lpath(cxt.bindings.type_name(*c).last()), false));
                 for (s, t) in members {
                     let t = t.lower(cxt);
                     let mut vars = Vec::new();
@@ -120,7 +125,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
             Item::Enum(c, _, ext, members, methods, _span) => {
                 let class = cxt.class(*c).unwrap();
                 if *ext {
-                    mappings.push((class.0, lpath(cxt.bindings.type_name(*c).stem()), false));
+                    mappings.push((class.0, lpath(cxt.bindings.type_name(*c).last()), false));
                     for (s, t) in members {
                         let t = t.lower(cxt);
                         let mut vars = Vec::new();
@@ -209,7 +214,7 @@ pub fn declare_p2(code: Vec<Item>, cxt: &mut Cxt, out_class: &str) -> Result<IRM
     }
 
     Ok(IRMod {
-        name: cxt.bindings.raw(out_class),
+        name: mod_path,
         code,
         mappings,
         java,
@@ -709,6 +714,7 @@ impl Term {
                 let arrs = arr.lower(cxt);
                 let len = arrs.clone().to_vec().pop().unwrap();
                 match m {
+                    ArrayMethod::Unknown(_, _) => panic!("type error reached backend!"),
                     ArrayMethod::Len => len,
                     ArrayMethod::Clear => {
                         let slen = len.to_lval().expect("clear() requires an lvalue");
@@ -840,7 +846,7 @@ impl Term {
                         syms.entry(s).or_insert_with(Vec::new).push(v);
                         cxt.tys.insert(v, t.clone());
                         cxt.block
-                            .push(JStmt::Let(*cxt.bindings.sym_path(s).stem(), t, v, Some(x)));
+                            .push(JStmt::Let(*cxt.bindings.sym_path(s).last(), t, v, Some(x)));
                     }
                     for (s, v) in syms {
                         cxt.vars.push((s, JVars::Tuple(v)));
@@ -878,7 +884,7 @@ impl Term {
                             let raw = cxt.bindings.raw(format!(
                                 "{}$_call_ret{}",
                                 cxt.bindings
-                                    .resolve_raw(*cxt.bindings.fn_name(f.unwrap()).stem()),
+                                    .resolve_raw(*cxt.bindings.fn_name(f.unwrap()).last()),
                                 i
                             ));
                             terms.push(JTerm::Var(var, ty.clone()));
@@ -997,7 +1003,7 @@ impl Term {
                                 let var = cxt.fresh_var(cxt.bindings.public(*s));
                                 cxt.tys.insert(var, t.clone());
                                 cxt.block.push(JStmt::Let(
-                                    *cxt.bindings.sym_path(*s).stem(),
+                                    *cxt.bindings.sym_path(*s).last(),
                                     t,
                                     var,
                                     Some(x),
@@ -1079,7 +1085,7 @@ impl Statement {
                     let var = cxt.fresh_var(cxt.bindings.public(*n));
                     cxt.tys.insert(var, t.clone());
                     cxt.block.push(JStmt::Let(
-                        *cxt.bindings.sym_path(*n).stem(),
+                        *cxt.bindings.sym_path(*n).last(),
                         t,
                         var,
                         Some(x),
@@ -1123,7 +1129,7 @@ impl Statement {
 
                         cxt.block.push(JStmt::RangeFor(
                             k,
-                            *cxt.bindings.sym_path(*s).stem(),
+                            *cxt.bindings.sym_path(*s).last(),
                             v,
                             a,
                             b,
@@ -1140,7 +1146,7 @@ impl Statement {
                             let var = cxt.fresh_var(cxt.bindings.public(*s));
                             cxt.tys.insert(var, t.clone());
                             cxt.block.push(JStmt::Let(
-                                *cxt.bindings.sym_path(*s).stem(),
+                                *cxt.bindings.sym_path(*s).last(),
                                 t,
                                 var,
                                 None,
@@ -1196,7 +1202,7 @@ impl Statement {
                             let var = cxt.fresh_var(cxt.bindings.public(*s));
                             cxt.tys.insert(var, t.clone());
                             cxt.block.push(JStmt::Let(
-                                *cxt.bindings.sym_path(*s).stem(),
+                                *cxt.bindings.sym_path(*s).last(),
                                 t,
                                 var,
                                 Some(x),
@@ -1211,7 +1217,7 @@ impl Statement {
 
                         cxt.block.push(JStmt::RangeFor(
                             k,
-                            *cxt.bindings.sym_path(*s).stem(),
+                            *cxt.bindings.sym_path(*s).last(),
                             ix_var,
                             start,
                             len,
@@ -1244,7 +1250,7 @@ impl Fn {
             let mut vars = Vec::new();
             for ty in ty.lower(cxt) {
                 let var = cxt.fresh_var(cxt.bindings.public(*name));
-                args.push((*cxt.bindings.sym_path(*name).stem(), var, ty.clone()));
+                args.push((*cxt.bindings.sym_path(*name).last(), var, ty.clone()));
                 cxt.tys.insert(var, ty);
                 vars.push(var);
             }
@@ -1265,7 +1271,7 @@ impl Fn {
         std::mem::swap(&mut block, &mut cxt.block);
         let ret_ty = self.ret_ty.lower(cxt);
         JFn {
-            name: *cxt.bindings.fn_name(self.id).stem(),
+            name: *cxt.bindings.fn_name(self.id).last(),
             fn_id,
             ret_tys: ret_ty.into(),
             args,

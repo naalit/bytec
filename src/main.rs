@@ -10,10 +10,8 @@ mod term;
 use std::fs::File;
 use std::path::PathBuf;
 
-use crate::parser::Parser;
 use crate::pretty::{Doc, Style};
 
-use ropey::Rope;
 use term::*;
 
 use driver::Driver;
@@ -37,8 +35,11 @@ fn main() {
             if let Some(idx) = i.find('=') {
                 let k = &i[2..idx];
                 let v = &i[idx + 1..];
-                let split: Vec<_> = k.split("::").collect();
-                if split.len() != 2 {
+                let mut split: Vec<_> = k
+                    .split("::")
+                    .map(|x| Spanned::hack(bindings.raw(x)))
+                    .collect();
+                if split.len() < 2 {
                     Doc::start("error")
                         .style(Style::BoldRed)
                         .add(": Invalid path for overriden constant: '")
@@ -48,9 +49,10 @@ fn main() {
                         .emit();
                     std::process::exit(1)
                 }
+                let name = split.pop().unwrap();
+                let path = RawPath(split, name);
                 consts.push((
-                    bindings.raw(split[0]),
-                    bindings.raw(split[1]),
+                    path,
                     crate::parser::quick_parse_term(v, &mut bindings).unwrap_or_else(|| {
                         Doc::start("error")
                             .style(Style::BoldRed)
@@ -97,21 +99,6 @@ fn main() {
             std::process::exit(1)
         })
         .into();
-
-    let mut files = Vec::new();
-    for input in paths {
-        let input: PathBuf = input.into();
-        if input.is_file() {
-            files.push(input.clone());
-        } else {
-            for i in input.read_dir().unwrap() {
-                let i = i.unwrap();
-                if i.file_name().to_str().unwrap().ends_with(".bt") {
-                    files.push(i.path());
-                }
-            }
-        }
-    }
     let package = if output.ends_with(".java") {
         output.parent().unwrap().file_name().unwrap()
     } else {
@@ -120,90 +107,21 @@ fn main() {
     .to_str()
     .unwrap();
 
-    let mut nfiles = 0;
     let mut had_err = false;
-    let mut parsed = Vec::new();
-    for input in files {
-        let file = File::open(&input).unwrap_or_else(|_| {
-            Doc::start("error")
-                .style(Style::BoldRed)
-                .add(": File not found: ")
-                .add(&input.as_os_str().to_str().unwrap())
-                .style(Style::Bold)
-                .emit();
-            std::process::exit(1)
-        });
 
-        let mod_name = bindings.raw(input.file_stem().unwrap().to_str().unwrap());
-
-        let file_id = term::FileId(nfiles, mod_name);
-        nfiles += 1;
-        let rope = Rope::from_reader(file).unwrap();
-        {
-            term::INPUT_SOURCE
-                .write()
-                .unwrap()
-                .insert(file_id, rope.clone());
-            term::INPUT_PATH
-                .write()
-                .unwrap()
-                .insert(file_id, input.clone());
-        }
-
-        let mut parser = Parser::new(rope.slice(..), &mut bindings);
-        let (v, e) = parser.top_level();
-        parsed.push((file_id, v, input));
-        if !e.is_empty() {
-            had_err = true;
-            for x in e {
-                x.emit(term::Severity::Error, file_id)
-            }
-        }
-    }
-    for (a, b, c) in consts {
-        let mut found_mod = false;
-        for (file, items, _) in &mut parsed {
-            if file.1 == a {
-                let mut found_item = false;
-                for i in items {
-                    if let PreItem::Let(n, true, _, body, _, _) = i {
-                        if **n == b {
-                            *body = Some(c);
-                            found_item = true;
-                            break;
-                        }
-                    }
-                }
-                if !found_item {
-                    Doc::start("error")
-                        .style(Style::BoldRed)
-                        .add(": Constant to override not found: ")
-                        .add(&bindings.resolve_raw(a))
-                        .add("::")
-                        .add(&bindings.resolve_raw(b))
-                        .style(Style::Bold)
-                        .emit();
-                    had_err = true;
-                }
-
-                found_mod = true;
-                break;
-            }
-        }
-        if !found_mod {
-            Doc::start("error")
-                .style(Style::BoldRed)
-                .add(": Module of constant to override not found: ")
-                .add(&bindings.resolve_raw(a))
-                .style(Style::Bold)
-                .emit();
-            had_err = true;
-        }
-    }
-
-    let mut driver = Driver::new(parsed);
+    let mut driver = Driver::new(paths, &mut bindings);
+    driver.add_const_overrides(consts).unwrap_or_else(|path| {
+        Doc::start("error")
+            .style(Style::BoldRed)
+            .add(": Constant to override not found: ")
+            .add(&bindings.resolve_path_o(&path))
+            .style(Style::Bold)
+            .emit();
+        had_err = true;
+    });
     driver.run_all(&mut bindings);
     let mut elabed = Vec::new();
+    let nmods = driver.mods.len();
     for module in driver.mods {
         if output.ends_with(".java") {
             output.parent().map(|p| std::fs::create_dir_all(p).unwrap());
@@ -212,7 +130,7 @@ fn main() {
         }
 
         let out_path = if !output.is_dir() {
-            if nfiles == 1 {
+            if nmods == 1 {
                 output.clone()
             } else {
                 Doc::start("error")
@@ -226,7 +144,7 @@ fn main() {
         } else {
             output.join(format!(
                 "{}.java",
-                module.input_path.file_stem().unwrap().to_str().unwrap()
+                bindings.resolve_path_jm(&module.mod_path)
             ))
         };
 
@@ -236,7 +154,7 @@ fn main() {
             out_path.to_str().unwrap()
         );
 
-        elabed.push((module.items, out_path, module.file))
+        elabed.push((module.items, module.mod_path, out_path, module.file))
     }
     if !driver.errors.is_empty() || had_err {
         for (e, file) in driver.errors {
@@ -246,14 +164,15 @@ fn main() {
     }
     let mut ir_mods = Vec::new();
     let mut cxt = backend::Cxt::new(&mut bindings, package);
-    for (v, _, _) in &elabed {
+    for (v, _, _, _) in &elabed {
         crate::backend::declare_p1(v, &mut cxt);
     }
-    for (v, out_path, file) in elabed {
+    for (v, mod_path, out_path, file) in elabed {
         ir_mods.push((
             crate::backend::declare_p2(
                 v,
                 &mut cxt,
+                mod_path,
                 out_path.file_stem().unwrap().to_str().unwrap(),
             )
             .unwrap_or_else(|e| {

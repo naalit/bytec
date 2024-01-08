@@ -464,7 +464,7 @@ pub fn quick_parse_term(input: impl Into<Rope>, bindings: &mut Bindings) -> Opti
     let rope = input.into();
     let mut parser = Parser::new(rope.slice(..), bindings);
     let r = parser.term().ok().flatten()?;
-    if parser.errors.is_empty() {
+    if parser.errors.is_empty() && parser.peek().is_none() {
         Some(r)
     } else {
         None

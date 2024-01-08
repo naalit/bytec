@@ -1,19 +1,21 @@
-use std::{collections::HashMap, rc::Rc};
+use std::{borrow::Cow, collections::HashMap, path::PathBuf, rc::Rc};
 
-use crate::term::*;
+use crate::{driver::Driver, term::*};
 
 pub fn declare_mod_p1(
     m: &[PreItem],
     bindings: &mut Bindings,
     file_id: FileId,
-) -> Result<(ModType, Vec<Item>), Error> {
-    let mut cxt = Cxt::new(bindings, file_id);
+    mod_path: RawPath,
+    driver: &mut Driver,
+) -> (ModType, Vec<Item>, Vec<Error>) {
+    let mut cxt = Cxt::new(bindings, file_id, mod_path, driver);
 
     // Declare
     for i in m {
         match cxt.declare_item_p1(i) {
             Ok(()) => (),
-            Err(e) => return Err(e.to_error(bindings)),
+            Err(e) => cxt.errors.push(e),
         }
     }
 
@@ -23,41 +25,40 @@ pub fn declare_mod_p1(
         classes,
         local_classes,
         extra_items,
+        errors,
+        local_mods,
         ..
     } = cxt;
 
-    Ok((
+    (
         ModType {
             vars: vars.symbols,
             fns: fns.symbols,
             classes,
             local_classes,
+            local_mods,
         },
         extra_items,
-    ))
+        errors.into_iter().map(|x| x.to_error(bindings)).collect(),
+    )
 }
 
 pub fn declare_mod_p2(
     m: &[PreItem],
     t: ModType,
-    mods: &[(RawSym, ModType)],
     extra_items: Vec<Item>,
     bindings: &mut Bindings,
     file_id: FileId,
-) -> Result<(ModType, Vec<Item>), Error> {
-    let mut cxt = Cxt::from_type(
-        t,
-        mods.into_iter().cloned().collect(),
-        extra_items,
-        bindings,
-        file_id,
-    );
+    mod_path: RawPath,
+    driver: &mut Driver,
+) -> (ModType, Vec<Item>, Vec<Error>) {
+    let mut cxt = Cxt::from_type(t, extra_items, bindings, file_id, mod_path, driver);
 
     // Declare
     for i in m {
         match cxt.declare_item_p2(i) {
             Ok(()) => (),
-            Err(e) => return Err(e.to_error(bindings)),
+            Err(e) => cxt.errors.push(e),
         }
     }
 
@@ -67,41 +68,40 @@ pub fn declare_mod_p2(
         classes,
         local_classes,
         extra_items,
+        errors,
+        local_mods,
         ..
     } = cxt;
 
-    Ok((
+    (
         ModType {
             vars: vars.symbols,
             fns: fns.symbols,
             classes,
             local_classes,
+            local_mods,
         },
         extra_items,
-    ))
+        errors.into_iter().map(|x| x.to_error(bindings)).collect(),
+    )
 }
 
 pub fn declare_mod_p3(
     m: &[PreItem],
     t: ModType,
-    mods: &[(RawSym, ModType)],
     extra_items: Vec<Item>,
     bindings: &mut Bindings,
     file_id: FileId,
-) -> Result<(ModType, Vec<Item>), Error> {
-    let mut cxt = Cxt::from_type(
-        t,
-        mods.into_iter().cloned().collect(),
-        extra_items,
-        bindings,
-        file_id,
-    );
+    mod_path: RawPath,
+    driver: &mut Driver,
+) -> (ModType, Vec<Item>, Vec<Error>) {
+    let mut cxt = Cxt::from_type(t, extra_items, bindings, file_id, mod_path, driver);
 
     // Declare
     for i in m {
         match cxt.declare_item_p3(i) {
             Ok(()) => (),
-            Err(e) => return Err(e.to_error(bindings)),
+            Err(e) => cxt.errors.push(e),
         }
     }
 
@@ -111,41 +111,40 @@ pub fn declare_mod_p3(
         classes,
         local_classes,
         extra_items,
+        errors,
+        local_mods,
         ..
     } = cxt;
 
-    Ok((
+    (
         ModType {
             vars: vars.symbols,
             fns: fns.symbols,
             classes,
             local_classes,
+            local_mods,
         },
         extra_items,
-    ))
+        errors.into_iter().map(|x| x.to_error(bindings)).collect(),
+    )
 }
 
 pub fn declare_mod_p4(
     m: &[PreItem],
     t: ModType,
-    mods: &[(RawSym, ModType)],
     extra_items: Vec<Item>,
     bindings: &mut Bindings,
     file_id: FileId,
-) -> Result<(ModType, Vec<Item>), Error> {
-    let mut cxt = Cxt::from_type(
-        t,
-        mods.into_iter().cloned().collect(),
-        extra_items,
-        bindings,
-        file_id,
-    );
+    mod_path: RawPath,
+    driver: &mut Driver,
+) -> (ModType, Vec<Item>, Vec<Error>) {
+    let mut cxt = Cxt::from_type(t, extra_items, bindings, file_id, mod_path, driver);
 
     // Declare
     for i in m {
         match cxt.declare_item_p4(i) {
             Ok(()) => (),
-            Err(e) => return Err(e.to_error(bindings)),
+            Err(e) => cxt.errors.push(e),
         }
     }
 
@@ -155,35 +154,34 @@ pub fn declare_mod_p4(
         classes,
         local_classes,
         extra_items,
+        errors,
+        local_mods,
         ..
     } = cxt;
 
-    Ok((
+    (
         ModType {
             vars: vars.symbols,
             fns: fns.symbols,
             classes,
             local_classes,
+            local_mods,
         },
         extra_items,
-    ))
+        errors.into_iter().map(|x| x.to_error(bindings)).collect(),
+    )
 }
 
 pub fn elab_mod(
     m: &[PreItem],
     t: ModType,
-    mods: &[(RawSym, ModType)],
     extra_items: Vec<Item>,
     bindings: &mut Bindings,
     file_id: FileId,
+    mod_path: RawPath,
+    driver: &mut Driver,
 ) -> (Vec<Item>, Vec<Error>) {
-    let mut cxt = Cxt::from_type(
-        t,
-        mods.into_iter().cloned().collect(),
-        extra_items,
-        bindings,
-        file_id,
-    );
+    let mut cxt = Cxt::from_type(t, extra_items, bindings, file_id, mod_path, driver);
     let mut v = Vec::new();
 
     // Define
@@ -258,14 +256,21 @@ pub struct Cxt<'b> {
     // (ret type, fn is inline)
     ret_tys: Vec<Option<(Type, bool)>>,
     in_classes: Vec<TypeId>,
-    bindings: &'b mut Bindings,
-    mods: HashMap<RawSym, ModType>,
+    pub bindings: &'b mut Bindings,
+    local_mods: HashMap<RawSym, RawPath>,
     extra_items: Vec<Item>,
     file_id: FileId,
+    mod_path: RawPath,
+    driver: &'b mut Driver,
     errors: Vec<TypeError>,
 }
 impl<'b> Cxt<'b> {
-    pub fn new(bindings: &'b mut Bindings, file_id: FileId) -> Self {
+    pub fn new(
+        bindings: &'b mut Bindings,
+        file_id: FileId,
+        path: RawPath,
+        driver: &'b mut Driver,
+    ) -> Self {
         Cxt {
             vars: Env::new(),
             fns: Env::new(),
@@ -274,9 +279,11 @@ impl<'b> Cxt<'b> {
             ret_tys: Vec::new(),
             in_classes: Vec::new(),
             bindings,
-            mods: HashMap::new(),
+            local_mods: HashMap::new(),
             extra_items: Vec::new(),
             file_id,
+            mod_path: path,
+            driver,
             errors: Vec::new(),
         }
     }
@@ -286,12 +293,14 @@ impl<'b> Cxt<'b> {
             vars,
             fns,
             local_classes,
+            local_mods,
             classes,
         }: ModType,
-        mods: HashMap<RawSym, ModType>,
         extra_items: Vec<Item>,
         bindings: &'b mut Bindings,
         file_id: FileId,
+        path: RawPath,
+        driver: &'b mut Driver,
     ) -> Self {
         Cxt {
             vars: Env::from_vec(vars),
@@ -301,62 +310,77 @@ impl<'b> Cxt<'b> {
             ret_tys: Vec::new(),
             in_classes: Vec::new(),
             bindings,
-            mods,
+            local_mods,
             extra_items,
             file_id,
+            mod_path: path,
+            driver,
             errors: Vec::new(),
         }
     }
 
     // Again, the only error unifying these lifetimes creates would be fixed with GC
     // (and same for below functions)
-    fn var(&self, s: &RawPath) -> Option<(Sym, &MType)> {
+    fn var(&mut self, s: &RawPath) -> Option<(Sym, &MType)> {
+        let s = self.normalize(s);
         if s.len() == 1 {
-            self.vars.get(*s.stem())
-        } else if s.len() == 2 {
-            let module = self.module(**s.0.first().unwrap())?;
+            self.vars.get(*s.last())
+        } else {
+            let module = self.module(&s.stem())?;
             module
                 .vars
                 .iter()
-                .rfind(|(x, _, _)| *x == *s.stem())
+                .rfind(|(x, _, _)| *x == *s.last())
                 .map(|(_, s, t)| (*s, t))
-        } else {
-            None
         }
     }
-    fn fun(&self, s: &RawPath) -> Option<(FnId, &FnType)> {
+    fn fun(&mut self, s: &RawPath) -> Option<(FnId, &FnType)> {
+        let s = self.normalize(s);
         if s.len() == 1 {
-            self.fns.get(*s.stem())
-        } else if s.len() == 2 {
-            let module = self.module(**s.0.first().unwrap())?;
+            self.fns.get(*s.last())
+        } else {
+            let module = self.module(&s.stem())?;
             module
                 .fns
                 .iter()
-                .rfind(|(x, _, _)| *x == *s.stem())
+                .rfind(|(x, _, _)| *x == *s.last())
                 .map(|(_, s, t)| (*s, t))
-        } else {
-            None
         }
     }
-    pub fn class(&self, s: &RawPath) -> Option<TypeId> {
-        let mut s = s.clone();
+    pub fn class(&mut self, s: &RawPath) -> Option<TypeId> {
+        let mut s = self.normalize(s).into_owned();
         if s.len() == 1 {
-            if let Some(t) = self.local_classes.get(&*s.stem()) {
+            if let Some(t) = self.local_classes.get(&*s.last()) {
                 return Some(*t);
             }
             s = self.path(s.1);
         }
         if let Some(x) = self.classes.get(&s).map(|(x, _)| x) {
             Some(*x)
-        } else if s.len() == 2 {
-            let module = self.module(**s.0.first().unwrap())?;
-            module.classes.get(&s).map(|(s, _)| *s)
         } else {
-            None
+            let module = self.module(&s.stem())?;
+            module.classes.get(&s).map(|(s, _)| *s)
         }
     }
-    pub fn module(&self, s: RawSym) -> Option<&ModType> {
-        self.mods.get(&s)
+    pub fn module(&mut self, s: &RawPath) -> Option<&ModType> {
+        if s.len() == 1 {
+            if let Some(p) = self.local_mods.get(&s.last()) {
+                return self.module(&p.clone());
+            }
+        }
+        self.driver.module(s, &mut self.bindings)
+    }
+    fn normalize<'a>(&self, p: &'a RawPath) -> Cow<'a, RawPath> {
+        let mut p = Cow::Borrowed(p);
+        loop {
+            if p.len() == 2 {
+                if let Some(n) = self.local_mods.get(&p.stem().last()) {
+                    p = Cow::Owned(n.add(p.last()));
+                }
+            }
+            break;
+        }
+        p
     }
     pub fn class_info(&self, class: TypeId) -> &ClassInfo {
         self.classes
@@ -364,7 +388,7 @@ impl<'b> Cxt<'b> {
             .find(|(x, _)| *x == class)
             .map(|(_, i)| i)
             .or_else(|| {
-                for (_, m) in &self.mods {
+                for (_, m) in &self.driver.mods_pre {
                     for (_, (tid, info)) in &m.classes {
                         if *tid == class {
                             return Some(info);
@@ -381,7 +405,7 @@ impl<'b> Cxt<'b> {
             .find(|(x, _)| *x == class)
             .map(|(_, i)| i)
             .or_else(|| {
-                for (_, m) in &mut self.mods {
+                for (_, m) in &mut self.driver.mods_pre {
                     for (_, (tid, info)) in &mut m.classes {
                         if *tid == class {
                             return Some(info);
@@ -393,15 +417,15 @@ impl<'b> Cxt<'b> {
             .unwrap()
     }
 
-    pub fn is_mutable(&self, s: Sym) -> bool {
+    pub fn is_mutable(&mut self, s: Sym) -> bool {
         for (_, i, (_, m)) in &self.vars.symbols {
             if *i == s {
                 return *m;
             }
         }
         let r = self.bindings.sym_path(s);
-        if r.len() == 2 {
-            if let Some(module) = self.module(**r.0.first().unwrap()) {
+        if r.len() > 1 {
+            if let Some(module) = self.module(&r.stem()) {
                 if let Some(m) = module
                     .vars
                     .iter()
@@ -438,7 +462,7 @@ impl<'b> Cxt<'b> {
     }
 
     fn path(&self, n: Spanned<RawSym>) -> RawPath {
-        RawPath(vec![Spanned::new(self.file_id.1, Span(0, 0))], n)
+        self.mod_path.add(n)
     }
 
     /// Creates a new binding with a name
@@ -654,13 +678,15 @@ impl<'b> Cxt<'b> {
                 // Only add types
                 if !*wildcard {
                     if let Some(s) = self.class(path) {
-                        self.local_classes.insert(*path.stem(), s);
+                        self.local_classes.insert(*path.last(), s);
+                    } else if let Some(_) = self.module(path) {
+                        self.local_mods.insert(*path.last(), path.clone());
                     }
                 } else {
                     if path.len() == 1 {
-                        if let Some(m) = self.module(*path.stem()).cloned() {
+                        if let Some(m) = self.module(path).cloned() {
                             for (s, (t, _)) in m.classes {
-                                self.local_classes.insert(*s.stem(), t);
+                                self.local_classes.insert(*s.last(), t);
                             }
                         }
                     }
@@ -781,16 +807,18 @@ impl<'b> Cxt<'b> {
                 if !*wildcard {
                     if let Some(t) = self.class(path) {
                         // probably done in p1, but might not due to declaration order
-                        if !self.local_classes.contains_key(&*path.stem()) {
-                            self.local_classes.insert(*path.stem(), t);
+                        if !self.local_classes.contains_key(&*path.last()) {
+                            self.local_classes.insert(*path.last(), t);
                         }
+                    } else if let Some(_) = self.module(path) {
+                        self.local_mods.insert(*path.last(), path.clone());
                     }
                 } else {
                     if path.len() == 1 {
-                        if let Some(m) = self.module(*path.stem()).cloned() {
+                        if let Some(m) = self.module(path).cloned() {
                             for (s, (t, _)) in m.classes {
-                                if !self.local_classes.contains_key(&*s.stem()) {
-                                    self.local_classes.insert(*s.stem(), t);
+                                if !self.local_classes.contains_key(&*s.last()) {
+                                    self.local_classes.insert(*s.last(), t);
                                 }
                             }
                         }
@@ -849,16 +877,16 @@ impl<'b> Cxt<'b> {
                 if !*wildcard {
                     if let Some(t) = self.class(path) {
                         // probably done in p1, but might not due to declaration order
-                        if !self.local_classes.contains_key(&*path.stem()) {
-                            self.local_classes.insert(*path.stem(), t);
+                        if !self.local_classes.contains_key(&*path.last()) {
+                            self.local_classes.insert(*path.last(), t);
                         }
                     }
                 } else {
                     if path.len() == 1 {
-                        if let Some(m) = self.module(*path.stem()).cloned() {
+                        if let Some(m) = self.module(path).cloned() {
                             for (s, (t, _)) in m.classes {
-                                if !self.local_classes.contains_key(&*s.stem()) {
-                                    self.local_classes.insert(*s.stem(), t);
+                                if !self.local_classes.contains_key(&*s.last()) {
+                                    self.local_classes.insert(*s.last(), t);
                                 }
                             }
                         }
@@ -877,18 +905,20 @@ impl<'b> Cxt<'b> {
                 if !*wildcard {
                     if let Some((s, t)) = self.var(path) {
                         let t = t.clone();
-                        self.vars.add(*path.stem(), s, t);
+                        self.vars.add(*path.last(), s, t);
                     } else if let Some((s, t)) = self.fun(path) {
                         let t = t.clone();
-                        self.fns.add(*path.stem(), s, t);
+                        self.fns.add(*path.last(), s, t);
                     } else if let Some(_) = self.class(path) {
+                        // done in p1 and p2
+                    } else if let Some(_) = self.module(path) {
                         // done in p1 and p2
                     } else {
                         return Err(TypeError::NotFound(path.clone()));
                     }
                 } else {
                     if path.len() == 1 {
-                        if let Some(m) = self.module(*path.stem()).cloned() {
+                        if let Some(m) = self.module(path).cloned() {
                             for (r, s, t) in m.vars {
                                 self.vars.add(r, s, t);
                             }
@@ -978,7 +1008,9 @@ impl<'b> Cxt<'b> {
         match item {
             PreItem::InlineJava(s, span) => Ok(vec![Item::InlineJava(*s, *span)]),
             PreItem::Fn(f) => {
-                let (fid, fty) = self.fun(&lpath(f.name)).unwrap();
+                let (fid, fty) = self
+                    .fun(&lpath(f.name))
+                    .ok_or(TypeError::NotFound(lpath(f.name)))?;
                 let fty = fty.clone();
 
                 let f = self.check_fn(f, fid, fty)?;
@@ -1013,7 +1045,9 @@ impl<'b> Cxt<'b> {
                 })])
             }
             PreItem::Let(name, constant, _, x, _, _) => {
-                let (s, t) = self.var(&lpath(*name)).unwrap();
+                let (s, t) = self
+                    .var(&lpath(*name))
+                    .ok_or(TypeError::NotFound(lpath(*name)))?;
                 let (t, _) = t.clone();
                 let x = x.as_ref().map(|x| self.check(x, t.clone())).transpose()?;
                 Ok(vec![Item::Let(s, *constant, t, x, name.span)])
@@ -1141,7 +1175,7 @@ impl<'b> Cxt<'b> {
             PreItem::Use(path, wildcard) => {
                 if *wildcard {
                     if path.len() == 1 {
-                        if let Some(_) = self.module(*path.stem()).cloned() {
+                        if let Some(_) = self.module(path).cloned() {
                             return Ok(Vec::new());
                         }
                     }
@@ -1278,9 +1312,7 @@ impl<'b> Cxt<'b> {
                 .ok_or(TypeError::NotFound(raw.clone()))
                 .or_else(|e| {
                     if raw.len() > 1 {
-                        let mut v = raw.0.clone();
-                        let last = v.pop().unwrap();
-                        let a = RawPath(v, last);
+                        let a = raw.stem();
                         let b = raw.1;
                         if let Some(class) = self.class(&a) {
                             let variants = self.class_info(class).variants.as_ref();
@@ -1440,6 +1472,20 @@ impl<'b> Cxt<'b> {
                             ))
                         }
                     }
+                    Type::Array(_) => {
+                        self.errors.push(TypeError::NotFound(lpath(*m)));
+                        Ok((
+                            Term::ArrayMethod(Box::new(x), ArrayMethod::Unknown(m.span, false)),
+                            Type::Error,
+                        ))
+                    }
+                    Type::SArray(_, _) => {
+                        self.errors.push(TypeError::NotFound(lpath(*m)));
+                        Ok((
+                            Term::ArrayMethod(Box::new(x), ArrayMethod::Unknown(m.span, true)),
+                            Type::Error,
+                        ))
+                    }
                     t => Err(TypeError::NoMembers(px.span, t)),
                 }
             }
@@ -1552,7 +1598,13 @@ impl<'b> Cxt<'b> {
                             }
                             Ok((l.cloned(self.bindings), Type::I32))
                         }
-                        _ => return Err(TypeError::NotFound(lpath(*f))),
+                        _ => {
+                            self.errors.push(TypeError::NotFound(lpath(*f)));
+                            Ok((
+                                Term::ArrayMethod(Box::new(o), ArrayMethod::Unknown(f.span, true)),
+                                Type::Error,
+                            ))
+                        }
                     },
                     Type::Array(t) => match self.bindings.resolve_raw(**f) {
                         "len" => {
@@ -1583,7 +1635,13 @@ impl<'b> Cxt<'b> {
                                 Type::Unit,
                             ))
                         }
-                        _ => return Err(TypeError::NotFound(lpath(*f))),
+                        _ => {
+                            self.errors.push(TypeError::NotFound(lpath(*f)));
+                            Ok((
+                                Term::ArrayMethod(Box::new(o), ArrayMethod::Unknown(f.span, false)),
+                                Type::Error,
+                            ))
+                        }
                     },
                     t => return Err(TypeError::NoMethods(o_.span, t)),
                 }
