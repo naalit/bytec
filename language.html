@@ -222,7 +222,7 @@ They don't require parentheses, but do require braces around the body:</p>
 <span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// The simplest kind of loop, loops infinitely until a `break`
-let a = 0;
+let mut a = 0;
 loop {
     a += 1;
     if a &gt; 12 {

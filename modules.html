@@ -135,9 +135,8 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="modules"><a class="header" href="#modules">Modules</a></h1>
-<p>Using multiple source files (&quot;modules&quot;) is generally a good idea. In ByteC, the directory that files are in doesn't matter, only the file name.
-Circular dependencies are allowed (at least, <em>almost</em> all the time).
-Items from other files can be accessed with <code>use</code> or with <code>::</code>, the same as Rust:</p>
+<p>Using multiple source files (&quot;modules&quot;) is generally a good idea.
+Items from other files can be accessed with <code>::</code> or with <code>use</code> (wildcards <code>Mod::*</code> are supported!), the same as Rust:</p>
 <pre><pre class="playground"><code class="language-rust">// One.bt
 let one = 1;
 fn main() = Two::doStuff();
@@ -150,6 +149,46 @@ use One::one; // One::* would also work
 extern fn println(x: str) = &quot;System.out.println&quot;;
 fn doStuff() {
     println(&quot;two: &quot; + (one + one));
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>Circular dependencies are allowed (at least, <em>almost</em> all the time).
+Modules can be nested in directories, and module paths are defined relative to the root <code>bytec</code> directory that all your source files are in - this lets the compiler search the filesystem for a module when you use it for the first time.
+So with the example layout from earlier:</p>
+<ul>
+<li><code>bytec</code>
+<ul>
+<li><code>common</code>
+<ul>
+<li><code>Common.bt</code></li>
+<li><code>Paths.bt</code></li>
+</ul>
+</li>
+<li><code>bot_one</code>
+<ul>
+<li><code>RobotPlayer.bt</code></li>
+<li><code>Soldier.bt</code></li>
+</ul>
+</li>
+<li><code>bot_two</code>
+<ul>
+<li><code>RobotPlayer.bt</code></li>
+<li><code>Miner.bt</code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p>We can use items like so:</p>
+<pre><pre class="playground"><code class="language-rust">
+<span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// bot_one/RobotPlayer.bt
+use common::Common::RobotController;
+use bot_one::Soldier;
+
+fn turn(rc: RobotController) {
+    Soldier::turn(rc);
 }
 <span class="boring">}
 </span></code></pre></pre>
