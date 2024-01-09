@@ -353,11 +353,11 @@ pub enum Item {
     ExternFn(ExternFn),
     ExternClass(TypeId, RawPath, Vec<(Sym, Type)>, Span),
     InlineJava(RawSym, Span),
-    /// If the bool is true, it's extern and shouldn't be generated
+    /// If the option is some, it's extern and shouldn't be generated
     Enum(
         TypeId,
         Vec<(RawSym, Vec<Type>)>,
-        bool,
+        Option<RawPath>,
         Vec<(Sym, Type)>,
         Vec<Fn>,
         Span,
@@ -1140,7 +1140,7 @@ impl Item {
                 .add(";"),
             Item::Enum(id, variants, ext, members, methods, span) => {
                 let mut doc = Doc::none();
-                if *ext {
+                if ext.is_some() {
                     doc = Doc::keyword("extern").space();
                 }
                 doc.chain(Doc::keyword("enum"))

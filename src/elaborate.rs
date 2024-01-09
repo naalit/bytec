@@ -685,11 +685,9 @@ impl<'b> Cxt<'b> {
                         self.local_mods.insert(*path.last(), path.clone());
                     }
                 } else {
-                    if path.len() == 1 {
-                        if let Some(m) = self.module(path).cloned() {
-                            for (s, (t, _)) in m.classes {
-                                self.local_classes.insert(*s.last(), t);
-                            }
+                    if let Some(m) = self.module(path).cloned() {
+                        for (s, (t, _)) in m.classes {
+                            self.local_classes.insert(*s.last(), t);
                         }
                     }
                 }
@@ -816,12 +814,10 @@ impl<'b> Cxt<'b> {
                         self.local_mods.insert(*path.last(), path.clone());
                     }
                 } else {
-                    if path.len() == 1 {
-                        if let Some(m) = self.module(path).cloned() {
-                            for (s, (t, _)) in m.classes {
-                                if !self.local_classes.contains_key(&*s.last()) {
-                                    self.local_classes.insert(*s.last(), t);
-                                }
+                    if let Some(m) = self.module(path).cloned() {
+                        for (s, (t, _)) in m.classes {
+                            if !self.local_classes.contains_key(&*s.last()) {
+                                self.local_classes.insert(*s.last(), t);
                             }
                         }
                     }
@@ -884,12 +880,10 @@ impl<'b> Cxt<'b> {
                         }
                     }
                 } else {
-                    if path.len() == 1 {
-                        if let Some(m) = self.module(path).cloned() {
-                            for (s, (t, _)) in m.classes {
-                                if !self.local_classes.contains_key(&*s.last()) {
-                                    self.local_classes.insert(*s.last(), t);
-                                }
+                    if let Some(m) = self.module(path).cloned() {
+                        for (s, (t, _)) in m.classes {
+                            if !self.local_classes.contains_key(&*s.last()) {
+                                self.local_classes.insert(*s.last(), t);
                             }
                         }
                     }
@@ -919,17 +913,15 @@ impl<'b> Cxt<'b> {
                         return Err(TypeError::NotFound(path.clone()));
                     }
                 } else {
-                    if path.len() == 1 {
-                        if let Some(m) = self.module(path).cloned() {
-                            for (r, s, t) in m.vars {
-                                self.vars.add(r, s, t);
-                            }
-                            for (r, s, t) in m.fns {
-                                self.fns.add(r, s, t);
-                            }
-                            // classes done in p1 and p2
-                            return Ok(());
+                    if let Some(m) = self.module(path).cloned() {
+                        for (r, s, t) in m.vars {
+                            self.vars.add(r, s, t);
                         }
+                        for (r, s, t) in m.fns {
+                            self.fns.add(r, s, t);
+                        }
+                        // classes done in p1 and p2
+                        return Ok(());
                     }
                     if let Some(c) = self.class(path) {
                         let info = self.class_info(c);
@@ -1128,7 +1120,13 @@ impl<'b> Cxt<'b> {
                 ext,
                 ..
             } => {
-                let class = self.class(path).unwrap();
+                let class = self
+                    .class(&if *ext {
+                        self.path(path.last())
+                    } else {
+                        path.clone()
+                    })
+                    .unwrap();
                 let info = self.class_info(class).clone();
                 Ok(vec![Item::Enum(
                     class,
@@ -1143,7 +1141,7 @@ impl<'b> Cxt<'b> {
                             ))
                         })
                         .collect::<Result<_, _>>()?,
-                    *ext,
+                    ext.then_some(path.clone()),
                     members
                         .iter()
                         .map(|(r, _, t, _)| {
@@ -1177,11 +1175,6 @@ impl<'b> Cxt<'b> {
             }
             PreItem::Use(path, wildcard) => {
                 if *wildcard {
-                    if path.len() == 1 {
-                        if let Some(_) = self.module(path).cloned() {
-                            return Ok(Vec::new());
-                        }
-                    }
                     if let Some(c) = self.class(path) {
                         let info = self.class_info(c);
                         if let Some(v) = info.variants.clone() {

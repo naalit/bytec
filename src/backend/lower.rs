@@ -137,8 +137,21 @@ pub fn declare_p2(
             }
             Item::Enum(c, _, ext, members, methods, _span) => {
                 let class = cxt.class(*c).unwrap();
-                if *ext {
-                    mappings.push((class.0, lpath(cxt.bindings.type_name(*c).last()), false));
+                if let Some(path) = ext {
+                    // the extern path is a Java path, not a bytec module path
+                    let path = RawPath(
+                        vec![{
+                            let mut s = String::new();
+                            for i in &path.0 {
+                                s += cxt.bindings.resolve_raw(**i);
+                                s.push('.');
+                            }
+                            s.pop();
+                            Spanned::hack(cxt.bindings.raw(s))
+                        }],
+                        path.1,
+                    );
+                    mappings.push((class.0, path.clone(), false));
                     for (s, t) in members {
                         let t = t.lower(cxt);
                         let mut vars = Vec::new();
@@ -1308,7 +1321,7 @@ impl Item {
                 }
             }
             Item::Enum(tid, variants, ext, _members, methods, span) => {
-                if !ext {
+                if ext.is_none() {
                     let class = cxt.class(*tid).unwrap();
                     let variants = variants
                         .iter()
