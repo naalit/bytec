@@ -11,29 +11,21 @@ and it's fully interoperable with Java so it can be used for the performance-cri
 
 ### VSCode extension
 
-There's a VSCode extension for ByteC with syntax highlighting, errors as you type, and autocomplete for class members in the `vscode` folder in this repository. The easiest way to enable it is to symlink it to `[VSCODE-DIRECTIORY]/extensions/bytec-basic` - the VSCode directory is `~/.vscode-oss` on Linux. The extension assumes you've installed bytec to `$HOME/.cargo/bin`, which is the default on Linux and I think also on Mac.
+There's a VSCode extension for ByteC with syntax highlighting, errors as you type, and autocomplete in the `vscode` folder in this repository. The easiest way to enable it is to symlink it to `[VSCODE-DIRECTIORY]/extensions/bytec-basic` - the VSCode directory is `~/.vscode-oss` on Linux. The extension assumes you've installed bytec to `$HOME/.cargo/bin`, which is the default on Linux and I think also on Mac.
 
 ## Language tour
 
 Here's a simple player for Battlecode 2021. Compile it with something like `bytec <input directory>/RobotPlayer.bt <output directory>/testplayer/RobotPlayer.java`. (First install it with `cargo install --path .`, and make sure the cargo install directory is on your path (`~/.cargo/bin` on Linux)).
 
 ```rust
-// This is an extern block, which gets copied into the resulting Java code
-// It's the best way to do package and import declarations currently
-extern {
-    package testplayer;
-    import battlecode.common.*;
-    import java.util.Random;
-}
-
 // bytec isn't smart enough to analyze Java libraries itself, so we have to tell it the parts of the Battlecode API we need
-extern enum RobotType {
+extern enum battlecode::common::RobotType {
     ENLIGHTENMENT_CENTER,
     POLITICIAN,
     SLANDERER,
     MUCKRAKER,
 }
-extern enum Direction {
+extern enum battlecode::common::Direction {
     NORTH,
     SOUTH,
     EAST,
@@ -41,7 +33,7 @@ extern enum Direction {
     // We don't actually need to list all these, only the ones we use
     // (but you should list them all if you'll do any pattern matching on it so coverage checking works!)
 }
-class RobotController {
+extern class battlecode::common::RobotController {
     // We list the methods we use, with their types
     fn getType(): RobotType;
     fn getInfluence(): i32;
@@ -53,15 +45,15 @@ class RobotController {
     fn canMove(dir: Direction): bool;
     fn move(dir: Direction): bool;
 }
-extern fn yield() = "Clock.yield";
+extern fn yield() = "battlecode.common.Clock.yield";
 
 // We'll need these to pick a random direction
-let directions = [
+let mut directions: [Direction] = [
     Direction::NORTH,
     Direction::EAST,
     Direction::SOUTH,
 ];
-extern class Random {
+extern class java::util::Random {
     // A constructor with no arguments
     constructor();
     fn nextInt(max: i32): i32;

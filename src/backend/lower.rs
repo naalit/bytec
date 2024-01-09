@@ -5,7 +5,7 @@ use std::collections::HashMap;
 pub fn declare_p1(code: &[Item], cxt: &mut Cxt) {
     for i in code {
         match i {
-            Item::ExternClass(c, _, _) => {
+            Item::ExternClass(c, _, _, _) => {
                 let class = cxt.fresh_class();
                 cxt.types.push((*c, class));
 
@@ -75,9 +75,22 @@ pub fn declare_p2(
                 None,
                 f.span,
             ),
-            Item::ExternClass(c, members, _span) => {
+            Item::ExternClass(c, path, members, _span) => {
                 let class = cxt.class(*c).unwrap();
-                mappings.push((class.0, lpath(cxt.bindings.type_name(*c).last()), false));
+                // the extern path is a Java path, not a bytec module path
+                let path = RawPath(
+                    vec![{
+                        let mut s = String::new();
+                        for i in &path.0 {
+                            s += cxt.bindings.resolve_raw(**i);
+                            s.push('.');
+                        }
+                        s.pop();
+                        Spanned::hack(cxt.bindings.raw(s))
+                    }],
+                    path.1,
+                );
+                mappings.push((class.0, path.clone(), false));
                 for (s, t) in members {
                     let t = t.lower(cxt);
                     let mut vars = Vec::new();
@@ -1356,7 +1369,7 @@ impl Item {
                     .push(Spanned::new(JItem::Class(class, members, methods), *span));
             }
             Item::ExternFn(_) => (),
-            Item::ExternClass(_, _, _) => (),
+            Item::ExternClass(_, _, _, _) => (),
             Item::Let(name, _, ty, None, span) => {
                 let var = cxt.var(*name).unwrap();
                 let ty = ty.lower(cxt);

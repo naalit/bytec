@@ -481,10 +481,8 @@ impl<'b> Cxt<'b> {
         Ok(s)
     }
 
-    fn create_class(&mut self, mut k: RawPath, info: ClassInfo) -> TypeId {
-        if k.len() == 1 {
-            k = self.path(k.1);
-        }
+    fn create_class(&mut self, k: RawPath, info: ClassInfo) -> TypeId {
+        let k = self.path(k.1);
         let s = self.bindings.add_type(k.clone());
         self.classes.insert(k, (s, info));
         s
@@ -670,7 +668,11 @@ impl<'b> Cxt<'b> {
             PreItem::Fn(_) => Ok(()),
             PreItem::ExternFn(_) => Ok(()),
             PreItem::Let { .. } => Ok(()),
-            PreItem::Class { path, .. } => {
+            PreItem::Class { path, ext, .. } => {
+                if !ext && path.len() > 1 {
+                    // TODO better error
+                    return Err(TypeError::NotFound(path.clone()));
+                }
                 self.create_class(path.clone(), ClassInfo::default());
                 Ok(())
             }
@@ -778,7 +780,7 @@ impl<'b> Cxt<'b> {
                 if constructor.is_none() && !ext {
                     constructor = Some(Vec::new());
                 }
-                let id = self.class(path).unwrap();
+                let id = self.class(&self.path(path.last())).unwrap();
                 let info = ClassInfo {
                     methods,
                     members,
@@ -1059,10 +1061,11 @@ impl<'b> Cxt<'b> {
                 ext: true,
                 ..
             } => {
-                let class = self.class(path).unwrap();
+                let class = self.class(&self.path(path.last())).unwrap();
                 let info = self.class_info(class).clone();
                 Ok(vec![Item::ExternClass(
                     class,
+                    path.clone(),
                     members
                         .iter()
                         .map(|(r, _, t, _)| {

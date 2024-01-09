@@ -176,7 +176,7 @@ impl Bindings {
 
     pub fn resolve_path_jm(&self, raw: &RawPath) -> String {
         let mut s = String::new();
-        if self.root_mod_path.as_ref() != Some(&raw.stem()) {
+        if raw.len() > 1 && self.root_mod_path.as_ref() != Some(&raw.stem()) {
             for i in &raw.0 {
                 s.push_str(self.resolve_raw(**i));
                 s.push_str("$$");

@@ -351,7 +351,7 @@ pub enum Statement {
 pub enum Item {
     Fn(Fn),
     ExternFn(ExternFn),
-    ExternClass(TypeId, Vec<(Sym, Type)>, Span),
+    ExternClass(TypeId, RawPath, Vec<(Sym, Type)>, Span),
     InlineJava(RawSym, Span),
     /// If the bool is true, it's extern and shouldn't be generated
     Enum(
@@ -370,7 +370,7 @@ impl Item {
         match self {
             Item::Fn(f) => f.span,
             Item::ExternFn(f) => f.span,
-            Item::ExternClass(_, _, s) => *s,
+            Item::ExternClass(_, _, _, s) => *s,
             Item::InlineJava(_, s) => *s,
             Item::Enum(_, _, _, _, _, s) => *s,
             Item::Class(_, _, _, s) => *s,
@@ -634,7 +634,7 @@ impl Item {
     pub fn visit(&self, f: &mut impl FnMut(&Term)) {
         match self {
             Item::Fn(x) => x.body.visit(f),
-            Item::ExternFn(_) | Item::ExternClass(_, _, _) | Item::InlineJava(_, _) => (),
+            Item::ExternFn(_) | Item::ExternClass(_, _, _, _) | Item::InlineJava(_, _) => (),
             Item::Enum(_, _, _, _, v, _) => v.iter().for_each(|x| x.body.visit(f)),
             Item::Class(_, a, b, _) => {
                 a.iter()
@@ -1173,7 +1173,7 @@ impl Item {
             Item::Class(tid, _, _, _) => {
                 Doc::keyword("class").chain(cxt.type_name(*tid).pretty(cxt))
             }
-            Item::ExternClass(c, _, _) => cxt.type_name(*c).pretty(cxt),
+            Item::ExternClass(c, _, _, _) => cxt.type_name(*c).pretty(cxt),
             Item::InlineJava(s, _) => Doc::keyword("extern")
                 .space()
                 .chain(
