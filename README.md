@@ -5,9 +5,9 @@
 The language (also called "bytec" for lack of a better name) has a few features Java doesn't, like zero-overhead dynamic arrays and tuples,
 and it's fully interoperable with Java so it can be used for the performance-critical parts of a Java bot.
 
-[Read the guide here!](https://tolziplohu.github.io/bytec)
+[Read the guide here!](https://naalit.github.io/bytec)
 
-[Or check out this example of a Battlecode 2022 bot written entirely in bytec.](https://github.com/tolziplohu/battlecode22)
+[Or check out this example of a Battlecode 2022 bot written entirely in bytec.](https://github.com/naalit/battlecode22)
 
 ### VSCode extension
 

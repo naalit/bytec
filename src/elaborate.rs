@@ -1157,14 +1157,11 @@ impl<'b> Cxt<'b> {
                             .iter()
                             .filter_map(|f| match f {
                                 PreFnEither::Extern(_) => None,
-                                PreFnEither::Local(f) => {
-                                    let (_, fid, fty) = info
-                                        .methods
-                                        .iter()
-                                        .find(|(r, _, _)| *r == *f.name)
-                                        .unwrap();
-                                    Some(self.check_fn(f, *fid, fty.clone()))
-                                }
+                                PreFnEither::Local(f) => info
+                                    .methods
+                                    .iter()
+                                    .find(|(r, _, _)| *r == *f.name)
+                                    .map(|(_, fid, fty)| self.check_fn(f, *fid, fty.clone())),
                             })
                             .collect::<Result<_, _>>()?;
                         self.in_classes.pop();

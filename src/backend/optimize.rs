@@ -1223,7 +1223,7 @@ impl JTerm {
                 Some(CVal::Array {
                     idxs,
                     end,
-                    len: Some(x.len()),
+                    len: Some(if x.len() == 0 { 8 } else { x.len() }),
                 })
             }
             JTerm::ArrayNew(len, _) => match len.prop(env)? {
